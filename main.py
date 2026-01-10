@@ -1,261 +1,470 @@
 import asyncio
 import json
-from pathlib import Path
 import os
-import dotenv
+import shutil
+from dataclasses import dataclass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Iterable, Sequence
 
-dotenv.load_dotenv()
+try:
+    import dotenv  # type: ignore
+except ImportError:  # pragma: no cover - optional dependency
+    dotenv = None
 
-# Check for required API keys
-if not os.getenv("LUNETTE_API_KEY"):
-    print("⚠️  Warning: LUNETTE_API_KEY not set. Get your API key from https://lunette.dev/")
-    print("   Set it with: export LUNETTE_API_KEY='your-api-key-here'")
-    print("   Or add it to a .env file")
-    print()
-
-
-def extract_task_info(entry):
-    """Extract relevant information from a trace entry."""
-    task_id = entry.get("attributes", {}).get("weave_task_id", "unknown")
-    messages_data = entry.get("inputs", {}).get("messages", [])
-    output = entry.get("output", {})
-    started_at = entry.get("started_at", "")
-    ended_at = entry.get("ended_at", "")
-    
-    return {
-        "task_id": task_id,
-        "messages": messages_data,
-        "output": output,
-        "started_at": started_at,
-        "ended_at": ended_at,
-        "entry": entry
-    }
+if TYPE_CHECKING:  # pragma: no cover - imported only for type checking
+    from lunette.client import LunetteClient
+    from lunette.models.messages import AssistantMessage, SystemMessage, UserMessage
+    from lunette.models.run import Run
+    from lunette.models.trajectory import Trajectory
 
 
-async def main():
-    # Find all trace files
-    traces_dir = Path("traces")
-    trace_files = list(traces_dir.glob("*.json"))
-    
+TRACE_DIR = Path("traces")
+ORIGINAL_HOME = Path(os.environ.get("HOME", Path.home()))
+_HOME_PREPARED: bool = False
+SCAFFOLD_TAGS = {
+    "<start_code>",
+    "<end_code>",
+    "<start_plan>",
+    "<end_plan>",
+    "<start_thought>",
+    "<end_thought>",
+    "<start_solution>",
+    "<end_solution>",
+}
+
+if dotenv:
+    dotenv.load_dotenv()
+
+
+@dataclass
+class LunetteDependencies:
+    """Runtime references to Lunette SDK classes."""
+
+    client_cls: type
+    system_message_cls: type
+    user_message_cls: type
+    assistant_message_cls: type
+    run_cls: type
+    trajectory_cls: type
+
+
+@dataclass
+class TraceMessage:
+    """Normalized representation of a single message in a task trace."""
+
+    role: str
+    content: str
+    entry_id: str | None
+    timestamp: str | None
+
+
+@dataclass
+class TaskConversation:
+    """Aggregated conversation for one SWE-bench task."""
+
+    task_id: str
+    entries: list[dict[str, Any]]
+    messages: list[TraceMessage]
+
+    @property
+    def entry_count(self) -> int:
+        return len(self.entries)
+
+
+def prepare_lunette_home() -> Path:
+    """Ensure Lunette can write logs/config inside the workspace sandbox."""
+    global _HOME_PREPARED
+    if _HOME_PREPARED:
+        return Path(os.environ["HOME"])
+
+    workspace_home = (Path.cwd() / ".lunette_home").resolve()
+    workspace_home.mkdir(parents=True, exist_ok=True)
+
+    os.environ["HOME"] = str(workspace_home)
+    os.environ.setdefault("LUNETTE_HOME", str(workspace_home / ".lunette"))
+
+    original_config = ORIGINAL_HOME / ".lunette" / "config.json"
+    destination_config = workspace_home / ".lunette" / "config.json"
+    if original_config.exists() and not destination_config.exists():
+        destination_config.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copyfile(original_config, destination_config)
+        except PermissionError:
+            pass
+
+    _HOME_PREPARED = True
+    return workspace_home
+
+
+def load_lunette_dependencies() -> LunetteDependencies:
+    """Import Lunette SDK modules lazily after preparing the workspace home."""
+    prepare_lunette_home()
+
+    from lunette.client import LunetteClient
+    from lunette.models.messages import AssistantMessage, SystemMessage, UserMessage
+    from lunette.models.run import Run
+    from lunette.models.trajectory import Trajectory
+
+    return LunetteDependencies(
+        client_cls=LunetteClient,
+        system_message_cls=SystemMessage,
+        user_message_cls=UserMessage,
+        assistant_message_cls=AssistantMessage,
+        run_cls=Run,
+        trajectory_cls=Trajectory,
+    )
+
+
+def load_trace_file(trace_dir: Path) -> dict[str, Any]:
+    """Load the first JSON trace file inside trace_dir."""
+    trace_files = sorted(trace_dir.glob("*.json"))
     if not trace_files:
-        print("❌ No trace files found in traces/ directory")
-        return
-    
-    print(f"📂 Found {len(trace_files)} trace file(s):")
-    for tf in trace_files:
-        print(f"   • {tf.name}")
-    
-    # For now, process the first file (can be extended to process all)
+        raise FileNotFoundError("No *.json trace files found in traces/")
+
     trace_file = trace_files[0]
-    print(f"\n📂 Processing: {trace_file.name}")
-    
-    print(f"   Loading trace data...")
-    with open(trace_file, "r") as f:
-        data = json.load(f)
-    
-    # Extract config information
+    print(f"📂 Loading trace data from {trace_file.name} ...")
+
+    with trace_file.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def dataset_overview(data: dict[str, Any]) -> None:
+    """Print a concise overview of the dataset/config metadata."""
     config = data.get("config", {})
-    agent_name = config.get("agent_name", "hal_generalist_agent")
-    model_name = config.get("agent_args", {}).get("model_name", "o3-mini-2025-01-31")
-    benchmark_name = config.get("benchmark_name", "swebench_verified_mini")
-    
-    print(f"\n📊 Dataset Information:")
+    results = data.get("results", {})
+
+    agent_name = config.get("agent_name", "unknown-agent")
+    model_name = config.get("agent_args", {}).get("model_name", "unknown-model")
+    benchmark = config.get("benchmark_name", "unknown-benchmark")
+
+    print("\n📊 Dataset Information:")
     print(f"   Agent: {agent_name}")
     print(f"   Model: {model_name}")
-    print(f"   Benchmark: {benchmark_name}")
-    
-    # Extract evaluation results
-    results = data.get("results", {})
-    accuracy = results.get("accuracy", 0)
-    total_cost = results.get("total_cost", 0)
+    print(f"   Benchmark: {benchmark}")
+
+    accuracy = results.get("accuracy")
+    total_cost = results.get("total_cost")
     failed_tasks = results.get("failed_tasks", [])
-    
-    print(f"\n📈 Results Summary:")
-    print(f"   Accuracy: {accuracy:.1%}")
-    print(f"   Total Cost: ${total_cost:.2f}")
+    successful_tasks = results.get("successful_tasks", [])
+
+    print("\n📈 Results Summary:")
+    if accuracy is not None:
+        print(f"   Accuracy: {accuracy:.1%}")
+    if total_cost is not None:
+        print(f"   Total Cost: ${total_cost:.2f}")
+    print(f"   Successful Tasks: {len(successful_tasks)}")
     print(f"   Failed Tasks: {len(failed_tasks)}")
-    
-    # Process raw logging results
-    raw_logging_results = data.get("raw_logging_results", [])
-    print(f"   Processing {len(raw_logging_results)} trace entries...")
-    
-    # Group trace entries by task
-    tasks_by_id = {}
-    for entry in raw_logging_results:
-        task_info = extract_task_info(entry)
-        task_id = task_info["task_id"]
-        if task_id and task_id != "unknown":
-            if task_id not in tasks_by_id:
-                tasks_by_id[task_id] = []
-            tasks_by_id[task_id].append(task_info)
-    
-    print(f"   Found {len(tasks_by_id)} unique tasks")
-    
-    # Analyze the traces locally without making API calls
-    print(f"\n📊 Analyzing Traces:")
-    print(f"   Total trace entries: {len(raw_logging_results)}")
-    print(f"   Unique tasks: {len(tasks_by_id)}")
-    
-    # Sample analysis of first few tasks
-    print(f"\n🔍 Sample Task Details:")
-    for idx, (task_id, task_entries) in enumerate(list(tasks_by_id.items())[:5]):
-        print(f"\n   Task {idx + 1}: {task_id}")
-        print(f"      Status: {'❌ Failed' if task_id in failed_tasks else '✅ Success'}")
-        print(f"      Trace entries: {len(task_entries)}")
-        
-        # Get message count from first entry
-        if task_entries:
-            first_entry = task_entries[0]
-            messages_data = first_entry.get("messages", [])
-            print(f"      Messages in first entry: {len(messages_data)}")
-            
-            # Show first message if available
-            if messages_data:
-                first_msg = messages_data[0]
-                content = first_msg.get("content", "")
-                if isinstance(content, list) and content:
-                    preview = content[0].get("text", "")[:100] if isinstance(content[0], dict) else str(content[0])[:100]
-                else:
-                    preview = str(content)[:100]
-                print(f"      First message preview: {preview}...")
-    
-    print(f"\n📋 Summary:")
-    print(f"   ✓ Successfully parsed {len(raw_logging_results)} trace entries")
-    print(f"   ✓ Found {len(tasks_by_id)} unique tasks")
-    print(f"   • Model: {model_name}")
-    print(f"   • Benchmark: {benchmark_name}")
-    print(f"   • Accuracy: {accuracy:.1%}")
-    print(f"   • Total Cost: ${total_cost:.2f}")
-    print(f"   • Successful Tasks: {len([t for t in tasks_by_id.keys() if t not in failed_tasks])}")
-    print(f"   • Failed Tasks: {len(failed_tasks)}")
-    
-    # Upload to Lunette if API key is set
-    if os.getenv("LUNETTE_API_KEY"):
-        # Check for Azure OpenAI configuration
-        azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
-        azure_api_key = os.getenv("AZURE_OPENAI_API_KEY")
-        azure_deployment = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
-        azure_api_version = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
-        
-        if not azure_endpoint or not azure_api_key:
-            print(f"\n⚠️  Error: Azure OpenAI configuration missing.")
-            print(f"   Required environment variables:")
-            print(f"   - AZURE_OPENAI_ENDPOINT (e.g., https://your-resource.cognitiveservices.azure.com/)")
-            print(f"   - AZURE_OPENAI_API_KEY")
-            print(f"   - AZURE_OPENAI_DEPLOYMENT (e.g., gpt-4o-mini) [optional, defaults to gpt-4o-mini]")
-            print(f"   - AZURE_OPENAI_API_VERSION [optional, defaults to 2024-12-01-preview]")
-            return
-        
-        from lunette import LunetteTracer
-        from openai import AzureOpenAI
-        
-        print(f"\n🚀 Initializing Lunette tracer...")
-        tracer = LunetteTracer(task=benchmark_name, model=model_name)
-        
-        # Initialize Azure OpenAI client
-        print(f"   Connecting to Azure OpenAI...")
-        print(f"   Endpoint: {azure_endpoint}")
-        print(f"   Deployment: {azure_deployment}")
-        openai_client = AzureOpenAI(
-            api_version=azure_api_version,
-            azure_endpoint=azure_endpoint,
-            api_key=azure_api_key,
+
+
+def group_entries_by_task(raw_entries: Sequence[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Group raw logging entries by their weave_task_id."""
+    tasks: dict[str, list[dict[str, Any]]] = {}
+    for entry in raw_entries:
+        task_id = (
+            entry.get("attributes", {}).get("weave_task_id")
+            or entry.get("weave_task_id")
+            or entry.get("inputs", {}).get("task_id")
+            or "unknown"
         )
-        
-        # Process tasks and create trajectories
-        max_tasks = min(1, len(tasks_by_id))  # Start with 1 task to test
-        print(f"   Creating trajectories for {max_tasks} tasks...")
-        
-        for idx, (task_id, task_entries) in enumerate(list(tasks_by_id.items())[:max_tasks]):
-            if idx > 0 and idx % 5 == 0:
-                print(f"   Progress: {idx}/{max_tasks} tasks uploaded...")
-            
-            # Create a trajectory for this task
-            async with tracer.trajectory(
-                sample=task_id,
-                metadata={
-                    "num_entries": len(task_entries),
-                    "task_id": task_id,
-                    "failed": task_id in failed_tasks,
-                    "agent": agent_name
-                }
+        tasks.setdefault(task_id, []).append(entry)
+    return tasks
+
+
+def sanitize_text(text: str) -> str:
+    """Strip agent scaffolding tags and trim whitespace."""
+    if not text:
+        return ""
+
+    cleaned_lines: list[str] = []
+    for line in text.splitlines():
+        if line.strip() in SCAFFOLD_TAGS:
+            continue
+        cleaned_lines.append(line.rstrip())
+
+    return "\n".join(cleaned_lines).strip()
+
+
+def normalize_content(content: Any) -> str:
+    """Convert OpenAI-style message content into a simple string."""
+    if isinstance(content, str):
+        return sanitize_text(content.strip())
+
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                parts.append(str(block))
+                continue
+            block_type = block.get("type")
+            if block_type == "text":
+                parts.append(block.get("text", ""))
+            elif block_type == "reasoning":
+                # reasoned content may include summaries we can surface
+                summary = block.get("summary")
+                if summary:
+                    parts.append(summary)
+                elif block.get("redacted") is False:
+                    parts.append(block.get("reasoning", ""))
+        raw_text = "\n".join(part for part in (p.strip() for p in parts) if part)
+        return sanitize_text(raw_text)
+
+    if content is None:
+        return ""
+
+    return sanitize_text(str(content).strip())
+
+
+def entry_timestamp(entry: dict[str, Any]) -> str | None:
+    """Best-effort timestamp for ordering entries."""
+    return entry.get("created_timestamp") or entry.get("started_at") or entry.get("ended_at")
+
+
+def sort_entries(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Sort entries chronologically using available timestamps."""
+    return sorted(entries, key=lambda e: (entry_timestamp(e) or "", e.get("id", "")))
+
+
+def build_trace_message(raw_message: dict[str, Any], entry: dict[str, Any]) -> TraceMessage | None:
+    """Normalize a raw OpenAI message dict into TraceMessage."""
+    role = raw_message.get("role")
+    if not role:
+        return None
+
+    content = normalize_content(raw_message.get("content"))
+    if not content:
+        return None
+
+    return TraceMessage(role=role, content=content, entry_id=entry.get("id"), timestamp=entry_timestamp(entry))
+
+
+def build_assistant_message(entry: dict[str, Any]) -> TraceMessage | None:
+    """Extract the assistant response from the entry output."""
+    output = entry.get("output") or {}
+    choices = output.get("choices") or []
+    if not choices:
+        return None
+
+    message = choices[0].get("message")
+    if not message:
+        return None
+
+    role = message.get("role", "assistant")
+    content = normalize_content(message.get("content"))
+    if not content:
+        return None
+
+    return TraceMessage(role=role, content=content, entry_id=entry.get("id"), timestamp=entry_timestamp(entry))
+
+
+def extract_task_messages(task_id: str, entries: list[dict[str, Any]]) -> TaskConversation:
+    """Convert task-specific entries into an ordered conversation."""
+    ordered_entries = sort_entries(entries)
+    conversation: list[TraceMessage] = []
+    previous_message_count = 0
+
+    def append_assistant_output_if_new(entry: dict[str, Any]) -> None:
+        assistant_message = build_assistant_message(entry)
+        if not assistant_message:
+            return
+
+        if conversation:
+            last_message = conversation[-1]
+            if (
+                last_message.role == assistant_message.role
+                and last_message.content == assistant_message.content
             ):
-                # Process all entries from this task to create the complete trajectory
-                for entry_idx, task_entry in enumerate(task_entries):  # Process all entries
-                    messages_data = task_entry.get("messages", [])
-                    
-                    if not messages_data:
-                        continue
-                    
-                    # Convert to OpenAI message format
-                    openai_messages = []
-                    for msg in messages_data:
-                        role = msg.get("role", "")
-                        content = msg.get("content", "")
-                        
-                        # Handle content that can be a list or string
-                        if isinstance(content, list):
-                            # Extract text from content blocks
-                            text_parts = []
-                            for block in content:
-                                if isinstance(block, dict) and block.get("type") == "text":
-                                    text_parts.append(block.get("text", ""))
-                            text_content = "\n".join(text_parts) if text_parts else str(content)
-                        else:
-                            text_content = str(content)
-                        
-                        if role in ["user", "assistant", "system"]:
-                            openai_messages.append({
-                                "role": role,
-                                "content": text_content  # Full content for complete traces
-                            })
-                    
-                    # Only make API call if we have valid messages
-                    if openai_messages and len(openai_messages) >= 2:
-                        try:
-                            # Filter out system messages for the API call
-                            api_messages = [m for m in openai_messages if m["role"] != "system"]
-                            if not api_messages:
-                                continue
-                            
-                            # Make the API call - this will be captured by Lunette
-                            response = openai_client.chat.completions.create(
-                                model=azure_deployment,
-                                max_completion_tokens=100,  # Keep it minimal for cost
-                                messages=api_messages,  # All messages for complete trace
-                            )
-                            # Response is automatically captured by Lunette via OpenTelemetry
-                        except Exception as e:
-                            # Continue on error (rate limits, etc.)
-                            if idx == 0 and entry_idx == 0:
-                                print(f"   Note: API call error (continuing): {str(e)[:50]}")
-                            pass
-        
-        print(f"   ✓ Completed processing {max_tasks} tasks")
-        
-        # Close tracer and upload
-        print(f"\n☁️  Uploading traces to Lunette...")
-        result = await tracer.close()
-        
-        print(f"\n✅ Upload complete!")
-        if result and result.get('run_id'):
-            print(f"   Run ID: {result['run_id']}")
-            print(f"   Trajectory IDs: {len(result.get('trajectory_ids', []))} trajectories")
-            print(f"\n🔗 View your traces at: https://lunette.dev/")
+                return
+
+        conversation.append(assistant_message)
+
+    for entry in ordered_entries:
+        raw_messages = entry.get("inputs", {}).get("messages") or []
+
+        if len(raw_messages) < previous_message_count:
+            previous_message_count = 0
+
+        if len(raw_messages) > previous_message_count:
+            new_messages = raw_messages[previous_message_count:]
+            for raw in new_messages:
+                normalized = build_trace_message(raw, entry)
+                if normalized:
+                    if conversation:
+                        last_message = conversation[-1]
+                        if (
+                            last_message.role == normalized.role
+                            and last_message.content == normalized.content
+                        ):
+                            continue
+                    conversation.append(normalized)
+
+        previous_message_count = len(raw_messages)
+
+        append_assistant_output_if_new(entry)
+
+    return TaskConversation(task_id=task_id, entries=ordered_entries, messages=conversation)
+
+
+def convert_to_lunette_messages(
+    messages: Sequence[TraceMessage],
+    system_message_cls: type,
+    user_message_cls: type,
+    assistant_message_cls: type,
+) -> list[Any]:
+    """Map TraceMessages to Lunette message models."""
+    converted: list[Any] = []
+
+    for position, message in enumerate(messages):
+        content = message.content or ""
+        if message.role == "system":
+            converted.append(system_message_cls(position=position, content=content))
+        elif message.role == "assistant":
+            converted.append(assistant_message_cls(position=position, content=content))
         else:
-            print(f"   Warning: No run_id returned. Check if trajectories were created.")
+            converted.append(user_message_cls(position=position, content=content))
+
+    return converted
+
+
+def preview_task(conversation: TaskConversation, limit: int = 8) -> None:
+    """Print a human-readable preview for one task."""
+    print(f"\n🔍 Previewing task {conversation.task_id}")
+    print(f"   Entries: {conversation.entry_count}")
+    print(f"   Messages extracted: {len(conversation.messages)}")
+
+    if not conversation.messages:
+        print("   (No messages extracted)")
+        return
+
+    for message in conversation.messages[:limit]:
+        snippet = message.content.replace("\n", " ")[:160]
+        print(f"   [{message.role}] {snippet}")
+
+    remaining = len(conversation.messages) - limit
+    if remaining > 0:
+        print(f"   ... ({remaining} more messages)")
+
+
+def confirm(prompt: str) -> bool:
+    """Prompt the user before uploading."""
+    try:
+        answer = input(f"{prompt} [y/N]: ").strip().lower()
+    except EOFError:
+        return False
+    return answer in {"y", "yes"}
+
+
+def build_trajectories(
+    conversations: Sequence[TaskConversation],
+    failed_tasks: set[str],
+    agent_name: str,
+    deps: LunetteDependencies,
+) -> list[Any]:
+    """Create Lunette trajectories from task conversations."""
+    trajectories: list[Any] = []
+    for conversation in conversations:
+        if not conversation.messages:
+            continue
+
+        lunette_messages = convert_to_lunette_messages(
+            conversation.messages,
+            deps.system_message_cls,
+            deps.user_message_cls,
+            deps.assistant_message_cls,
+        )
+        metadata = {
+            "failed": conversation.task_id in failed_tasks,
+            "task_id": conversation.task_id,
+            "entry_count": conversation.entry_count,
+            "message_count": len(lunette_messages),
+            "agent": agent_name,
+        }
+
+        trajectory = deps.trajectory_cls(
+            sample=conversation.task_id,
+            messages=lunette_messages,
+            metadata=metadata,
+        )
+        trajectories.append(trajectory)
+
+    return trajectories
+
+
+async def upload_run(client_cls: type, run: Any) -> dict[str, Any]:
+    """Upload the run to Lunette."""
+    async with client_cls() as client:
+        return await client.save_run(run)
+
+
+def main() -> None:
+    try:
+        data = load_trace_file(TRACE_DIR)
+    except FileNotFoundError as error:
+        print(f"❌ {error}")
+        return
+
+    dataset_overview(data)
+
+    raw_entries = data.get("raw_logging_results") or []
+    if not raw_entries:
+        print("❌ No raw logging results found in trace file.")
+        return
+
+    tasks = group_entries_by_task(raw_entries)
+    print(f"\n🧵 Found {len(tasks)} unique tasks")
+
+    conversations: list[TaskConversation] = []
+    for task_id, entries in tasks.items():
+        conversation = extract_task_messages(task_id, entries)
+        if conversation.messages:
+            conversations.append(conversation)
+
+    conversations.sort(key=lambda conv: conv.task_id)
+
+    if not conversations:
+        print("❌ Failed to extract any conversations.")
+        return
+
+    preview_task(conversations[0])
+
+    failed_tasks = set(data.get("results", {}).get("failed_tasks", []))
+    agent_name = data.get("config", {}).get("agent_name", "unknown-agent")
+    model_name = data.get("config", {}).get("agent_args", {}).get("model_name", "unknown-model")
+    benchmark = data.get("config", {}).get("benchmark_name", "unknown-benchmark")
+
+    if not confirm("\nProceed with uploading all tasks to Lunette?"):
+        print("ℹ️  Upload canceled. Inspect the preview above and rerun when ready.")
+        return
+
+    if not os.getenv("LUNETTE_API_KEY"):
+        print("❌ LUNETTE_API_KEY not set. Export the key or add it to a .env file before uploading.")
+        return
+
+    try:
+        deps = load_lunette_dependencies()
+    except Exception as exc:  # pragma: no cover - depends on environment
+        print(f"❌ Unable to import Lunette SDK: {exc}")
+        print("   Ensure lunette-sdk is installed inside the virtual environment.")
+        return
+
+    trajectories = build_trajectories(conversations, failed_tasks, agent_name, deps)
+    if not trajectories:
+        print("❌ No trajectories with messages were produced.")
+        return
+
+    print(f"\n☁️  Uploading {len(trajectories)} trajectories to Lunette...")
+    run = deps.run_cls(task=benchmark, model=model_name, trajectories=trajectories)
+    result = asyncio.run(upload_run(deps.client_cls, run))
+
+    run_id = result.get("run_id")
+    traj_ids = result.get("trajectory_ids", [])
+
+    if run_id:
+        print(f"\n✅ Upload complete! Run ID: {run_id}")
+        print(f"   Trajectories uploaded: {len(traj_ids)}")
+        print("   Visit https://lunette.dev/ to inspect the traces.")
     else:
-        print(f"\n💡 To upload to Lunette for visualization:")
-        print(f"   1. Get your API key from https://lunette.dev/")
-        print(f"   2. Set Azure OpenAI environment variables")
-        print(f"   3. Run the script again")
-        print(f"\n   Example .env file:")
-        print(f"   LUNETTE_API_KEY=your-lunette-key")
-        print(f"   AZURE_OPENAI_ENDPOINT=https://your-resource.cognitiveservices.azure.com/")
-        print(f"   AZURE_OPENAI_API_KEY=your-azure-api-key")
-        print(f"   AZURE_OPENAI_DEPLOYMENT=gpt-4o-mini")
-        print(f"   AZURE_OPENAI_API_VERSION=2024-12-01-preview")
+        print("⚠️  Upload finished but no run_id was returned. Please verify on Lunette.")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
