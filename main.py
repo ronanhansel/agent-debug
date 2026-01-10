@@ -1,9 +1,11 @@
 import asyncio
+import csv
 import json
 import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from textwrap import dedent
 from typing import TYPE_CHECKING, Any, Iterable, Sequence
 
 try:
@@ -31,6 +33,14 @@ SCAFFOLD_TAGS = {
     "<start_solution>",
     "<end_solution>",
 }
+ENVIRONMENTAL_BARRIER_DESCRIPTION = (
+    "An Environmental Barrier in SWE-bench describes a failure mode where an agent is prevented from solving a task "
+    "due to impassable infrastructure faults rather than a lack of coding capability. These barriers arise from defects "
+    "in the evaluation setup itself—such as crashing Docker containers, broken shell environments, or pre-existing "
+    "dependency conflicts—that render the codebase unrunnable regardless of the agent's actions. Unlike a capability "
+    "failure where an agent writes incorrect code, an environmental barrier effectively blocks the agent from even "
+    "attempting the task, often due to missing files or system-level restrictions that are outside the agent's control."
+)
 
 if dotenv:
     dotenv.load_dotenv()
@@ -46,6 +56,8 @@ class LunetteDependencies:
     assistant_message_cls: type
     run_cls: type
     trajectory_cls: type
+    grading_plan_cls: type
+    trajectory_filters_cls: type
 
 
 @dataclass
@@ -101,6 +113,7 @@ def load_lunette_dependencies() -> LunetteDependencies:
     prepare_lunette_home()
 
     from lunette.client import LunetteClient
+    from lunette.analysis import GradingPlan, TrajectoryFilters
     from lunette.models.messages import AssistantMessage, SystemMessage, UserMessage
     from lunette.models.run import Run
     from lunette.models.trajectory import Trajectory
@@ -112,6 +125,8 @@ def load_lunette_dependencies() -> LunetteDependencies:
         assistant_message_cls=AssistantMessage,
         run_cls=Run,
         trajectory_cls=Trajectory,
+        grading_plan_cls=GradingPlan,
+        trajectory_filters_cls=TrajectoryFilters,
     )
 
 
@@ -325,6 +340,41 @@ def convert_to_lunette_messages(
     return converted
 
 
+def create_environmental_barrier_plan(
+    deps: LunetteDependencies,
+    sample_filter: Sequence[str] | None = None,
+) -> Any:
+    """Build a grading plan focused on environmental barrier classification."""
+    filters = deps.trajectory_filters_cls()
+    if sample_filter:
+        filters.sample = list(sample_filter)
+
+    prompt = dedent(
+        f"""
+        You are evaluating whether a SWE-bench trajectory failed because of an environmental barrier.
+        Definition: {ENVIRONMENTAL_BARRIER_DESCRIPTION}
+
+        Scoring instructions:
+        - Return score 1.0 when the failure is caused by infrastructure or environment issues that prevent progress
+          (e.g., sandbox crashes, missing files that predate the agent, dependency conflicts, permission errors, or
+          other system-level blockers outside the agent's control).
+        - Return score 0.0 when the agent's reasoning, planning, or code is at fault, or when evidence of an
+          environmental barrier is insufficient.
+
+        Requirements:
+        - Always set `name` to "environmentalbarrier".
+        - Provide a concise explanation citing the specific log lines or messages that justify the score.
+        - If the evidence is unclear, default to score 0.0 and explain why the barrier is unproven.
+        """
+    ).strip()
+
+    return deps.grading_plan_cls(
+        name="environmentalbarrier",
+        prompt=prompt,
+        trajectory_filters=filters,
+    )
+
+
 def preview_task(conversation: TaskConversation, limit: int = 8) -> None:
     """Print a human-readable preview for one task."""
     print(f"\n🔍 Previewing task {conversation.task_id}")
@@ -351,6 +401,26 @@ def confirm(prompt: str) -> bool:
     except EOFError:
         return False
     return answer in {"y", "yes"}
+
+
+def print_grading_results(results: Any) -> None:
+    """Pretty-print grading results returned by Lunette."""
+    trajectory_results = getattr(results, "results", None)
+    if not trajectory_results:
+        print("⚠️  Grading completed but returned no trajectory results.")
+        return
+
+    print("\n🧪 Environmental Barrier Grades:")
+    for item in trajectory_results:
+        data = item.data or {}
+        name = data.get("name", "environmentalbarrier")
+        score = data.get("score", "N/A")
+        explanation = (data.get("explanation") or "").strip()
+        sample_key = item.result_key or str(item.original_trajectory_id)
+
+        print(f"   • Sample {sample_key}: {name} = {score}")
+        if explanation:
+            print(f"      Explanation: {explanation}")
 
 
 def build_trajectories(
@@ -389,10 +459,28 @@ def build_trajectories(
     return trajectories
 
 
-async def upload_run(client_cls: type, run: Any) -> dict[str, Any]:
-    """Upload the run to Lunette."""
-    async with client_cls() as client:
-        return await client.save_run(run)
+async def upload_and_optionally_grade(
+    deps: LunetteDependencies,
+    run: Any,
+    grading_plan: Any | None,
+) -> tuple[dict[str, Any], Any | None]:
+    """Upload the run and optionally launch grading."""
+    async with deps.client_cls() as client:
+        upload_result = await client.save_run(run)
+
+        investigation_results = None
+        run_id = upload_result.get("run_id")
+        if grading_plan and run_id:
+            try:
+                print("\n🧪 Running environmental barrier grading...")
+                investigation_results = await client.investigate(
+                    run_id=run_id,
+                    plan=grading_plan,
+                )
+            except Exception as exc:  # pragma: no cover - depends on remote service
+                print(f"⚠️  Grading failed: {exc}")
+
+        return upload_result, investigation_results
 
 
 def main() -> None:
@@ -451,12 +539,18 @@ def main() -> None:
         print("❌ No trajectories with messages were produced.")
         return
 
+    grading_plan = None
+    if confirm("\nRun Lunette environmental-barrier grading after upload?"):
+        grading_plan = create_environmental_barrier_plan(deps)
+
     print(f"\n☁️  Uploading {len(trajectories)} trajectories to Lunette...")
     run = deps.run_cls(task=benchmark, model=model_name, trajectories=trajectories)
-    result = asyncio.run(upload_run(deps.client_cls, run))
+    upload_result, grading_results = asyncio.run(
+        upload_and_optionally_grade(deps, run, grading_plan),
+    )
 
-    run_id = result.get("run_id")
-    traj_ids = result.get("trajectory_ids", [])
+    run_id = upload_result.get("run_id")
+    traj_ids = upload_result.get("trajectory_ids", [])
 
     if run_id:
         print(f"\n✅ Upload complete! Run ID: {run_id}")
@@ -464,6 +558,9 @@ def main() -> None:
         print("   Visit https://lunette.dev/ to inspect the traces.")
     else:
         print("⚠️  Upload finished but no run_id was returned. Please verify on Lunette.")
+
+    if grading_results:
+        print_grading_results(grading_results)
 
 
 if __name__ == "__main__":
