@@ -23,6 +23,7 @@ if TYPE_CHECKING:  # pragma: no cover - imported only for type checking
 TRACE_DIR = Path("traces")
 ORIGINAL_HOME = Path(os.environ.get("HOME", Path.home()))
 _HOME_PREPARED: bool = False
+RUBRIC_OUTPUT_PATH = Path("environmental_barrier_rubrics.csv")
 SCAFFOLD_TAGS = {
     "<start_code>",
     "<end_code>",
@@ -423,6 +424,40 @@ def print_grading_results(results: Any) -> None:
             print(f"      Explanation: {explanation}")
 
 
+def write_cloud_grading_csv(
+    grading_results: Any,
+    model_run: str,
+    trajectory_id_to_sample: dict[str, str] | None = None,
+    output_path: Path = RUBRIC_OUTPUT_PATH,
+    default_criteria: str = "environmentalbarrier",
+) -> Path | None:
+    """Persist cloud grading results to CSV."""
+    trajectory_results = getattr(grading_results, "results", None)
+    if not trajectory_results:
+        return None
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["task_id", "criteria", "grade", "explanation", "model_run"])
+        for item in trajectory_results:
+            data = item.data or {}
+            sample_id = None
+            if trajectory_id_to_sample:
+                sample_id = trajectory_id_to_sample.get(str(item.original_trajectory_id))
+            sample_id = sample_id or item.result_key or str(item.original_trajectory_id)
+            writer.writerow(
+                [
+                    sample_id,
+                    data.get("name") or default_criteria,
+                    data.get("score", ""),
+                    (data.get("explanation") or "").strip(),
+                    model_run,
+                ]
+            )
+    return output_path
+
+
 def build_trajectories(
     conversations: Sequence[TaskConversation],
     failed_tasks: set[str],
@@ -518,6 +553,7 @@ def main() -> None:
     agent_name = data.get("config", {}).get("agent_name", "unknown-agent")
     model_name = data.get("config", {}).get("agent_args", {}).get("model_name", "unknown-model")
     benchmark = data.get("config", {}).get("benchmark_name", "unknown-benchmark")
+    model_run_id = data.get("config", {}).get("run_id") or data.get("config", {}).get("date") or "local-run"
 
     if not confirm("\nProceed with uploading all tasks to Lunette?"):
         print("ℹ️  Upload canceled. Inspect the preview above and rerun when ready.")
@@ -538,6 +574,7 @@ def main() -> None:
     if not trajectories:
         print("❌ No trajectories with messages were produced.")
         return
+    trajectory_samples = [str(traj.sample) for traj in trajectories]
 
     grading_plan = None
     if confirm("\nRun Lunette environmental-barrier grading after upload?"):
@@ -551,6 +588,15 @@ def main() -> None:
 
     run_id = upload_result.get("run_id")
     traj_ids = upload_result.get("trajectory_ids", [])
+    trajectory_id_to_sample: dict[str, str] = {}
+    if traj_ids and len(traj_ids) == len(trajectory_samples):
+        trajectory_id_to_sample = {
+            str(traj_id): trajectory_samples[idx] for idx, traj_id in enumerate(traj_ids)
+        }
+    elif traj_ids:
+        print(
+            "⚠️  Warning: trajectory ID count does not match local trajectories; CSV may lack task IDs."
+        )
 
     if run_id:
         print(f"\n✅ Upload complete! Run ID: {run_id}")
@@ -561,6 +607,13 @@ def main() -> None:
 
     if grading_results:
         print_grading_results(grading_results)
+        csv_path = write_cloud_grading_csv(
+            grading_results,
+            model_run_id,
+            trajectory_id_to_sample=trajectory_id_to_sample,
+        )
+        if csv_path:
+            print(f"\n🗂️  Cloud grading CSV written to {csv_path}")
 
 
 if __name__ == "__main__":
