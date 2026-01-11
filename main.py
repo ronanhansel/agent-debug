@@ -23,7 +23,7 @@ if TYPE_CHECKING:  # pragma: no cover - imported only for type checking
 TRACE_DIR = Path("traces")
 ORIGINAL_HOME = Path(os.environ.get("HOME", Path.home()))
 _HOME_PREPARED: bool = False
-RUBRIC_OUTPUT_PATH = Path("environmental_barrier_rubrics.csv")
+RUBRIC_OUTPUT_PATH = Path("output/environmental_barrier_rubrics.csv")
 SCAFFOLD_TAGS = {
     "<start_code>",
     "<end_code>",
