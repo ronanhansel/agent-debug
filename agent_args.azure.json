@@ -1,0 +1,5 @@
+{
+  "model_name": "azure/o3-mini",
+  "temperature": 1,
+  "budget": null
+}

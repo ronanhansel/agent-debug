@@ -1,0 +1,7 @@
+litellm
+docker
+pydantic
+inspect_ai
+weave
+datasets
+swebench@git+https://github.com/SWE-bench/SWE-bench

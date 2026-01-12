@@ -145,3 +145,36 @@ The script expects JSON files in the `traces/` directory with the following stru
 - Each trajectory is created with metadata about the task
 - No actual LLM API calls are made during upload - we're just organizing and uploading existing trace data
 - The Lunette tracer automatically captures and formats the data for upload
+Steps to Build Docker Image
+
+```bash
+set -a; source .env; set +a
+docker build -t hal-agent-runner:latest hal/utils/docker
+```
+
+Fix for Apple Silicon (M1/M2) Macs
+
+1. Force the build to run as linux/amd64 (so the base image plus Miniconda match):
+
+   cd /Users/ronan/Developer/agent-debug/hal-harness
+   docker build --platform=linux/amd64 -t hal-agent-runner:latest hal/utils/docker
+   This tells Docker Desktop to emulate x86 for the entire image. The build will be slower but succeeds without changing the Dockerfile.
+   This tells Docker Desktop to emulate x86 for the entire image. The build will be slower but succeeds without changing the Dockerfile.
+2. Stay on arm64 and install the arm64 Miniconda tarball by editing hal/utils/docker/Dockerfile:
+
+   - RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O /tmp/miniconda.sh \
+   + RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-aarch64.sh -O /tmp/miniconda.sh \
+        && bash /tmp/miniconda.sh -b -p /opt/conda \
+        ...
+
+   Rebuild normally (docker build -t hal-agent-runner:latest hal/utils/docker). This avoids x86 emulation entirely.
+
+```bash
+python scripts/auto_debug_batch.py \
+        --rubrics-csv ../output/environmental_barrier_rubrics.csv \
+        --traces-dir ../traces \
+        --agent-dir agents/hal_generalist_agent \
+        --agent-args ../agent_args.azure.json \
+        --agent-function main.run \
+        --benchmark-name swebench_verified
+```
