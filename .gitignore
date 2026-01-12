@@ -6,4 +6,7 @@ lunette/
 output/
 docent/
 hal-harness/
-hal-harness
+.llm_cache/
+rubrics/
+output*/
+fixable_output/

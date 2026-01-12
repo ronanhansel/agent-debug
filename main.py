@@ -1,29 +1,24 @@
+import argparse
 import asyncio
 import csv
 import json
 import os
-import shutil
+import re
+import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from textwrap import dedent
-from typing import TYPE_CHECKING, Any, Iterable, Sequence
+from typing import Any, Iterable, Sequence
 
 try:
     import dotenv  # type: ignore
 except ImportError:  # pragma: no cover - optional dependency
     dotenv = None
 
-if TYPE_CHECKING:  # pragma: no cover - imported only for type checking
-    from lunette.client import LunetteClient
-    from lunette.models.messages import AssistantMessage, SystemMessage, UserMessage
-    from lunette.models.run import Run
-    from lunette.models.trajectory import Trajectory
-
-
 TRACE_DIR = Path("traces")
-ORIGINAL_HOME = Path(os.environ.get("HOME", Path.home()))
-_HOME_PREPARED: bool = False
-RUBRIC_OUTPUT_PATH = Path("output/environmental_barrier_rubrics.csv")
+RUBRICS_DIR = Path("rubrics")
+OUTPUT_DIR = Path("output")
 SCAFFOLD_TAGS = {
     "<start_code>",
     "<end_code>",
@@ -47,19 +42,141 @@ if dotenv:
     dotenv.load_dotenv()
 
 
-@dataclass
-class LunetteDependencies:
-    """Runtime references to Lunette SDK classes."""
+def _ensure_llm_cache_path() -> None:
+    """Docent expects LLM_CACHE_PATH; default to .llm_cache if not provided."""
+    if os.getenv("LLM_CACHE_PATH"):
+        return
+    default_cache = Path(".llm_cache")
+    default_cache.mkdir(parents=True, exist_ok=True)
+    os.environ["LLM_CACHE_PATH"] = str(default_cache.resolve())
 
-    client_cls: type
-    system_message_cls: type
-    user_message_cls: type
-    assistant_message_cls: type
-    run_cls: type
-    trajectory_cls: type
-    grading_plan_cls: type
-    trajectory_filters_cls: type
 
+def _slugify(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9._-]+", "_", value.strip())
+    return cleaned.strip("_") or "unknown"
+
+
+os.environ.setdefault("ENV_RESOLUTION_STRATEGY", "os_environ")
+_ensure_llm_cache_path()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Docent rubric extraction and grading utility.")
+    parser.add_argument(
+        "--max-tasks",
+        type=int,
+        default=None,
+        help="Limit the number of tasks evaluated after grouping (useful for smoke tests).",
+    )
+    parser.add_argument(
+        "--rubric-model",
+        type=str,
+        default=None,
+        help=(
+            "Override the rubric model in the format provider:model_name (e.g., azure_openai:o3-mini). "
+            "This takes precedence over DOCENT_RUBRIC_MODEL and related env vars."
+        ),
+    )
+    parser.add_argument(
+        "--json-mode",
+        action="store_true",
+        help=(
+            "Request JSON-mode completions (response_format=json_object). Only supported for OpenAI/Azure deployments "
+            "that enable structured output."
+        ),
+    )
+    parser.add_argument(
+        "--rubrics-dir",
+        type=str,
+        default=str(RUBRICS_DIR),
+        help="Directory containing *.txt rubric definitions (optional matching .schema.json).",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        type=str,
+        choices=["low", "medium", "high"],
+        default=None,
+        help="Override the model's reasoning_effort parameter (OpenAI/Azure reasoning models only).",
+    )
+    return parser.parse_args()
+
+
+DOCENT_REPO_PATH = Path(__file__).parent / "docent"
+if DOCENT_REPO_PATH.exists():
+    sys.path.insert(0, str(DOCENT_REPO_PATH))
+
+DOCENT_IMPORT_ERROR: Exception | None = None
+try:  # pragma: no cover - optional dependency
+    from docent.data_models import AgentRun, Transcript
+    from docent.data_models.chat import parse_chat_message
+    from docent_core.docent.ai_tools.rubric.rubric import Rubric, evaluate_rubric
+    from docent_core._llm_util.providers.preferences import ModelOption
+except Exception as exc:  # pragma: no cover - optional dependency
+    DOCENT_IMPORT_ERROR = exc
+    AgentRun = None  # type: ignore[assignment]
+    Transcript = None  # type: ignore[assignment]
+    parse_chat_message = None  # type: ignore[assignment]
+    Rubric = None  # type: ignore[assignment]
+    ModelOption = None  # type: ignore[assignment]
+    evaluate_rubric = None  # type: ignore[assignment]
+
+GLOBAL_JSON_REQUIREMENTS = dedent(
+    """
+    JSON response requirements:
+    - Respond with only the JSON object that matches the schema (no prose, code fences, or leading text).
+    - Escape newline characters as \\n; do not emit raw control characters inside JSON strings.
+    """
+).strip()
+
+DEFAULT_OUTPUT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "score": {
+            "type": "number",
+            "enum": [0, 1],
+            "description": "Binary score: use 1 only when the rubric is satisfied, else 0.",
+        },
+        "explanation": {
+            "type": "string",
+            "citations": True,
+            "description": "Concise justification referencing transcript blocks.",
+        },
+    },
+    "required": ["score", "explanation"],
+}
+
+DEFAULT_RUBRIC_TEXT = dedent(
+    f"""
+    Rubric: Environmental Barrier
+
+    Detection target:
+    {ENVIRONMENTAL_BARRIER_DESCRIPTION}
+
+    Label the rubric as "present" when the transcript contains clear evidence that the agent was blocked by these
+    infrastructural faults. Label it as "absent" when failures stem from the agent's own reasoning, planning, or code,
+    or when no convincing evidence of an environmental issue appears.
+
+    Evidence guidelines:
+    - Presence indicators (label as present):
+      • Sandbox or container crashes, unrecoverable kernel panics, or persistent harness errors unrelated to the agent's code.
+      • Missing files, permissions, or dependencies that existed before the agent took any action.
+      • System-level restrictions (e.g., read-only filesystems, broken shell environments) that halt progress for any agent.
+    - Absence indicators (label as absent):
+      • Errors caused by malformed patches, wrong file edits, or logical mistakes.
+      • Tool or command failures that follow from the agent's own incorrect inputs.
+      • Speculative or insufficient evidence; if uncertain, default to absent.
+
+    Explanation requirements:
+    - Reference the specific transcript blocks or tool outputs that justify the classification.
+    - Highlight both the failure symptoms and why they originate from the environment (or why they do not).
+    - Keep explanations concise and cite block IDs directly.
+
+    {GLOBAL_JSON_REQUIREMENTS}
+    """
+).strip()
+
+DEFAULT_RUBRIC_PROVIDER = os.getenv("DOCENT_RUBRIC_PROVIDER", "azure_openai")
+DEFAULT_RUBRIC_BATCH_SIZE = int(os.getenv("DOCENT_RUBRIC_BATCH_SIZE", "4"))
 
 @dataclass
 class TraceMessage:
@@ -84,51 +201,80 @@ class TaskConversation:
         return len(self.entries)
 
 
-def prepare_lunette_home() -> Path:
-    """Ensure Lunette can write logs/config inside the workspace sandbox."""
-    global _HOME_PREPARED
-    if _HOME_PREPARED:
-        return Path(os.environ["HOME"])
+@dataclass
+class LocalRubricEvaluation:
+    """Container for rubric results produced by Docent."""
 
-    workspace_home = (Path.cwd() / ".lunette_home").resolve()
-    workspace_home.mkdir(parents=True, exist_ok=True)
+    task_id: str
+    rubric_id: str
+    rubric_version: int
+    output: dict[str, Any] | None
+    error: str | None = None
 
-    os.environ["HOME"] = str(workspace_home)
-    os.environ.setdefault("LUNETTE_HOME", str(workspace_home / ".lunette"))
-
-    original_config = ORIGINAL_HOME / ".lunette" / "config.json"
-    destination_config = workspace_home / ".lunette" / "config.json"
-    if original_config.exists() and not destination_config.exists():
-        destination_config.parent.mkdir(parents=True, exist_ok=True)
+    @property
+    def score(self) -> float | None:
+        if not self.output:
+            return None
+        score = self.output.get("score")
+        if isinstance(score, (int, float)):
+            return float(score)
         try:
-            shutil.copyfile(original_config, destination_config)
-        except PermissionError:
-            pass
+            return float(score)
+        except (TypeError, ValueError):
+            return None
 
-    _HOME_PREPARED = True
-    return workspace_home
+    @property
+    def explanation(self) -> str:
+        if not self.output:
+            return ""
+        explanation = self.output.get("explanation")
+        return explanation if isinstance(explanation, str) else ""
 
 
-def load_lunette_dependencies() -> LunetteDependencies:
-    """Import Lunette SDK modules lazily after preparing the workspace home."""
-    prepare_lunette_home()
+@dataclass
+class RubricDefinition:
+    rubric_id: str
+    rubric_text: str
+    output_schema: dict[str, Any]
 
-    from lunette.client import LunetteClient
-    from lunette.analysis import GradingPlan, TrajectoryFilters
-    from lunette.models.messages import AssistantMessage, SystemMessage, UserMessage
-    from lunette.models.run import Run
-    from lunette.models.trajectory import Trajectory
 
-    return LunetteDependencies(
-        client_cls=LunetteClient,
-        system_message_cls=SystemMessage,
-        user_message_cls=UserMessage,
-        assistant_message_cls=AssistantMessage,
-        run_cls=Run,
-        trajectory_cls=Trajectory,
-        grading_plan_cls=GradingPlan,
-        trajectory_filters_cls=TrajectoryFilters,
-    )
+def ensure_default_rubric_files(directory: Path) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    txt_files = list(directory.glob("*.txt"))
+    if txt_files:
+        return
+
+    default_path = directory / "environmentalbarrier.txt"
+    default_path.write_text(DEFAULT_RUBRIC_TEXT, encoding="utf-8")
+    schema_path = default_path.with_suffix(".schema.json")
+    schema_path.write_text(json.dumps(DEFAULT_OUTPUT_SCHEMA, indent=2), encoding="utf-8")
+
+
+def load_rubric_definitions(directory: Path) -> list[RubricDefinition]:
+    ensure_default_rubric_files(directory)
+    definitions: list[RubricDefinition] = []
+    for txt_path in sorted(directory.glob("*.txt")):
+        rubric_text = txt_path.read_text(encoding="utf-8").strip()
+        if not rubric_text:
+            continue
+        if GLOBAL_JSON_REQUIREMENTS not in rubric_text:
+            rubric_text = f"{rubric_text.rstrip()}\n\n{GLOBAL_JSON_REQUIREMENTS}"
+        schema_path = txt_path.with_suffix(".schema.json")
+        output_schema = DEFAULT_OUTPUT_SCHEMA
+        if schema_path.exists():
+            try:
+                output_schema = json.loads(schema_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                print(f"⚠️  Failed to parse schema for {txt_path.name}: {exc}. Using default schema.")
+        rubric_id = _slugify(txt_path.stem.lower())
+        definitions.append(
+            RubricDefinition(
+                rubric_id=rubric_id,
+                rubric_text=rubric_text,
+                output_schema=output_schema,
+            )
+        )
+    return definitions
 
 
 def load_trace_file(trace_dir: Path) -> dict[str, Any]:
@@ -320,60 +466,183 @@ def extract_task_messages(task_id: str, entries: list[dict[str, Any]]) -> TaskCo
     return TaskConversation(task_id=task_id, entries=ordered_entries, messages=conversation)
 
 
-def convert_to_lunette_messages(
-    messages: Sequence[TraceMessage],
-    system_message_cls: type,
-    user_message_cls: type,
-    assistant_message_cls: type,
-) -> list[Any]:
-    """Map TraceMessages to Lunette message models."""
-    converted: list[Any] = []
+def resolve_rubric_model_option(
+    model_override: str | None = None,
+    reasoning_effort_override: str | None = None,
+) -> "ModelOption":
+    """Derive the Docent ModelOption to use for rubric evaluation."""
+    if ModelOption is None:
+        raise RuntimeError("Docent ModelOption class is unavailable. Ensure docent is installed.")
 
-    for position, message in enumerate(messages):
-        content = message.content or ""
-        if message.role == "system":
-            converted.append(system_message_cls(position=position, content=content))
-        elif message.role == "assistant":
-            converted.append(assistant_message_cls(position=position, content=content))
+    raw_model = model_override or os.getenv("DOCENT_RUBRIC_MODEL")
+    provider = DEFAULT_RUBRIC_PROVIDER
+    model_name = None
+
+    if raw_model:
+        if ":" in raw_model:
+            provider, model_name = raw_model.split(":", 1)
         else:
-            converted.append(user_message_cls(position=position, content=content))
+            model_name = raw_model
 
-    return converted
+    if not model_name:
+        model_name = os.getenv("DOCENT_RUBRIC_MODEL_NAME")
 
+    if not model_name and provider == "azure_openai":
+        for candidate in (
+            "AZURE_OPENAI_RUBRIC_MODEL",
+            "AZURE_OPENAI_DEPLOYMENT_NAME",
+            "AZURE_OPENAI_DEPLOYMENT",
+            "AZURE_OPENAI_CHAT_DEPLOYMENT",
+        ):
+            value = os.getenv(candidate)
+            if value:
+                model_name = value
+                break
 
-def create_environmental_barrier_plan(
-    deps: LunetteDependencies,
-    sample_filter: Sequence[str] | None = None,
-) -> Any:
-    """Build a grading plan focused on environmental barrier classification."""
-    filters = deps.trajectory_filters_cls()
-    if sample_filter:
-        filters.sample = list(sample_filter)
+    if not model_name:
+        raise ValueError(
+            "Unable to determine an Azure OpenAI deployment for rubric evaluation. "
+            "Set DOCENT_RUBRIC_MODEL (provider:model) or DOCENT_RUBRIC_MODEL_NAME / "
+            "AZURE_OPENAI_DEPLOYMENT_NAME in your environment."
+        )
 
-    prompt = dedent(
-        f"""
-        You are evaluating whether a SWE-bench trajectory failed because of an environmental barrier.
-        Definition: {ENVIRONMENTAL_BARRIER_DESCRIPTION}
+    reasoning_effort = os.getenv("DOCENT_RUBRIC_REASONING_EFFORT")
+    if reasoning_effort:
+        reasoning_effort = reasoning_effort.lower()
+        if reasoning_effort not in {"low", "medium", "high"}:
+            raise ValueError(
+                "DOCENT_RUBRIC_REASONING_EFFORT must be one of: low, medium, high."
+            )
 
-        Scoring instructions:
-        - Return score 1.0 when the failure is caused by infrastructure or environment issues that prevent progress
-          (e.g., sandbox crashes, missing files that predate the agent, dependency conflicts, permission errors, or
-          other system-level blockers outside the agent's control).
-        - Return score 0.0 when the agent's reasoning, planning, or code is at fault, or when evidence of an
-          environmental barrier is insufficient.
-
-        Requirements:
-        - Always set `name` to "environmentalbarrier".
-        - Provide a concise explanation citing the specific log lines or messages that justify the score.
-        - If the evidence is unclear, default to score 0.0 and explain why the barrier is unproven.
-        """
-    ).strip()
-
-    return deps.grading_plan_cls(
-        name="environmentalbarrier",
-        prompt=prompt,
-        trajectory_filters=filters,
+    return ModelOption(
+        provider=provider,
+        model_name=model_name,
+        reasoning_effort=(reasoning_effort_override or reasoning_effort),  # type: ignore[arg-type]
     )
+
+
+def build_rubric_from_definition(
+    definition: RubricDefinition,
+    model_option: "ModelOption",
+) -> "Rubric":
+    if Rubric is None:
+        raise RuntimeError("Docent Rubric class is unavailable. Ensure docent is installed.")
+
+    return Rubric(
+        id=definition.rubric_id,
+        version=1,
+        rubric_text=definition.rubric_text.strip(),
+        judge_model=model_option,
+        output_schema=definition.output_schema,
+    )
+
+
+def validate_provider_environment(model_option: "ModelOption") -> None:
+    """Ensure required environment variables exist for the selected provider."""
+    if model_option.provider != "azure_openai":
+        return
+
+    missing: list[str] = []
+    for var in ("AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY"):
+        if not os.getenv(var):
+            missing.append(var)
+
+    api_version = os.getenv("OPENAI_API_VERSION") or os.getenv("AZURE_OPENAI_API_VERSION")
+    if not api_version:
+        missing.append("OPENAI_API_VERSION (or AZURE_OPENAI_API_VERSION)")
+    else:
+        os.environ.setdefault("OPENAI_API_VERSION", api_version)
+
+    if missing:
+        raise EnvironmentError(
+            "Azure OpenAI environment configuration is incomplete. Missing: "
+            + ", ".join(missing)
+        )
+
+
+def build_docent_agent_runs(
+    conversations: Sequence[TaskConversation],
+    failed_tasks: set[str],
+    agent_name: str,
+) -> list["AgentRun"]:
+    if AgentRun is None or Transcript is None or parse_chat_message is None:
+        raise RuntimeError(
+            "Docent data models are unavailable. Ensure the docent package is installed and importable."
+        )
+
+    agent_runs: list[AgentRun] = []
+    for conversation in conversations:
+        parsed_messages = []
+        for message in conversation.messages:
+            payload = {"role": message.role, "content": message.content or ""}
+            try:
+                parsed_messages.append(parse_chat_message(payload))
+            except Exception as exc:  # pragma: no cover - best effort logging
+                print(
+                    f"⚠️  Skipping malformed message in task {conversation.task_id}: {exc}"
+                )
+        if not parsed_messages:
+            continue
+
+        transcript_metadata = {
+            "task_id": conversation.task_id,
+            "entry_count": conversation.entry_count,
+        }
+        transcript = Transcript(messages=parsed_messages, metadata=transcript_metadata)
+
+        run_metadata = {
+            "task_id": conversation.task_id,
+            "failed": conversation.task_id in failed_tasks,
+            "agent": agent_name,
+            "entry_count": conversation.entry_count,
+            "message_count": len(parsed_messages),
+        }
+        try:
+            agent_run = AgentRun(
+                id=str(conversation.task_id),
+                transcripts=[transcript],
+                metadata=run_metadata,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            print(f"⚠️  Failed to build AgentRun for {conversation.task_id}: {exc}")
+            continue
+        agent_runs.append(agent_run)
+
+    return agent_runs
+
+
+async def evaluate_environmental_barrier(
+    agent_runs: Sequence["AgentRun"],
+    rubric: "Rubric",
+    batch_size: int = DEFAULT_RUBRIC_BATCH_SIZE,
+    json_mode: bool = False,
+) -> list[LocalRubricEvaluation]:
+    if evaluate_rubric is None:
+        raise RuntimeError("Docent rubric evaluator is unavailable. Ensure docent is installed.")
+
+    if batch_size <= 0:
+        batch_size = 1
+
+    evaluations: list[LocalRubricEvaluation] = []
+    for start in range(0, len(agent_runs), batch_size):
+        batch = list(agent_runs[start : start + batch_size])
+        response_format = {"type": "json_object"} if json_mode else None
+        outputs = await evaluate_rubric(batch, rubric, response_format=response_format)
+        for agent_run, output in zip(batch, outputs):
+            error = None
+            if output is None:
+                error = "Rubric evaluation returned no valid output."
+            task_id = str(agent_run.metadata.get("task_id") or agent_run.id)
+            evaluations.append(
+                LocalRubricEvaluation(
+                    task_id=task_id,
+                    rubric_id=rubric.id,
+                    rubric_version=rubric.version,
+                    output=output,
+                    error=error,
+                )
+            )
+    return evaluations
 
 
 def preview_task(conversation: TaskConversation, limit: int = 8) -> None:
@@ -404,121 +673,67 @@ def confirm(prompt: str) -> bool:
     return answer in {"y", "yes"}
 
 
-def print_grading_results(results: Any) -> None:
-    """Pretty-print grading results returned by Lunette."""
-    trajectory_results = getattr(results, "results", None)
-    if not trajectory_results:
-        print("⚠️  Grading completed but returned no trajectory results.")
+def print_grading_results(
+    rubric_id: str,
+    results: Sequence[LocalRubricEvaluation],
+) -> None:
+    """Pretty-print grading results returned by Docent rubric evaluation."""
+    if not results:
+        print("⚠️  Rubric evaluation returned no results.")
         return
 
-    print("\n🧪 Environmental Barrier Grades:")
-    for item in trajectory_results:
-        data = item.data or {}
-        name = data.get("name", "environmentalbarrier")
-        score = data.get("score", "N/A")
-        explanation = (data.get("explanation") or "").strip()
-        sample_key = item.result_key or str(item.original_trajectory_id)
-
-        print(f"   • Sample {sample_key}: {name} = {score}")
-        if explanation:
-            print(f"      Explanation: {explanation}")
+    print(f"\n🧪 {rubric_id} Grades:")
+    for item in results:
+        score = f"{item.score:.2f}" if item.score is not None else "N/A"
+        print(f"   • Task {item.task_id}: {item.rubric_id} = {score}")
+        if item.error:
+            print(f"      Error: {item.error}")
+        elif item.explanation:
+            print(f"      Explanation: {item.explanation.strip()}")
 
 
 def write_cloud_grading_csv(
-    grading_results: Any,
+    grading_results: Sequence[LocalRubricEvaluation],
     model_run: str,
-    trajectory_id_to_sample: dict[str, str] | None = None,
-    output_path: Path = RUBRIC_OUTPUT_PATH,
+    output_path: Path | None = None,
     default_criteria: str = "environmentalbarrier",
 ) -> Path | None:
     """Persist cloud grading results to CSV."""
-    trajectory_results = getattr(grading_results, "results", None)
-    if not trajectory_results:
+    if not grading_results:
         return None
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", newline="", encoding="utf-8") as handle:
+    final_path = output_path or (OUTPUT_DIR / f"{default_criteria}.csv")
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    with final_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(["task_id", "criteria", "grade", "explanation", "model_run"])
-        for item in trajectory_results:
-            data = item.data or {}
-            sample_id = None
-            if trajectory_id_to_sample:
-                sample_id = trajectory_id_to_sample.get(str(item.original_trajectory_id))
-            sample_id = sample_id or item.result_key or str(item.original_trajectory_id)
+        for item in grading_results:
             writer.writerow(
                 [
-                    sample_id,
-                    data.get("name") or default_criteria,
-                    data.get("score", ""),
-                    (data.get("explanation") or "").strip(),
+                    item.task_id,
+                    item.rubric_id or default_criteria,
+                    "" if item.score is None else f"{item.score:.2f}",
+                    item.explanation.strip(),
                     model_run,
                 ]
             )
-    return output_path
+    return final_path
 
 
-def build_trajectories(
-    conversations: Sequence[TaskConversation],
-    failed_tasks: set[str],
-    agent_name: str,
-    deps: LunetteDependencies,
-) -> list[Any]:
-    """Create Lunette trajectories from task conversations."""
-    trajectories: list[Any] = []
-    for conversation in conversations:
-        if not conversation.messages:
-            continue
-
-        lunette_messages = convert_to_lunette_messages(
-            conversation.messages,
-            deps.system_message_cls,
-            deps.user_message_cls,
-            deps.assistant_message_cls,
-        )
-        metadata = {
-            "failed": conversation.task_id in failed_tasks,
-            "task_id": conversation.task_id,
-            "entry_count": conversation.entry_count,
-            "message_count": len(lunette_messages),
-            "agent": agent_name,
-        }
-
-        trajectory = deps.trajectory_cls(
-            sample=conversation.task_id,
-            messages=lunette_messages,
-            metadata=metadata,
-        )
-        trajectories.append(trajectory)
-
-    return trajectories
-
-
-async def upload_and_optionally_grade(
-    deps: LunetteDependencies,
-    run: Any,
-    grading_plan: Any | None,
-) -> tuple[dict[str, Any], Any | None]:
-    """Upload the run and optionally launch grading."""
-    async with deps.client_cls() as client:
-        upload_result = await client.save_run(run)
-
-        investigation_results = None
-        run_id = upload_result.get("run_id")
-        if grading_plan and run_id:
-            try:
-                print("\n🧪 Running environmental barrier grading...")
-                investigation_results = await client.investigate(
-                    run_id=run_id,
-                    plan=grading_plan,
-                )
-            except Exception as exc:  # pragma: no cover - depends on remote service
-                print(f"⚠️  Grading failed: {exc}")
-
-        return upload_result, investigation_results
+def default_rubric_output_path(
+    model_option: "ModelOption",
+    rubric_id: str,
+) -> Path:
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    provider = _slugify(model_option.provider)
+    model = _slugify(model_option.model_name)
+    rubric_slug = _slugify(rubric_id)
+    filename = f"{rubric_slug}_{provider}_{model}_{timestamp}.csv"
+    return OUTPUT_DIR / filename
 
 
 def main() -> None:
+    args = parse_args()
     try:
         data = load_trace_file(TRACE_DIR)
     except FileNotFoundError as error:
@@ -547,73 +762,106 @@ def main() -> None:
         print("❌ Failed to extract any conversations.")
         return
 
+    if args.max_tasks is not None:
+        if args.max_tasks <= 0:
+            print("❌ --max-tasks must be positive when provided.")
+            return
+        original_count = len(conversations)
+        conversations = conversations[: args.max_tasks]
+        print(f"🔬 Limiting evaluation to {len(conversations)} of {original_count} tasks (--max-tasks).")
+
     preview_task(conversations[0])
 
     failed_tasks = set(data.get("results", {}).get("failed_tasks", []))
     agent_name = data.get("config", {}).get("agent_name", "unknown-agent")
-    model_name = data.get("config", {}).get("agent_args", {}).get("model_name", "unknown-model")
-    benchmark = data.get("config", {}).get("benchmark_name", "unknown-benchmark")
-    model_run_id = data.get("config", {}).get("run_id") or data.get("config", {}).get("date") or "local-run"
+    model_run_id = (
+        data.get("config", {}).get("run_id") or data.get("config", {}).get("date") or "local-run"
+    )
 
-    if not confirm("\nProceed with uploading all tasks to Lunette?"):
-        print("ℹ️  Upload canceled. Inspect the preview above and rerun when ready.")
+    if not confirm("\nProceed with Docent rubric evaluation using the configured LLM provider?"):
+        print("ℹ️  Evaluation canceled. Inspect the preview above and rerun when ready.")
         return
 
-    if not os.getenv("LUNETTE_API_KEY"):
-        print("❌ LUNETTE_API_KEY not set. Export the key or add it to a .env file before uploading.")
+    if DOCENT_IMPORT_ERROR is not None:
+        print(f"❌ Unable to import Docent modules: {DOCENT_IMPORT_ERROR}")
+        print("   Ensure the docent repo is installed (e.g., `pip install -e docent`).")
         return
 
     try:
-        deps = load_lunette_dependencies()
-    except Exception as exc:  # pragma: no cover - depends on environment
-        print(f"❌ Unable to import Lunette SDK: {exc}")
-        print("   Ensure lunette-sdk is installed inside the virtual environment.")
+        agent_runs = build_docent_agent_runs(conversations, failed_tasks, agent_name)
+    except RuntimeError as exc:
+        print(f"❌ {exc}")
         return
 
-    trajectories = build_trajectories(conversations, failed_tasks, agent_name, deps)
-    if not trajectories:
-        print("❌ No trajectories with messages were produced.")
+    if not agent_runs:
+        print("❌ No agent runs could be constructed for rubric evaluation.")
         return
-    trajectory_samples = [str(traj.sample) for traj in trajectories]
 
-    grading_plan = None
-    if confirm("\nRun Lunette environmental-barrier grading after upload?"):
-        grading_plan = create_environmental_barrier_plan(deps)
+    effort_override = args.reasoning_effort.lower() if args.reasoning_effort else None
 
-    print(f"\n☁️  Uploading {len(trajectories)} trajectories to Lunette...")
-    run = deps.run_cls(task=benchmark, model=model_name, trajectories=trajectories)
-    upload_result, grading_results = asyncio.run(
-        upload_and_optionally_grade(deps, run, grading_plan),
-    )
+    try:
+        model_option = resolve_rubric_model_option(args.rubric_model, reasoning_effort_override=effort_override)
+    except ValueError as exc:
+        print(f"❌ {exc}")
+        return
 
-    run_id = upload_result.get("run_id")
-    traj_ids = upload_result.get("trajectory_ids", [])
-    trajectory_id_to_sample: dict[str, str] = {}
-    if traj_ids and len(traj_ids) == len(trajectory_samples):
-        trajectory_id_to_sample = {
-            str(traj_id): trajectory_samples[idx] for idx, traj_id in enumerate(traj_ids)
-        }
-    elif traj_ids:
+    try:
+        validate_provider_environment(model_option)
+    except EnvironmentError as exc:
+        print(f"❌ {exc}")
+        print("   Set the missing environment variables (see docs.transluce.org self-hosting env vars).")
+        return
+
+    if args.json_mode and model_option.provider not in {"openai", "azure_openai"}:
+        print("❌ JSON mode is only supported for OpenAI or Azure OpenAI providers.")
+        return
+
+    rubrics_dir = Path(args.rubrics_dir).expanduser()
+    rubric_definitions = load_rubric_definitions(rubrics_dir)
+    if not rubric_definitions:
+        print(f"❌ No rubric definitions found in {rubrics_dir}. Add *.txt files and retry.")
+        return
+
+    batch_size = DEFAULT_RUBRIC_BATCH_SIZE
+    env_batch = os.getenv("DOCENT_RUBRIC_BATCH_SIZE")
+    if env_batch:
+        try:
+            batch_size = max(1, int(env_batch))
+        except ValueError:
+            pass
+
+    for definition in rubric_definitions:
+        rubric = build_rubric_from_definition(definition, model_option)
+        output_path = default_rubric_output_path(model_option, definition.rubric_id)
+
         print(
-            "⚠️  Warning: trajectory ID count does not match local trajectories; CSV may lack task IDs."
+            f"\n🧪 Running rubric '{definition.rubric_id}' on {len(agent_runs)} agent runs "
+            f"with {model_option.provider}:{model_option.model_name} (batch_size={batch_size})..."
         )
 
-    if run_id:
-        print(f"\n✅ Upload complete! Run ID: {run_id}")
-        print(f"   Trajectories uploaded: {len(traj_ids)}")
-        print("   Visit https://lunette.dev/ to inspect the traces.")
-    else:
-        print("⚠️  Upload finished but no run_id was returned. Please verify on Lunette.")
+        try:
+            grading_results = asyncio.run(
+                evaluate_environmental_barrier(
+                    agent_runs,
+                    rubric,
+                    batch_size=batch_size,
+                    json_mode=args.json_mode,
+                ),
+            )
+        except Exception as exc:  # pragma: no cover - depends on provider availability
+            print(f"❌ Rubric '{definition.rubric_id}' evaluation failed: {exc}")
+            continue
 
-    if grading_results:
-        print_grading_results(grading_results)
+        print_grading_results(definition.rubric_id, grading_results)
+
         csv_path = write_cloud_grading_csv(
             grading_results,
             model_run_id,
-            trajectory_id_to_sample=trajectory_id_to_sample,
+            output_path=output_path,
+            default_criteria=definition.rubric_id,
         )
         if csv_path:
-            print(f"\n🗂️  Cloud grading CSV written to {csv_path}")
+            print(f"🗂️  Rubric CSV written to {csv_path}")
 
 
 if __name__ == "__main__":
