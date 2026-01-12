@@ -4,3 +4,6 @@ traces/
 lunette/
 .lunette_home/
 output/
+docent/
+hal-harness/
+hal-harness
