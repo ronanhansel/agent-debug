@@ -1,0 +1,12 @@
+Install the notebook tooling inside the repo and keep every artifact inside the writable workspace (never rely on `/usr/local/bin/jupyter` or `../results`).
+
+1. Activate the provided conda env and install Jupyter/nbconvert locally: `python -m pip install --user jupyter nbconvert` (or without `--user` if not needed). This makes the `jupyter` CLI available without root.
+2. Execute `environment/code/visualize_results.ipynb` with timeouts disabled and errors allowed:
+   ```
+   jupyter nbconvert --to notebook --execute environment/code/visualize_results.ipynb \
+     --ExecutePreprocessor.timeout=None --ExecutePreprocessor.allow_errors=True \
+     --output visualize_results_executed.ipynb --output-dir environment/code
+   ```
+3. Convert the executed notebook to HTML next to it (avoids the `environment/code/environment/code/...` typo):  
+   `jupyter nbconvert --to html environment/code/visualize_results_executed.ipynb --output visualize_results_executed.html --output-dir environment/code`.
+4. Inspect `environment/code/visualize_results_executed.html` (or the JSON output) to extract the answers requested by the rubric and return them as the final dictionary.

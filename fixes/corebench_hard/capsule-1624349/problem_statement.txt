@@ -1,0 +1,7 @@
+Execute `FS-Filters.ipynb`, but save the rendered HTML output inside the repository (the container cannot create `../results`).
+
+Updated instructions:
+1. Install any notebook dependencies from the repo’s README/requirements (pip install, conda, etc.).
+2. Before executing, create a writable results directory inside the project, e.g. `mkdir -p results`, and plan to save the HTML there (e.g. `results/FS-Filters.html`). Do not attempt to create `../results`, because the parent of the workspace is read-only in this environment.
+3. Run the notebook with cell timeouts disabled and `allow-errors` enabled. You can use `jupyter nbconvert --to notebook --execute --ExecutePreprocessor.timeout=None --ExecutePreprocessor.allow_errors=True environment/code/FS-Filters.ipynb` and then convert the executed notebook to HTML inside `./results`.
+4. Review the executed notebook/HTML to extract (a) the best accuracy of the hybrid filter wrapper strategy and (b) the feature with the highest I-Gain, and return them in the required dictionary format.

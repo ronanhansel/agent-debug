@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "properties": {
+    "score": {
+      "type": "number",
+      "enum": [
+        0,
+        1
+      ],
+      "description": "Indicator of absence ('0') or presence ('1') of Instruction Error."
+    },
+    "explanation": {
+      "type": "string",
+      "description": "Detailed explanation of why Instruction Error was or was not detected, including references to specific signals and counter-signals in the transcript. Citations=true",
+      "citations": true
+    }
+  },
+  "required": [
+    "score",
+    "explanation"
+  ]
+}

@@ -1,0 +1,7 @@
+Install R locally (no apt) and run each required R script while keeping outputs inside the repository.
+
+1. In the active conda env, run `mamba install -y -c conda-forge r-base=4.3 r-essentials` (or `conda install`). Install all packages referenced across `01_motivation.R`, `02_design.R`, `03_survey.R`, `04_metaketa_comp.R`, `05_lapop.R`, and `06_misc.R`, for example:  
+   `Rscript -e "install.packages(c('tidyverse','dplyr','ggplot2','readr','rmarkdown','knitr','gridExtra','scales'), repos='https://cloud.r-project.org', dependencies=TRUE)"`, adding any other libraries you see.
+2. Ensure package installs land in a writable location: `mkdir -p r_libs && export R_LIBS_USER="$(pwd)/r_libs"`.
+3. Create a local results directory (e.g., `mkdir -p results`) and, if the scripts expect `../results`, override that path by setting an environment variable (e.g., `export RESULTS_DIR="$(pwd)/results"`) or editing the script inputs via the agent tools so outputs are written to `results/`.
+4. Run each script with `Rscript <scriptname>` from the repository root. After all scripts finish, inspect the figures/tables in `results/` to answer the rubric questions and respond with the required dictionary.

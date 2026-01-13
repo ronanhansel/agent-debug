@@ -1,0 +1,6 @@
+The sandbox blocks `/data`, so run entirely from the repository’s data directory.
+
+1. Find where the capsule actually stores its datasets (e.g., `DATA_ROOT=$(pwd)/environment/data`). Use `find environment -name '*.csv'` if needed.
+2. For every script that currently hardcodes `"/data/..."`, edit it (via the agent overlay if necessary) to build paths relative to the repo, e.g. `data_root <- file.path(getwd(), "environment", "data")` and `file.path(data_root, "foo.csv")`.
+3. If a script insists on `/data`, create a local directory instead: `mkdir -p data && ln -s "$(pwd)/environment/data" data/dataset` (or similar) so the code sees the expected files without touching the true `/data`.
+4. After the paths are patched, rerun the capsule’s workflow (bash scripts or Python/R files as instructed) and capture the requested outputs for the final answer.

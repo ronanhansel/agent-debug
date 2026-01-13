@@ -1,0 +1,7 @@
+Run `/code/CardioSCZ.R` with Rscript, but install R and its dependencies inside the conda environment instead of using apt (apt cannot write to `/var/lib/apt` here).
+
+Procedure:
+1. Activate the provided conda env and install R locally: `mamba install -y -c conda-forge r-base=4.3 r-essentials` (or `conda install` if mamba is unavailable). This makes `Rscript` available without root privileges.
+2. Inspect `CardioSCZ.R` (and any sourced files) for `library()` statements and install the required packages via CRAN, e.g. `Rscript -e "install.packages(c('tidyverse','data.table','ggplot2','readr','dplyr'), repos='https://cloud.r-project.org', dependencies=TRUE)"`. Add any additional libraries you see in the script.
+3. Run `Rscript /code/CardioSCZ.R` from the repository root. Ensure it completes so that the figures/statistics are regenerated.
+4. Read the output (plots/logs) to determine which patient group exhibits the greater median concentricity, and return `{"fig Report the name of the patient group with the greater median concentricity.": "<group>"}`.

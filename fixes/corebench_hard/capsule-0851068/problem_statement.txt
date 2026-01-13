@@ -1,0 +1,7 @@
+Run the repository’s `demo.sh` script to regenerate the final AUC, but make sure the code reads the bundled data and checkpoint from the repository instead of the unwritable `/data` mount.
+
+Important adjustments before running `demo.sh`:
+1. The capsule already ships the validation images and `final_model.pth` under the project’s `data/` directory (e.g., `./environment/data/covid/val` and `./environment/data/final_model.pth`). The container cannot create `/data`, so every hard-coded `"/data/..."` reference in the Python scripts must be rewritten to point at the actual repository data directory. The quickest way is to search for `"/data/` (using `rg -n '/data/' -g '*.py'`) and replace it with the absolute path to the repo’s `data` folder (for example, `repo_root = Path.cwd() / "data"` and then use `str(repo_root / "covid/val")`). Update every occurrence that loads the dataset or checkpoint (e.g., `val_data = '/data/covid/val'` and `model_weight_path = "/data/final_model.pth"`), since creating `/data` is not permitted.
+2. After patching the paths, run `bash demo.sh` from the repository root. Let the script finish and capture the printed `auc` value at the end of validation.
+
+Return the dictionary `{"Report the final AUC after training.": <auc_value>}` using the value reported by the script with the corrected data paths.

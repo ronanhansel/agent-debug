@@ -1,0 +1,7 @@
+Rscript is missing in this environment; install it inside conda and run the required R scripts entirely within the repo.
+
+1. Activate the conda env and run `mamba install -y -c conda-forge r-base=4.3 r-essentials` (or `conda install`). Then install every library the capsule’s scripts load, e.g.  
+   `Rscript -e "install.packages(c('tidyverse','rmarkdown','knitr','ggplot2','dplyr','readr'), repos='https://cloud.r-project.org', dependencies=TRUE)"`, adding any others you see.
+2. Set a writable R library path before installing packages: `mkdir -p r_libs && export R_LIBS_USER="$(pwd)/r_libs"`.
+3. Execute the capsule’s R scripts with `Rscript` from the repository root, writing all outputs/figures beneath a local `results/` directory you create (e.g., `mkdir -p results && export RESULTS_DIR="$(pwd)/results"`). Update any script arguments or environment variables so they reference `results/` instead of `../results`.
+4. After the scripts finish, read the generated artifacts in `results/` to answer the rubric questions and return the dictionary.

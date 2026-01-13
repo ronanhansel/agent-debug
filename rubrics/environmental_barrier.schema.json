@@ -1,0 +1,22 @@
+{
+  "type": "object",
+  "properties": {
+    "score": {
+      "type": "number",
+      "enum": [
+        0,
+        1
+      ],
+      "description": "A score of '1' indicates that the environmental barrier behavior was present, while a score of '0' indicates its absence in the transcript."
+    },
+    "explanation": {
+      "type": "string",
+      "description": "A detailed explanation citing evidence from the transcript that supports the presence or absence of environmental barrier behavior (citations=true).",
+      "citations": true
+    }
+  },
+  "required": [
+    "score",
+    "explanation"
+  ]
+}

@@ -106,6 +106,16 @@ def parse_args() -> argparse.Namespace:
         help="Skip the runner + re-evaluation stage (only collect inspections).",
     )
     parser.add_argument(
+        "--skip-inspector",
+        action="store_true",
+        help="Reuse previously generated inspection reports without regenerating them.",
+    )
+    parser.add_argument(
+        "--defer-rubric-eval",
+        action="store_true",
+        help="Run rubric evaluation only after all reruns complete (instead of per task).",
+    )
+    parser.add_argument(
         "--task-id",
         dest="task_ids",
         action="append",
@@ -196,6 +206,27 @@ def discover_traces(trace_dir: Path) -> List[Path]:
 
 def chunked(sequence: Sequence[str], size: int) -> List[List[str]]:
     return [list(sequence[i : i + size]) for i in range(0, len(sequence), size)]
+
+
+def trace_matches_benchmark(trace_path: Path, benchmark_name: str) -> bool:
+    if not benchmark_name:
+        return True
+    normalized = benchmark_name.strip().lower()
+    try:
+        data = json.loads(trace_path.read_text(encoding="utf-8"))
+    except Exception:
+        stem = trace_path.stem.lower()
+        return normalized in stem or stem.startswith(normalized)
+    config = data.get("config") or {}
+    candidate = config.get("benchmark_name") or config.get("benchmark")
+    if isinstance(candidate, str):
+        candidate_norm = candidate.strip().lower()
+        if candidate_norm == normalized:
+            return True
+        if candidate_norm.startswith(normalized) or normalized.startswith(candidate_norm):
+            return True
+    stem = trace_path.stem.lower()
+    return normalized in stem or stem.startswith(normalized)
 
 
 def evaluate_trace(
@@ -439,6 +470,7 @@ def execute_task_cycle(
     logger: FixingPipelineLogger,
     skip_runner: bool,
     force: bool,
+    defer_rubric_eval: bool,
 ) -> Dict[str, object]:
     result: Dict[str, object] = {"task_id": task_id, "status": "pending"}
     status_path = fix_status_file(task_id, args.benchmark_name)
@@ -476,6 +508,30 @@ def execute_task_cycle(
         result["status"] = "missing_trace_file"
         return result
 
+    result["trace_path"] = str(trace_path)
+    if defer_rubric_eval or args.skip_rubric_eval:
+        logger.log(f"Deferring rubric evaluation for task {task_id} (trace={trace_path}).")
+        return result
+
+    return _evaluate_trace_and_update_status(
+        task_id=task_id,
+        args=args,
+        logger=logger,
+        result=result,
+        trace_path=trace_path,
+        status_path=status_path,
+    )
+
+
+def _evaluate_trace_and_update_status(
+    *,
+    task_id: str,
+    args: argparse.Namespace,
+    logger: FixingPipelineLogger,
+    result: Dict[str, object],
+    trace_path: Path,
+    status_path: Path,
+) -> Dict[str, object]:
     try:
         evaluate_trace(trace_path, args, logger)
     except subprocess.CalledProcessError as exc:
@@ -525,8 +581,14 @@ def main() -> None:
         if not traces:
             logger.log(f"No traces found in {trace_dir}.")
             return
-        logger.log(f"Evaluating rubrics for {len(traces)} trace(s).")
-        for trace in traces:
+        benchmark_traces = [trace for trace in traces if trace_matches_benchmark(trace, args.benchmark_name)]
+        if not benchmark_traces:
+            logger.log(
+                f"No trace files matching benchmark '{args.benchmark_name}' were found under {trace_dir}."
+            )
+            return
+        logger.log(f"Evaluating rubrics for {len(benchmark_traces)} trace(s) matching benchmark {args.benchmark_name}.")
+        for trace in benchmark_traces:
             try:
                 evaluate_trace(trace, args, logger)
             except subprocess.CalledProcessError as exc:
@@ -539,11 +601,14 @@ def main() -> None:
         logger.log("Rubric summary contained zero failing entries. Nothing to fix.")
         return
 
-    try:
-        ensure_inspector(args, logger)
-    except subprocess.CalledProcessError as exc:
-        logger.log(f"Inspector pipeline failed (exit={exc.returncode}).")
-        return
+    if args.skip_inspector:
+        logger.log("Skipping inspector; reusing existing inspection reports.")
+    else:
+        try:
+            ensure_inspector(args, logger)
+        except subprocess.CalledProcessError as exc:
+            logger.log(f"Inspector pipeline failed (exit={exc.returncode}).")
+            return
 
     debug_summary_path = DEBUG_ROOT / args.benchmark_name / "rubric_summary.json"
     if debug_summary_path.exists():
@@ -605,11 +670,38 @@ def main() -> None:
             logger=logger,
             skip_runner=args.skip_runner,
             force=args.force,
+            defer_rubric_eval=args.defer_rubric_eval,
         )
         results.append(outcome)
 
+    if args.defer_rubric_eval and not args.skip_rubric_eval:
+        _run_deferred_rubric_checks(results, args, logger)
+
     logger.write_json("fixing_results.json", {"results": results})
     logger.log(f"Fixing pipeline finished. Logs available at {logger.root}")
+
+
+def _run_deferred_rubric_checks(
+    results: List[Dict[str, object]],
+    args: argparse.Namespace,
+    logger: FixingPipelineLogger,
+) -> None:
+    for entry in results:
+        task_id = entry.get("task_id")
+        trace_path = entry.get("trace_path")
+        if not task_id or not trace_path:
+            continue
+        trace_path_obj = Path(str(trace_path))
+        logger.log(f"Running deferred rubric evaluation for trace {trace_path_obj}.")
+        status_path = fix_status_file(task_id, args.benchmark_name)
+        _evaluate_trace_and_update_status(
+            task_id=task_id,
+            args=args,
+            logger=logger,
+            result=entry,
+            trace_path=trace_path_obj,
+            status_path=status_path,
+        )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,6 @@
+Install R inside the conda environment (apt is blocked) and keep outputs inside the repo.
+
+1. Activate the provided conda env and run `mamba install -y -c conda-forge r-base=4.3 r-essentials` (or `conda install` if mamba isn’t available). Then install the libraries used in `tests/replicate.R` via CRAN, e.g. `Rscript -e "install.packages(c('tidyverse','ggplot2','dplyr','readr','rmarkdown','knitr'), repos='https://cloud.r-project.org', dependencies=TRUE)"`, adding any others you see in the script.
+2. Set a writable R library path before installing packages: `mkdir -p r_libs && export R_LIBS_USER="$(pwd)/r_libs"`.
+3. Run the script from the repo root with `Rscript tests/replicate.R`, writing any artifacts under a workspace directory (e.g., `results/`) instead of `/data` or `/results`.
+4. After it finishes, inspect the generated figures/tables to answer the rubric questions and return the dictionary.

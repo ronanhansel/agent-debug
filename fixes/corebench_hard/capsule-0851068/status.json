@@ -1,0 +1,8 @@
+{
+  "task_id": "capsule-0851068",
+  "benchmark": "corebench_hard",
+  "trace_path": "/Users/ronan/Developer/agent-debug/traces/debug_runs/corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD_debug_20260113_043556.json",
+  "checked_at": "2026-01-13T04:36:03Z",
+  "failures": [],
+  "status": "passed"
+}

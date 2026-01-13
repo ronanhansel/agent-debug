@@ -1,0 +1,11 @@
+Render `modular.Rmd` to HTML with Rscript/knitr, installing R inside the conda env instead of using apt.
+
+Required steps:
+1. Install R locally: `mamba install -y -c conda-forge r-base=4.3 r-essentials` (fallback to `conda install` if needed). This avoids the apt lock-file permission issue.
+2. Install the R packages referenced in `modular.Rmd` (check the top of the file for `library()` calls). A safe baseline is `Rscript -e "install.packages(c('rmarkdown','knitr','tidyverse','ggplot2','dplyr','readr'), repos='https://cloud.r-project.org', dependencies=TRUE)"`, plus any extra libraries you see.
+3. From the directory containing `modular.Rmd`, run something like:
+   ```
+   Rscript -e "rmarkdown::render('modular.Rmd', output_format='html_document', output_file='../results/modular.html', clean=TRUE, run_pandoc=TRUE)"
+   ```
+   If `../results` is not writable, write to a local `results/` directory and move the file after rendering.
+4. Inspect the rendered HTML (or console output) to answer the questions: report the method with the higher R0 and the R0 of EG. Return them in the expected dictionary format.

@@ -5,9 +5,9 @@ lunette/
 .lunette_home/
 output/
 .llm_cache/
-rubrics/
 output*/
 fixable_output/
 log/
 debug/
-rubrics_output/
+rubrics_output*/
+results/

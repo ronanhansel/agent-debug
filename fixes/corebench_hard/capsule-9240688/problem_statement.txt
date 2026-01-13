@@ -1,0 +1,5 @@
+The instructions mention `run.sh`, but the capsule doesn’t contain that script. Instead, run the actual entry point described in the README (e.g., the R markdown files) and document the alternate workflow.
+
+1. Inspect the repo (especially `README.md` and directories) to find the real execution path (e.g., a Python script or Rmd files). Note that `run.sh` is missing.
+2. Mention this discrepancy in the final answer and follow the documented workflow anyway (for example, run `Rscript 01_motivation.R`, etc., if that matches the repo). Include any steps needed to install dependencies (R via conda, pip requirements, etc.) as in previous capsules.
+3. Return the rubric answers derived from the actual scripts, and clearly state that the original `run.sh` instruction was replaced with the available scripts because the shell script is absent from the repository.
