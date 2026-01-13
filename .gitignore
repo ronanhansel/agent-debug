@@ -8,6 +8,6 @@ output/
 output*/
 fixable_output/
 log/
-debug/
 rubrics_output*/
 results/
+.DS_Store

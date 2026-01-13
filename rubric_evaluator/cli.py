@@ -126,6 +126,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip the confirmation prompt before running rubric evaluation.",
     )
+    parser.add_argument(
+        "--failed-only",
+        action="store_true",
+        help="Only evaluate tasks that appear in the trace's failed_tasks list.",
+    )
     return parser.parse_args()
 
 
@@ -732,6 +737,7 @@ def write_cloud_grading_csv(
     model_run: str,
     output_path: Path | None = None,
     default_criteria: str = "environmentalbarrier",
+    task_success_map: dict[str, bool | None] | None = None,
 ) -> Path | None:
     """Persist cloud grading results to CSV."""
     if not grading_results:
@@ -741,13 +747,27 @@ def write_cloud_grading_csv(
     final_path.parent.mkdir(parents=True, exist_ok=True)
     with final_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["task_id", "criteria", "grade", "explanation", "model_run"])
+        writer.writerow(["task_id", "criteria", "grade", "correct", "explanation", "model_run"])
         for item in grading_results:
+            if item.score is None:
+                grade_value = ""
+            else:
+                grade_value = f"{item.score:.2f}"
+
+            success = ""
+            if task_success_map is not None:
+                success_flag = task_success_map.get(item.task_id)
+                if success_flag is True:
+                    success = "1"
+                elif success_flag is False:
+                    success = "0"
+
             writer.writerow(
                 [
                     item.task_id,
                     item.rubric_id or default_criteria,
-                    "" if item.score is None else f"{item.score:.2f}",
+                    grade_value,
+                    success,
                     item.explanation.strip(),
                     model_run,
                 ]
@@ -793,6 +813,23 @@ def run(args: argparse.Namespace) -> None:
 
     conversations.sort(key=lambda conv: conv.task_id)
 
+    results_block = data.get("results", {}) or {}
+    failed_tasks = set(results_block.get("failed_tasks", []))
+    successful_tasks = set(results_block.get("successful_tasks", []))
+    task_success_map: dict[str, bool | None] = {}
+    for task_id in successful_tasks:
+        task_success_map[task_id] = True
+    for task_id in failed_tasks:
+        task_success_map[task_id] = False
+
+    if args.failed_only:
+        original = len(conversations)
+        conversations = [conv for conv in conversations if conv.task_id in failed_tasks]
+        if not conversations:
+            print("❌ No failed tasks available for rubric evaluation (--failed-only).")
+            return
+        print(f"🎯 Filtering to {len(conversations)} failed task(s) out of {original} (--failed-only).")
+
     if not conversations:
         print("❌ Failed to extract any conversations.")
         return
@@ -807,7 +844,6 @@ def run(args: argparse.Namespace) -> None:
 
     preview_task(conversations[0])
 
-    failed_tasks = set(data.get("results", {}).get("failed_tasks", []))
     agent_name = data.get("config", {}).get("agent_name", "unknown-agent")
     if not (args.yes or confirm("\nProceed with Docent rubric evaluation using the configured LLM provider?")):
         print("ℹ️  Evaluation canceled. Inspect the preview above and rerun when ready.")
@@ -895,6 +931,7 @@ def run(args: argparse.Namespace) -> None:
                 trace_label,
                 output_path=output_path,
                 default_criteria=definition.rubric_id,
+                task_success_map=task_success_map,
             )
             if csv_path:
                 print(f"🗂️  Rubric CSV written to {csv_path}")

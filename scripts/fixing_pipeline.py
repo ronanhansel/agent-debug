@@ -11,7 +11,7 @@ import sys
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Sequence
+from typing import Any, Dict, List, Sequence, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_AGENT_DIR = REPO_ROOT / "hal-harness" / "agents" / "hal_generalist_agent"
@@ -257,7 +257,8 @@ def evaluate_trace(
 
 
 def summarize_rubrics(rubrics_root: Path) -> Dict[str, object]:
-    entries: List[Dict[str, object]] = []
+    combined: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    raw_count = 0
     for rubric_dir in sorted(rubrics_root.iterdir()):
         if not rubric_dir.is_dir():
             continue
@@ -266,26 +267,58 @@ def summarize_rubrics(rubrics_root: Path) -> Dict[str, object]:
             with csv_file.open("r", encoding="utf-8") as handle:
                 reader = csv.DictReader(handle)
                 for row in reader:
+                    raw_count += 1
                     task_id = (row.get("task_id") or "").strip()
                     grade_raw = (row.get("grade") or "").strip()
                     try:
                         grade_value = float(grade_raw or 0)
                     except ValueError:
                         grade_value = 0.0
-                    if task_id and grade_value > 0:
-                        entries.append(
+                    if task_id and grade_value >= 1.0:
+                        criteria = (row.get("criteria") or rubric_id).strip()
+                        key = (task_id, criteria)
+                        entry = combined.setdefault(
+                            key,
                             {
                                 "task_id": task_id,
-                                "criteria": (row.get("criteria") or rubric_id).strip(),
-                                "grade": grade_value,
-                                "explanation": (row.get("explanation") or "").strip(),
-                                "model_run": (row.get("model_run") or csv_file.stem).strip(),
-                                "source_csv": str(csv_file),
-                            }
+                                "criteria": criteria,
+                                "grade": 0.0,
+                                "grade_values": set(),
+                                "explanations": [],
+                                "model_runs": set(),
+                                "source_csvs": set(),
+                                "occurrences": 0,
+                            },
                         )
+                        entry["grade"] = max(entry["grade"], grade_value)
+                        entry["grade_values"].add(grade_raw or f"{grade_value:.2f}")
+                        explanation = (row.get("explanation") or "").strip()
+                        if explanation:
+                            entry["explanations"].append(explanation)
+                        entry["model_runs"].add((row.get("model_run") or csv_file.stem).strip())
+                        entry["source_csvs"].add(str(csv_file))
+                        entry["occurrences"] += 1
+
+    entries: List[Dict[str, object]] = []
+    for entry in combined.values():
+        explanation_text = "\n\n---\n\n".join(entry["explanations"]) if entry["explanations"] else ""
+        entries.append(
+            {
+                "task_id": entry["task_id"],
+                "criteria": entry["criteria"],
+                "grade": entry["grade"],
+                "grade_raw": ", ".join(sorted(entry["grade_values"])),
+                "explanation": explanation_text,
+                "explanations": entry["explanations"],
+                "model_runs": sorted(m for m in entry["model_runs"] if m),
+                "source_csvs": sorted(entry["source_csvs"]),
+                "occurrences": entry["occurrences"],
+            }
+        )
     summary = {
         "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
         "total_entries": len(entries),
+        "total_raw_rows": raw_count,
         "tasks": sorted(entries, key=lambda item: (item["task_id"], item["criteria"])),
     }
     return summary

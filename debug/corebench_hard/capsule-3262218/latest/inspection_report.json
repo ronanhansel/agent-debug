@@ -1,0 +1,34 @@
+{
+  "analysis": "The run failed because the environment is missing a required dependency (Rscript), and the file inspection tool does not support '.Rmd' files. Additionally, repeated 'Not a regular file' errors indicate an I/O layer misconfiguration.",
+  "rationale": "Error messages such as '/bin/sh: 1: Rscript: not found' and 'UnsupportedFormatException: Could not convert './environment/code/manuscript.Rmd'' clearly signal that the environment cannot run the mandated Rscript command. The recurring 'Not a regular file' errors when accessing README.md further suggest that the file reading tool or its configuration is malfunctioning.",
+  "recommended_files": [
+    "manuscript.Rmd",
+    "README.md",
+    "requirements.txt",
+    "main.py"
+  ],
+  "recommended_actions": [
+    "Verify and install the Rscript executable in the evaluation environment so that RMarkdown can be rendered to PDF.",
+    "Check and update the file inspection tool configuration to support '.Rmd' files, or modify the workflow to bypass this tool for such files.",
+    "Ensure that the '../results' directory exists or create it as required before rendering.",
+    "Review the repository\u2019s README and requirements.txt to confirm all necessary dependencies (including R packages, LaTeX, and pandoc) are installed.",
+    "Revisit the script or command that calls Rscript (likely in main.py) to verify that the environment path and execution parameters are correct."
+  ],
+  "next_steps": "After applying the above fixes, re-run the HAL debugger to verify that the run proceeds correctly. Create or update /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-3262218 with overlays/patches/input/env overrides. After packaging fixes, rerun `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest` to validate queued tasks. For a quick single-task check, rerun `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-3262218`.",
+  "coding_agent_context": {
+    "working_directory": "/Users/ronan/Developer/agent-debug/hal-harness",
+    "fix_folder": "/Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-3262218",
+    "rerun_command": "python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest",
+    "rerun_single_task_command": "python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-3262218",
+    "system_prompt": "You are a coding agent operating inside hal-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<task_id>/, and rerun the debugger command to validate. Never modify repository files directly.",
+    "instructions": [
+      "cd /Users/ronan/Developer/agent-debug/hal-harness",
+      "Inspect inspection_report.json for analysis and rationale.",
+      "Do NOT modify repository files directly; place overlays or patches under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-3262218.",
+      "Prefer dropping fully-edited files under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-3262218/agent (patch.diff is only a fallback when overlays are impractical).",
+      "Use input_override.json / problem_statement.txt / env_override.json if inputs or env vars must change (store them beside the fix).",
+      "After preparing the fix package, rerun the debugger using `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest` for the full backlog.",
+      "To iterate quickly on this task only, run `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-3262218` (leverages --task-id filtering)."
+    ]
+  }
+}

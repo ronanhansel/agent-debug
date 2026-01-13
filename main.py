@@ -40,6 +40,11 @@ def add_rubric_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Skip the interactive confirmation prompt.",
     )
+    parser.add_argument(
+        "--failed-only",
+        action="store_true",
+        help="Only grade tasks listed in failed_tasks for each trace.",
+    )
 
 
 def add_debugger_args(parser: argparse.ArgumentParser) -> None:
@@ -109,6 +114,7 @@ def build_evaluator_namespace(args: argparse.Namespace) -> argparse.Namespace:
         "output_mode",
         "reasoning_effort",
         "yes",
+        "failed_only",
     ]
     payload = {field: getattr(args, field, None) for field in fields}
     return argparse.Namespace(**payload)

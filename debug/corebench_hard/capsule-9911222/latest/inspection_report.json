@@ -1,0 +1,33 @@
+{
+  "analysis": "The run failed because the environment lacked required system-level dependencies (a compliant version of R with Rscript, LaTeX toolchain, and associated R/Bioconductor packages) and the permissions to install them. This infrastructure-level barrier prevented the R Markdown from being rendered into a PDF.",
+  "rationale": "Error messages like '/bin/sh: 1: Rscript: not found', 'Unable to lock directory /var/lib/apt/lists/', and missing packages (e.g. Matrix, MASS, SummarizedExperiment) confirm that the issue is not with the agent's logic but with the environment restrictions and dependency availability. Additionally, disallowed Python imports and forbidden file I/O further indicate sandbox constraints interfering with execution.",
+  "recommended_files": [
+    "OncoBird/vignettes/OncoBird.Rmd",
+    "README.md",
+    "requirements.txt",
+    "main.py"
+  ],
+  "recommended_actions": [
+    "Review the README.md to verify all system and R package dependencies required for rendering the vignette.",
+    "Ensure that the execution environment is configured with a compliant R version (>= 4.2.0) as well as a complete LaTeX toolchain (pdflatex, latexmk) necessary for PDF output.",
+    "Configure or switch to an environment (e.g., a conda environment) where installation permissions allow installing missing packages or adopt an alternative method to satisfy these dependencies.",
+    "Audit the HAL agent\u2019s main.py and associated configuration files to confirm that dependency checks are performed and that the tool usage complies with the environment restrictions before attempting execution."
+  ],
+  "next_steps": "After making these adjustments, re-run the HAL debugger to verify that the environmental issues have been resolved. Create or update /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-9911222 with overlays/patches/input/env overrides. After packaging fixes, rerun `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest` to validate queued tasks. For a quick single-task check, rerun `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-9911222`.",
+  "coding_agent_context": {
+    "working_directory": "/Users/ronan/Developer/agent-debug/hal-harness",
+    "fix_folder": "/Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-9911222",
+    "rerun_command": "python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest",
+    "rerun_single_task_command": "python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-9911222",
+    "system_prompt": "You are a coding agent operating inside hal-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<task_id>/, and rerun the debugger command to validate. Never modify repository files directly.",
+    "instructions": [
+      "cd /Users/ronan/Developer/agent-debug/hal-harness",
+      "Inspect inspection_report.json for analysis and rationale.",
+      "Do NOT modify repository files directly; place overlays or patches under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-9911222.",
+      "Prefer dropping fully-edited files under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-9911222/agent (patch.diff is only a fallback when overlays are impractical).",
+      "Use input_override.json / problem_statement.txt / env_override.json if inputs or env vars must change (store them beside the fix).",
+      "After preparing the fix package, rerun the debugger using `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest` for the full backlog.",
+      "To iterate quickly on this task only, run `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-9911222` (leverages --task-id filtering)."
+    ]
+  }
+}
