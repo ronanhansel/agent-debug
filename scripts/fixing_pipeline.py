@@ -116,6 +116,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Re-run tasks even if fixes/<benchmark>/<task>/status.json reports success.",
     )
+    parser.add_argument(
+        "--skip-rubric-eval",
+        action="store_true",
+        help="Reuse existing rubrics_output files without re-grading traces.",
+    )
     return parser.parse_args()
 
 
@@ -187,6 +192,10 @@ def run_command(cmd: Sequence[str], logger: FixingPipelineLogger, env: Dict[str,
 
 def discover_traces(trace_dir: Path) -> List[Path]:
     return sorted(p for p in trace_dir.glob("*.json") if p.is_file())
+
+
+def chunked(sequence: Sequence[str], size: int) -> List[List[str]]:
+    return [list(sequence[i : i + size]) for i in range(0, len(sequence), size)]
 
 
 def evaluate_trace(
@@ -337,11 +346,58 @@ def run_runner(task_id: str, args: argparse.Namespace, logger: FixingPipelineLog
     run_command(cmd, logger)
 
 
-def send_to_codex(report_path: Path, args: argparse.Namespace, logger: FixingPipelineLogger) -> None:
-    payload = json.loads(report_path.read_text(encoding="utf-8"))
-    compact = json.dumps(payload, separators=(",", ":"))
-    cmd = [args.codex_bin, "exec", compact]
-    run_command(cmd, logger)
+def load_inspection_payload(task_id: str, args: argparse.Namespace, logger: FixingPipelineLogger) -> Dict[str, Any] | None:
+    path = inspection_report_path(task_id, args.benchmark_name)
+    if not path.exists():
+        logger.log(f"Inspection report missing for {task_id} at {path}")
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        logger.log(f"Inspection report for {task_id} is invalid JSON: {exc}")
+        return None
+
+
+def build_codex_payload(task_ids: List[str], args: argparse.Namespace, logger: FixingPipelineLogger) -> str | None:
+    tasks_payload: List[Dict[str, Any]] = []
+    for task_id in task_ids:
+        report = load_inspection_payload(task_id, args, logger)
+        if report is None:
+            continue
+        tasks_payload.append(
+            {
+                "task_id": task_id,
+                "report": report,
+            }
+        )
+    if not tasks_payload:
+        return None
+    instructions = (
+        "For each task, follow the inspection guidance to build a fix package under fixes/<task_id>/ "
+        "(agent overlays, input/env overrides, or fully edited files). After staging fixes, rerun the "
+        "debugger command provided in coding_agent_context and document results."
+    )
+    payload = {
+        "benchmark": args.benchmark_name,
+        "tasks": tasks_payload,
+        "instructions": instructions,
+    }
+    return json.dumps(payload, separators=(",", ":"))
+
+
+def dispatch_codex_batches(task_ids: List[str], args: argparse.Namespace, logger: FixingPipelineLogger) -> None:
+    if not task_ids:
+        return
+    batches = chunked(task_ids, 5)
+    for index, batch in enumerate(batches):
+        payload = build_codex_payload(batch, args, logger)
+        if not payload:
+            continue
+        if index == 0:
+            cmd = [args.codex_bin, "exec", payload]
+        else:
+            cmd = [args.codex_bin, "exec", "resume", "--last", payload]
+        run_command(cmd, logger)
 
 
 def failing_rubrics_for_trace(
@@ -377,11 +433,10 @@ def failing_rubrics_for_trace(
     return failures
 
 
-def process_task(
+def execute_task_cycle(
     task_id: str,
     args: argparse.Namespace,
     logger: FixingPipelineLogger,
-    skip_codex: bool,
     skip_runner: bool,
     force: bool,
 ) -> Dict[str, object]:
@@ -395,24 +450,6 @@ def process_task(
         if existing.get("status") == "passed":
             logger.log(f"Skipping {task_id}: already marked as passed in {status_path}")
             result["status"] = "skipped"
-            return result
-
-    report_path = inspection_report_path(task_id, args.benchmark_name)
-    if not report_path.exists():
-        logger.log(f"Inspection report missing for {task_id} at {report_path}")
-        result["status"] = "missing_inspection"
-        return result
-
-    if not skip_codex:
-        try:
-            send_to_codex(report_path, args, logger)
-        except FileNotFoundError:
-            logger.log(f"Codex binary '{args.codex_bin}' not found. Rerun with --codex-bin or --skip-codex.")
-            result["status"] = "codex_missing"
-            return result
-        except subprocess.CalledProcessError as exc:
-            logger.log(f"Codex execution failed for {task_id} (exit={exc.returncode}).")
-            result["status"] = "codex_failed"
             return result
 
     if skip_runner:
@@ -481,18 +518,20 @@ def main() -> None:
     rubrics_output_dir = Path(args.rubrics_output_dir)
     rubrics_output_dir.mkdir(parents=True, exist_ok=True)
 
-    traces = discover_traces(trace_dir)
-    if not traces:
-        logger.log(f"No traces found in {trace_dir}.")
-        return
-
-    logger.log(f"Evaluating rubrics for {len(traces)} trace(s).")
-    for trace in traces:
-        try:
-            evaluate_trace(trace, args, logger)
-        except subprocess.CalledProcessError as exc:
-            logger.log(f"Rubric evaluation failed for {trace} (exit={exc.returncode}).")
+    if args.skip_rubric_eval:
+        logger.log("Skipping rubric evaluation; reusing existing rubrics_output files.")
+    else:
+        traces = discover_traces(trace_dir)
+        if not traces:
+            logger.log(f"No traces found in {trace_dir}.")
             return
+        logger.log(f"Evaluating rubrics for {len(traces)} trace(s).")
+        for trace in traces:
+            try:
+                evaluate_trace(trace, args, logger)
+            except subprocess.CalledProcessError as exc:
+                logger.log(f"Rubric evaluation failed for {trace} (exit={exc.returncode}).")
+                return
 
     summary = summarize_rubrics(rubrics_output_dir)
     logger.write_json("rubric_summary_initial.json", summary)
@@ -530,14 +569,40 @@ def main() -> None:
         logger.log("No failing tasks remain after filtering.")
         return
 
-    logger.log(f"Processing {len(grouped)} task(s) through codex + runner.")
+    ordered_tasks = sorted(grouped.keys())
     results: List[Dict[str, object]] = []
-    for task_id in sorted(grouped.keys()):
-        outcome = process_task(
+    tasks_with_reports: List[str] = []
+    for task_id in ordered_tasks:
+        report_path = inspection_report_path(task_id, args.benchmark_name)
+        if not report_path.exists():
+            logger.log(f"Inspection report missing for {task_id} at {report_path}")
+            results.append({"task_id": task_id, "status": "missing_inspection"})
+        else:
+            tasks_with_reports.append(task_id)
+
+    if not tasks_with_reports:
+        logger.log("No inspection reports available; cannot proceed to codex/runner stage.")
+        logger.write_json("fixing_results.json", {"results": results})
+        logger.log(f"Fixing pipeline finished. Logs available at {logger.root}")
+        return
+
+    logger.log(f"Processing {len(tasks_with_reports)} task(s) through codex + runner.")
+
+    if not args.skip_codex:
+        try:
+            dispatch_codex_batches(tasks_with_reports, args, logger)
+        except FileNotFoundError:
+            logger.log(f"Codex binary '{args.codex_bin}' not found. Rerun with --codex-bin or --skip-codex.")
+            return
+        except subprocess.CalledProcessError as exc:
+            logger.log(f"Codex execution failed (exit={exc.returncode}).")
+            return
+
+    for task_id in tasks_with_reports:
+        outcome = execute_task_cycle(
             task_id=task_id,
             args=args,
             logger=logger,
-            skip_codex=args.skip_codex,
             skip_runner=args.skip_runner,
             force=args.force,
         )
