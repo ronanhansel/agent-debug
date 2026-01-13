@@ -1,867 +1,297 @@
+from __future__ import annotations
+
 import argparse
 import asyncio
-import csv
-import json
 import os
-import re
 import sys
-from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
-from textwrap import dedent
-from typing import Any, Iterable, Sequence
+from typing import List, Optional
 
-try:
-    import dotenv  # type: ignore
-except ImportError:  # pragma: no cover - optional dependency
-    dotenv = None
+# Ensure hal-harness modules are importable when running from repository root.
+REPO_ROOT = Path(__file__).parent.resolve()
+HAL_HARNESS_PATH = (REPO_ROOT / "hal-harness").resolve()
+if str(HAL_HARNESS_PATH) not in sys.path:
+    sys.path.insert(0, str(HAL_HARNESS_PATH))
 
-TRACE_DIR = Path("traces")
-RUBRICS_DIR = Path("rubrics")
-OUTPUT_DIR = Path("output")
-SCAFFOLD_TAGS = {
-    "<start_code>",
-    "<end_code>",
-    "<start_plan>",
-    "<end_plan>",
-    "<start_thought>",
-    "<end_thought>",
-    "<start_solution>",
-    "<end_solution>",
-}
-ENVIRONMENTAL_BARRIER_DESCRIPTION = (
-    "An Environmental Barrier in SWE-bench describes a failure mode where an agent is prevented from solving a task "
-    "due to impassable infrastructure faults rather than a lack of coding capability. These barriers arise from defects "
-    "in the evaluation setup itself—such as crashing Docker containers, broken shell environments, or pre-existing "
-    "dependency conflicts—that render the codebase unrunnable regardless of the agent's actions. Unlike a capability "
-    "failure where an agent writes incorrect code, an environmental barrier effectively blocks the agent from even "
-    "attempting the task, often due to missing files or system-level restrictions that are outside the agent's control."
-)
-
-if dotenv:
-    dotenv.load_dotenv()
+from rubric_evaluator import cli as rubric_cli  # type: ignore
 
 
-def _ensure_llm_cache_path() -> None:
-    """Docent expects LLM_CACHE_PATH; default to .llm_cache if not provided."""
-    if os.getenv("LLM_CACHE_PATH"):
-        return
-    default_cache = Path(".llm_cache")
-    default_cache.mkdir(parents=True, exist_ok=True)
-    os.environ["LLM_CACHE_PATH"] = str(default_cache.resolve())
-
-
-def _slugify(value: str) -> str:
-    cleaned = re.sub(r"[^a-zA-Z0-9._-]+", "_", value.strip())
-    return cleaned.strip("_") or "unknown"
-
-
-os.environ.setdefault("ENV_RESOLUTION_STRATEGY", "os_environ")
-_ensure_llm_cache_path()
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Docent rubric extraction and grading utility.")
+def add_rubric_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--trace-file", help="Path to a specific trace JSON file.")
+    parser.add_argument("--trace-dir", default="traces", help="Directory to scan for trace JSON files.")
+    parser.add_argument("--max-tasks", type=int, help="Limit the number of tasks evaluated.")
+    parser.add_argument("--rubric-model", help="Override the rubric model provider:deployment.")
+    parser.add_argument("--json-mode", action="store_true", help="Request JSON mode completions.")
+    parser.add_argument("--rubrics-dir", default="rubrics", help="Directory containing rubric definitions.")
+    parser.add_argument("--output-dir", default="rubrics_output", help="Directory to write rubric CSV files.")
     parser.add_argument(
-        "--max-tasks",
-        type=int,
-        default=None,
-        help="Limit the number of tasks evaluated after grouping (useful for smoke tests).",
-    )
-    parser.add_argument(
-        "--rubric-model",
-        type=str,
-        default=None,
-        help=(
-            "Override the rubric model in the format provider:model_name (e.g., azure_openai:o3-mini). "
-            "This takes precedence over DOCENT_RUBRIC_MODEL and related env vars."
-        ),
-    )
-    parser.add_argument(
-        "--json-mode",
-        action="store_true",
-        help=(
-            "Request JSON-mode completions (response_format=json_object). Only supported for OpenAI/Azure deployments "
-            "that enable structured output."
-        ),
-    )
-    parser.add_argument(
-        "--rubrics-dir",
-        type=str,
-        default=str(RUBRICS_DIR),
-        help="Directory containing *.txt rubric definitions (optional matching .schema.json).",
+        "--output-mode",
+        choices=["csv", "stdout"],
+        default="csv",
+        help="Select 'csv' to export files or 'stdout' to print results only.",
     )
     parser.add_argument(
         "--reasoning-effort",
-        type=str,
         choices=["low", "medium", "high"],
-        default=None,
-        help="Override the model's reasoning_effort parameter (OpenAI/Azure reasoning models only).",
+        help="Override reasoning_effort passed to the rubric model.",
     )
-    return parser.parse_args()
-
-
-DOCENT_REPO_PATH = Path(__file__).parent / "docent"
-if DOCENT_REPO_PATH.exists():
-    sys.path.insert(0, str(DOCENT_REPO_PATH))
-
-DOCENT_IMPORT_ERROR: Exception | None = None
-try:  # pragma: no cover - optional dependency
-    from docent.data_models import AgentRun, Transcript
-    from docent.data_models.chat import parse_chat_message
-    from docent_core.docent.ai_tools.rubric.rubric import Rubric, evaluate_rubric
-    from docent_core._llm_util.providers.preferences import ModelOption
-except Exception as exc:  # pragma: no cover - optional dependency
-    DOCENT_IMPORT_ERROR = exc
-    AgentRun = None  # type: ignore[assignment]
-    Transcript = None  # type: ignore[assignment]
-    parse_chat_message = None  # type: ignore[assignment]
-    Rubric = None  # type: ignore[assignment]
-    ModelOption = None  # type: ignore[assignment]
-    evaluate_rubric = None  # type: ignore[assignment]
-
-GLOBAL_JSON_REQUIREMENTS = dedent(
-    """
-    JSON response requirements:
-    - Respond with only the JSON object that matches the schema (no prose, code fences, or leading text).
-    - Escape newline characters as \\n; do not emit raw control characters inside JSON strings.
-    """
-).strip()
-
-DEFAULT_OUTPUT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "score": {
-            "type": "number",
-            "enum": [0, 1],
-            "description": "Binary score: use 1 only when the rubric is satisfied, else 0.",
-        },
-        "explanation": {
-            "type": "string",
-            "citations": True,
-            "description": "Concise justification referencing transcript blocks.",
-        },
-    },
-    "required": ["score", "explanation"],
-}
-
-DEFAULT_RUBRIC_TEXT = dedent(
-    f"""
-    Rubric: Environmental Barrier
-
-    Detection target:
-    {ENVIRONMENTAL_BARRIER_DESCRIPTION}
-
-    Label the rubric as "present" when the transcript contains clear evidence that the agent was blocked by these
-    infrastructural faults. Label it as "absent" when failures stem from the agent's own reasoning, planning, or code,
-    or when no convincing evidence of an environmental issue appears.
-
-    Evidence guidelines:
-    - Presence indicators (label as present):
-      • Sandbox or container crashes, unrecoverable kernel panics, or persistent harness errors unrelated to the agent's code.
-      • Missing files, permissions, or dependencies that existed before the agent took any action.
-      • System-level restrictions (e.g., read-only filesystems, broken shell environments) that halt progress for any agent.
-    - Absence indicators (label as absent):
-      • Errors caused by malformed patches, wrong file edits, or logical mistakes.
-      • Tool or command failures that follow from the agent's own incorrect inputs.
-      • Speculative or insufficient evidence; if uncertain, default to absent.
-
-    Explanation requirements:
-    - Reference the specific transcript blocks or tool outputs that justify the classification.
-    - Highlight both the failure symptoms and why they originate from the environment (or why they do not).
-    - Keep explanations concise and cite block IDs directly.
-
-    {GLOBAL_JSON_REQUIREMENTS}
-    """
-).strip()
-
-DEFAULT_RUBRIC_PROVIDER = os.getenv("DOCENT_RUBRIC_PROVIDER", "azure_openai")
-DEFAULT_RUBRIC_BATCH_SIZE = int(os.getenv("DOCENT_RUBRIC_BATCH_SIZE", "4"))
-
-@dataclass
-class TraceMessage:
-    """Normalized representation of a single message in a task trace."""
-
-    role: str
-    content: str
-    entry_id: str | None
-    timestamp: str | None
-
-
-@dataclass
-class TaskConversation:
-    """Aggregated conversation for one SWE-bench task."""
-
-    task_id: str
-    entries: list[dict[str, Any]]
-    messages: list[TraceMessage]
-
-    @property
-    def entry_count(self) -> int:
-        return len(self.entries)
-
-
-@dataclass
-class LocalRubricEvaluation:
-    """Container for rubric results produced by Docent."""
-
-    task_id: str
-    rubric_id: str
-    rubric_version: int
-    output: dict[str, Any] | None
-    error: str | None = None
-
-    @property
-    def score(self) -> float | None:
-        if not self.output:
-            return None
-        score = self.output.get("score")
-        if isinstance(score, (int, float)):
-            return float(score)
-        try:
-            return float(score)
-        except (TypeError, ValueError):
-            return None
-
-    @property
-    def explanation(self) -> str:
-        if not self.output:
-            return ""
-        explanation = self.output.get("explanation")
-        return explanation if isinstance(explanation, str) else ""
-
-
-@dataclass
-class RubricDefinition:
-    rubric_id: str
-    rubric_text: str
-    output_schema: dict[str, Any]
-
-
-def ensure_default_rubric_files(directory: Path) -> None:
-    directory.mkdir(parents=True, exist_ok=True)
-    txt_files = list(directory.glob("*.txt"))
-    if txt_files:
-        return
-
-    default_path = directory / "environmentalbarrier.txt"
-    default_path.write_text(DEFAULT_RUBRIC_TEXT, encoding="utf-8")
-    schema_path = default_path.with_suffix(".schema.json")
-    schema_path.write_text(json.dumps(DEFAULT_OUTPUT_SCHEMA, indent=2), encoding="utf-8")
-
-
-def load_rubric_definitions(directory: Path) -> list[RubricDefinition]:
-    ensure_default_rubric_files(directory)
-    definitions: list[RubricDefinition] = []
-    for txt_path in sorted(directory.glob("*.txt")):
-        rubric_text = txt_path.read_text(encoding="utf-8").strip()
-        if not rubric_text:
-            continue
-        if GLOBAL_JSON_REQUIREMENTS not in rubric_text:
-            rubric_text = f"{rubric_text.rstrip()}\n\n{GLOBAL_JSON_REQUIREMENTS}"
-        schema_path = txt_path.with_suffix(".schema.json")
-        output_schema = DEFAULT_OUTPUT_SCHEMA
-        if schema_path.exists():
-            try:
-                output_schema = json.loads(schema_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as exc:
-                print(f"⚠️  Failed to parse schema for {txt_path.name}: {exc}. Using default schema.")
-        rubric_id = _slugify(txt_path.stem.lower())
-        definitions.append(
-            RubricDefinition(
-                rubric_id=rubric_id,
-                rubric_text=rubric_text,
-                output_schema=output_schema,
-            )
-        )
-    return definitions
-
-
-def load_trace_file(trace_dir: Path) -> dict[str, Any]:
-    """Load the first JSON trace file inside trace_dir."""
-    trace_files = sorted(trace_dir.glob("*.json"))
-    if not trace_files:
-        raise FileNotFoundError("No *.json trace files found in traces/")
-
-    trace_file = trace_files[0]
-    print(f"📂 Loading trace data from {trace_file.name} ...")
-
-    with trace_file.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-def dataset_overview(data: dict[str, Any]) -> None:
-    """Print a concise overview of the dataset/config metadata."""
-    config = data.get("config", {})
-    results = data.get("results", {})
-
-    agent_name = config.get("agent_name", "unknown-agent")
-    model_name = config.get("agent_args", {}).get("model_name", "unknown-model")
-    benchmark = config.get("benchmark_name", "unknown-benchmark")
-
-    print("\n📊 Dataset Information:")
-    print(f"   Agent: {agent_name}")
-    print(f"   Model: {model_name}")
-    print(f"   Benchmark: {benchmark}")
-
-    accuracy = results.get("accuracy")
-    total_cost = results.get("total_cost")
-    failed_tasks = results.get("failed_tasks", [])
-    successful_tasks = results.get("successful_tasks", [])
-
-    print("\n📈 Results Summary:")
-    if accuracy is not None:
-        print(f"   Accuracy: {accuracy:.1%}")
-    if total_cost is not None:
-        print(f"   Total Cost: ${total_cost:.2f}")
-    print(f"   Successful Tasks: {len(successful_tasks)}")
-    print(f"   Failed Tasks: {len(failed_tasks)}")
-
-
-def group_entries_by_task(raw_entries: Sequence[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    """Group raw logging entries by their weave_task_id."""
-    tasks: dict[str, list[dict[str, Any]]] = {}
-    for entry in raw_entries:
-        task_id = (
-            entry.get("attributes", {}).get("weave_task_id")
-            or entry.get("weave_task_id")
-            or entry.get("inputs", {}).get("task_id")
-            or "unknown"
-        )
-        tasks.setdefault(task_id, []).append(entry)
-    return tasks
-
-
-def sanitize_text(text: str) -> str:
-    """Strip agent scaffolding tags and trim whitespace."""
-    if not text:
-        return ""
-
-    cleaned_lines: list[str] = []
-    for line in text.splitlines():
-        if line.strip() in SCAFFOLD_TAGS:
-            continue
-        cleaned_lines.append(line.rstrip())
-
-    return "\n".join(cleaned_lines).strip()
-
-
-def normalize_content(content: Any) -> str:
-    """Convert OpenAI-style message content into a simple string."""
-    if isinstance(content, str):
-        return sanitize_text(content.strip())
-
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if not isinstance(block, dict):
-                parts.append(str(block))
-                continue
-            block_type = block.get("type")
-            if block_type == "text":
-                parts.append(block.get("text", ""))
-            elif block_type == "reasoning":
-                # reasoned content may include summaries we can surface
-                summary = block.get("summary")
-                if summary:
-                    parts.append(summary)
-                elif block.get("redacted") is False:
-                    parts.append(block.get("reasoning", ""))
-        raw_text = "\n".join(part for part in (p.strip() for p in parts) if part)
-        return sanitize_text(raw_text)
-
-    if content is None:
-        return ""
-
-    return sanitize_text(str(content).strip())
-
-
-def entry_timestamp(entry: dict[str, Any]) -> str | None:
-    """Best-effort timestamp for ordering entries."""
-    return entry.get("created_timestamp") or entry.get("started_at") or entry.get("ended_at")
-
-
-def sort_entries(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Sort entries chronologically using available timestamps."""
-    return sorted(entries, key=lambda e: (entry_timestamp(e) or "", e.get("id", "")))
-
-
-def build_trace_message(raw_message: dict[str, Any], entry: dict[str, Any]) -> TraceMessage | None:
-    """Normalize a raw OpenAI message dict into TraceMessage."""
-    role = raw_message.get("role")
-    if not role:
-        return None
-
-    content = normalize_content(raw_message.get("content"))
-    if not content:
-        return None
-
-    return TraceMessage(role=role, content=content, entry_id=entry.get("id"), timestamp=entry_timestamp(entry))
-
-
-def build_assistant_message(entry: dict[str, Any]) -> TraceMessage | None:
-    """Extract the assistant response from the entry output."""
-    output = entry.get("output") or {}
-    choices = output.get("choices") or []
-    if not choices:
-        return None
-
-    message = choices[0].get("message")
-    if not message:
-        return None
-
-    role = message.get("role", "assistant")
-    content = normalize_content(message.get("content"))
-    if not content:
-        return None
-
-    return TraceMessage(role=role, content=content, entry_id=entry.get("id"), timestamp=entry_timestamp(entry))
-
-
-def extract_task_messages(task_id: str, entries: list[dict[str, Any]]) -> TaskConversation:
-    """Convert task-specific entries into an ordered conversation."""
-    ordered_entries = sort_entries(entries)
-    conversation: list[TraceMessage] = []
-    previous_message_count = 0
-
-    def append_assistant_output_if_new(entry: dict[str, Any]) -> None:
-        assistant_message = build_assistant_message(entry)
-        if not assistant_message:
-            return
-
-        if conversation:
-            last_message = conversation[-1]
-            if (
-                last_message.role == assistant_message.role
-                and last_message.content == assistant_message.content
-            ):
-                return
-
-        conversation.append(assistant_message)
-
-    for entry in ordered_entries:
-        raw_messages = entry.get("inputs", {}).get("messages") or []
-
-        if len(raw_messages) < previous_message_count:
-            previous_message_count = 0
-
-        if len(raw_messages) > previous_message_count:
-            new_messages = raw_messages[previous_message_count:]
-            for raw in new_messages:
-                normalized = build_trace_message(raw, entry)
-                if normalized:
-                    if conversation:
-                        last_message = conversation[-1]
-                        if (
-                            last_message.role == normalized.role
-                            and last_message.content == normalized.content
-                        ):
-                            continue
-                    conversation.append(normalized)
-
-        previous_message_count = len(raw_messages)
-
-        append_assistant_output_if_new(entry)
-
-    return TaskConversation(task_id=task_id, entries=ordered_entries, messages=conversation)
-
-
-def resolve_rubric_model_option(
-    model_override: str | None = None,
-    reasoning_effort_override: str | None = None,
-) -> "ModelOption":
-    """Derive the Docent ModelOption to use for rubric evaluation."""
-    if ModelOption is None:
-        raise RuntimeError("Docent ModelOption class is unavailable. Ensure docent is installed.")
-
-    raw_model = model_override or os.getenv("DOCENT_RUBRIC_MODEL")
-    provider = DEFAULT_RUBRIC_PROVIDER
-    model_name = None
-
-    if raw_model:
-        if ":" in raw_model:
-            provider, model_name = raw_model.split(":", 1)
-        else:
-            model_name = raw_model
-
-    if not model_name:
-        model_name = os.getenv("DOCENT_RUBRIC_MODEL_NAME")
-
-    if not model_name and provider == "azure_openai":
-        for candidate in (
-            "AZURE_OPENAI_RUBRIC_MODEL",
-            "AZURE_OPENAI_DEPLOYMENT_NAME",
-            "AZURE_OPENAI_DEPLOYMENT",
-            "AZURE_OPENAI_CHAT_DEPLOYMENT",
-        ):
-            value = os.getenv(candidate)
-            if value:
-                model_name = value
-                break
-
-    if not model_name:
-        raise ValueError(
-            "Unable to determine an Azure OpenAI deployment for rubric evaluation. "
-            "Set DOCENT_RUBRIC_MODEL (provider:model) or DOCENT_RUBRIC_MODEL_NAME / "
-            "AZURE_OPENAI_DEPLOYMENT_NAME in your environment."
-        )
-
-    reasoning_effort = os.getenv("DOCENT_RUBRIC_REASONING_EFFORT")
-    if reasoning_effort:
-        reasoning_effort = reasoning_effort.lower()
-        if reasoning_effort not in {"low", "medium", "high"}:
-            raise ValueError(
-                "DOCENT_RUBRIC_REASONING_EFFORT must be one of: low, medium, high."
-            )
-
-    return ModelOption(
-        provider=provider,
-        model_name=model_name,
-        reasoning_effort=(reasoning_effort_override or reasoning_effort),  # type: ignore[arg-type]
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the interactive confirmation prompt.",
     )
 
 
-def build_rubric_from_definition(
-    definition: RubricDefinition,
-    model_option: "ModelOption",
-) -> "Rubric":
-    if Rubric is None:
-        raise RuntimeError("Docent Rubric class is unavailable. Ensure docent is installed.")
-
-    return Rubric(
-        id=definition.rubric_id,
-        version=1,
-        rubric_text=definition.rubric_text.strip(),
-        judge_model=model_option,
-        output_schema=definition.output_schema,
+def add_debugger_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--rubrics-csv", help="Path to a single rubric CSV.")
+    parser.add_argument(
+        "--rubrics-output-dir",
+        default="../rubrics_output",
+        help="Directory containing rubric CSV files (default: ../rubrics_output).",
+    )
+    parser.add_argument("--traces-dir", default="traces", help="Directory containing reference traces for rubric context.")
+    parser.add_argument(
+        "--agent-dir",
+        default="hal-harness/agents/hal_generalist_agent",
+        help="Path to the agent implementation directory.",
+    )
+    parser.add_argument("--agent-args", help="Path to a JSON file or raw JSON string with agent kwargs.")
+    parser.add_argument("--agent-function", default="main.run", help="Agent entrypoint (default: main.run).")
+    parser.add_argument("--benchmark-name", default="swebench_verified", help="Benchmark name override.")
+    parser.add_argument(
+        "--task-id",
+        dest="task_ids",
+        action="append",
+        help="Limit processing to specific task IDs (repeatable).",
+    )
+    parser.add_argument(
+        "--debug-mode",
+        choices=["inspect", "run"],
+        default="inspect",
+        help="Inspector produces guidance; runner applies fix packages.",
+    )
+    parser.add_argument(
+        "--trace-output-dir",
+        default="traces/debug_runs",
+        help="Where rerun traces should be written when debug-mode=run.",
+    )
+    parser.add_argument(
+        "--fixed-output",
+        action="store_true",
+        help="Store inspector/runner artifacts in deterministic debug/<benchmark>/<task>/<run_label> directories.",
+    )
+    parser.add_argument(
+        "--run-label",
+        default="latest",
+        help="Folder name to use when --fixed-output is enabled (default: latest).",
+    )
+    if not any("--reasoning-effort" in action.option_strings for action in parser._actions):
+        parser.add_argument(
+            "--reasoning-effort",
+            choices=["low", "medium", "high"],
+            help="Set reasoning_effort for the AutoInspector LLM (debug stage).",
+        )
+    parser.add_argument(
+        "--inspector-model",
+        help="Override the AutoInspector LLM (defaults to HAL_AUTOFIX_MODEL env var).",
     )
 
 
-def validate_provider_environment(model_option: "ModelOption") -> None:
-    """Ensure required environment variables exist for the selected provider."""
-    if model_option.provider != "azure_openai":
-        return
+def build_evaluator_namespace(args: argparse.Namespace) -> argparse.Namespace:
+    fields = [
+        "trace_file",
+        "trace_dir",
+        "max_tasks",
+        "rubric_model",
+        "json_mode",
+        "rubrics_dir",
+        "output_dir",
+        "output_mode",
+        "reasoning_effort",
+        "yes",
+    ]
+    payload = {field: getattr(args, field, None) for field in fields}
+    return argparse.Namespace(**payload)
 
-    missing: list[str] = []
-    for var in ("AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY"):
-        if not os.getenv(var):
-            missing.append(var)
 
-    api_version = os.getenv("OPENAI_API_VERSION") or os.getenv("AZURE_OPENAI_API_VERSION")
-    if not api_version:
-        missing.append("OPENAI_API_VERSION (or AZURE_OPENAI_API_VERSION)")
+def build_debug_namespace(args: argparse.Namespace) -> argparse.Namespace:
+    rubrics_csv = args.rubrics_csv
+    if rubrics_csv:
+        candidate = Path(rubrics_csv)
+        if candidate.exists():
+            rubrics_csv = _rel_to_hal_harness(rubrics_csv) or rubrics_csv
+
+    rubrics_output_dir = _rel_to_hal_harness(args.rubrics_output_dir) or args.rubrics_output_dir
+    traces_dir = _rel_to_hal_harness(args.traces_dir) or args.traces_dir
+    agent_dir = _rel_to_hal_harness(args.agent_dir) or args.agent_dir
+    agent_args = args.agent_args
+    if agent_args:
+        agent_args_path = Path(agent_args)
+        if agent_args_path.exists():
+            agent_args = _rel_to_hal_harness(agent_args) or agent_args
+
+    trace_output_dir = _rel_to_hal_harness(args.trace_output_dir) or args.trace_output_dir
+
+    return argparse.Namespace(
+        rubrics_csv=rubrics_csv,
+        rubrics_output_dir=rubrics_output_dir,
+        fixable_output_dir=None,
+        traces_dir=traces_dir,
+        agent_dir=agent_dir,
+        agent_args=agent_args,
+        agent_function=args.agent_function,
+        benchmark_name=args.benchmark_name,
+        task_ids=args.task_ids,
+        mode=args.debug_mode,
+        trace_output_dir=trace_output_dir,
+        reasoning_effort=args.reasoning_effort,
+        fixed_output=getattr(args, "fixed_output", False),
+        run_label=getattr(args, "run_label", "latest"),
+        inspector_model=getattr(args, "inspector_model", None),
+    )
+
+
+def _rel_to_hal_harness(path_value: Optional[str]) -> Optional[str]:
+    if not path_value:
+        return path_value
+    path = Path(path_value)
+    if not path.is_absolute():
+        path = (REPO_ROOT / path).resolve(strict=False)
     else:
-        os.environ.setdefault("OPENAI_API_VERSION", api_version)
-
-    if missing:
-        raise EnvironmentError(
-            "Azure OpenAI environment configuration is incomplete. Missing: "
-            + ", ".join(missing)
-        )
-
-
-def build_docent_agent_runs(
-    conversations: Sequence[TaskConversation],
-    failed_tasks: set[str],
-    agent_name: str,
-) -> list["AgentRun"]:
-    if AgentRun is None or Transcript is None or parse_chat_message is None:
-        raise RuntimeError(
-            "Docent data models are unavailable. Ensure the docent package is installed and importable."
-        )
-
-    agent_runs: list[AgentRun] = []
-    for conversation in conversations:
-        parsed_messages = []
-        for message in conversation.messages:
-            payload = {"role": message.role, "content": message.content or ""}
-            try:
-                parsed_messages.append(parse_chat_message(payload))
-            except Exception as exc:  # pragma: no cover - best effort logging
-                print(
-                    f"⚠️  Skipping malformed message in task {conversation.task_id}: {exc}"
-                )
-        if not parsed_messages:
-            continue
-
-        transcript_metadata = {
-            "task_id": conversation.task_id,
-            "entry_count": conversation.entry_count,
-        }
-        transcript = Transcript(messages=parsed_messages, metadata=transcript_metadata)
-
-        run_metadata = {
-            "task_id": conversation.task_id,
-            "failed": conversation.task_id in failed_tasks,
-            "agent": agent_name,
-            "entry_count": conversation.entry_count,
-            "message_count": len(parsed_messages),
-        }
-        try:
-            agent_run = AgentRun(
-                id=str(conversation.task_id),
-                transcripts=[transcript],
-                metadata=run_metadata,
-            )
-        except Exception as exc:  # pragma: no cover - defensive
-            print(f"⚠️  Failed to build AgentRun for {conversation.task_id}: {exc}")
-            continue
-        agent_runs.append(agent_run)
-
-    return agent_runs
-
-
-async def evaluate_environmental_barrier(
-    agent_runs: Sequence["AgentRun"],
-    rubric: "Rubric",
-    batch_size: int = DEFAULT_RUBRIC_BATCH_SIZE,
-    json_mode: bool = False,
-) -> list[LocalRubricEvaluation]:
-    if evaluate_rubric is None:
-        raise RuntimeError("Docent rubric evaluator is unavailable. Ensure docent is installed.")
-
-    if batch_size <= 0:
-        batch_size = 1
-
-    evaluations: list[LocalRubricEvaluation] = []
-    for start in range(0, len(agent_runs), batch_size):
-        batch = list(agent_runs[start : start + batch_size])
-        response_format = {"type": "json_object"} if json_mode else None
-        outputs = await evaluate_rubric(batch, rubric, response_format=response_format)
-        for agent_run, output in zip(batch, outputs):
-            error = None
-            if output is None:
-                error = "Rubric evaluation returned no valid output."
-            task_id = str(agent_run.metadata.get("task_id") or agent_run.id)
-            evaluations.append(
-                LocalRubricEvaluation(
-                    task_id=task_id,
-                    rubric_id=rubric.id,
-                    rubric_version=rubric.version,
-                    output=output,
-                    error=error,
-                )
-            )
-    return evaluations
-
-
-def preview_task(conversation: TaskConversation, limit: int = 8) -> None:
-    """Print a human-readable preview for one task."""
-    print(f"\n🔍 Previewing task {conversation.task_id}")
-    print(f"   Entries: {conversation.entry_count}")
-    print(f"   Messages extracted: {len(conversation.messages)}")
-
-    if not conversation.messages:
-        print("   (No messages extracted)")
-        return
-
-    for message in conversation.messages[:limit]:
-        snippet = message.content.replace("\n", " ")[:160]
-        print(f"   [{message.role}] {snippet}")
-
-    remaining = len(conversation.messages) - limit
-    if remaining > 0:
-        print(f"   ... ({remaining} more messages)")
-
-
-def confirm(prompt: str) -> bool:
-    """Prompt the user before uploading."""
+        path = path.resolve(strict=False)
     try:
-        answer = input(f"{prompt} [y/N]: ").strip().lower()
-    except EOFError:
-        return False
-    return answer in {"y", "yes"}
+        return str(path.relative_to(HAL_HARNESS_PATH))
+    except ValueError:
+        return str(Path(os.path.relpath(path, HAL_HARNESS_PATH)))
 
 
-def print_grading_results(
-    rubric_id: str,
-    results: Sequence[LocalRubricEvaluation],
-) -> None:
-    """Pretty-print grading results returned by Docent rubric evaluation."""
-    if not results:
-        print("⚠️  Rubric evaluation returned no results.")
-        return
-
-    print(f"\n🧪 {rubric_id} Grades:")
-    for item in results:
-        score = f"{item.score:.2f}" if item.score is not None else "N/A"
-        print(f"   • Task {item.task_id}: {item.rubric_id} = {score}")
-        if item.error:
-            print(f"      Error: {item.error}")
-        elif item.explanation:
-            print(f"      Explanation: {item.explanation.strip()}")
-
-
-def write_cloud_grading_csv(
-    grading_results: Sequence[LocalRubricEvaluation],
-    model_run: str,
-    output_path: Path | None = None,
-    default_criteria: str = "environmentalbarrier",
-) -> Path | None:
-    """Persist cloud grading results to CSV."""
-    if not grading_results:
-        return None
-
-    final_path = output_path or (OUTPUT_DIR / f"{default_criteria}.csv")
-    final_path.parent.mkdir(parents=True, exist_ok=True)
-    with final_path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["task_id", "criteria", "grade", "explanation", "model_run"])
-        for item in grading_results:
-            writer.writerow(
-                [
-                    item.task_id,
-                    item.rubric_id or default_criteria,
-                    "" if item.score is None else f"{item.score:.2f}",
-                    item.explanation.strip(),
-                    model_run,
-                ]
-            )
-    return final_path
+def serialize_debug_cli(args: argparse.Namespace) -> str:
+    parts: List[str] = []
+    if args.rubrics_csv:
+        parts += ["--rubrics-csv", _rel_to_hal_harness(args.rubrics_csv) or args.rubrics_csv]
+    else:
+        parts += ["--rubrics-output-dir", _rel_to_hal_harness(args.rubrics_output_dir) or args.rubrics_output_dir]
+    parts += ["--traces-dir", _rel_to_hal_harness(args.traces_dir) or args.traces_dir]
+    parts += ["--agent-dir", _rel_to_hal_harness(args.agent_dir) or args.agent_dir]
+    if args.agent_args:
+        agent_args_path = Path(args.agent_args)
+        if agent_args_path.exists():
+            parts += ["--agent-args", _rel_to_hal_harness(args.agent_args) or args.agent_args]
+        else:
+            parts += ["--agent-args", args.agent_args]
+    if args.agent_function:
+        parts += ["--agent-function", args.agent_function]
+    if args.benchmark_name:
+        parts += ["--benchmark-name", args.benchmark_name]
+    if args.task_ids:
+        for task_id in args.task_ids:
+            parts += ["--task-id", task_id]
+    parts += ["--mode", args.debug_mode]
+    parts += ["--trace-output-dir", _rel_to_hal_harness(args.trace_output_dir) or args.trace_output_dir]
+    if getattr(args, "reasoning_effort", None):
+        parts += ["--reasoning-effort", args.reasoning_effort]
+    if getattr(args, "inspector_model", None):
+        parts += ["--inspector-model", args.inspector_model]
+    if getattr(args, "fixed_output", False):
+        parts.append("--fixed-output")
+        parts += ["--run-label", getattr(args, "run_label", "latest")]
+    return "python scripts/auto_debug_batch.py " + " ".join(parts)
 
 
-def default_rubric_output_path(
-    model_option: "ModelOption",
-    rubric_id: str,
-) -> Path:
-    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    provider = _slugify(model_option.provider)
-    model = _slugify(model_option.model_name)
-    rubric_slug = _slugify(rubric_id)
-    filename = f"{rubric_slug}_{provider}_{model}_{timestamp}.csv"
-    return OUTPUT_DIR / filename
+def _resolve_repo_path(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return value
+    path = Path(value)
+    if not path.is_absolute():
+        path = (REPO_ROOT / path).resolve()
+    else:
+        path = path.resolve()
+    return str(path)
+
+
+def run_evaluate(args: argparse.Namespace) -> None:
+    args.trace_file = _resolve_repo_path(getattr(args, "trace_file", None))
+    args.trace_dir = _resolve_repo_path(getattr(args, "trace_dir", None) or "traces")
+    args.rubrics_dir = _resolve_repo_path(getattr(args, "rubrics_dir", None) or "rubrics")
+    args.output_dir = _resolve_repo_path(getattr(args, "output_dir", None) or "rubrics_output")
+    rubric_cli.run(build_evaluator_namespace(args))
+
+
+def run_debug(args: argparse.Namespace) -> None:
+    from scripts import auto_debug_batch as debugger_cli  # type: ignore
+
+    args.rubrics_output_dir = _resolve_repo_path(args.rubrics_output_dir)
+    args.traces_dir = _resolve_repo_path(args.traces_dir)
+    args.agent_dir = _resolve_repo_path(args.agent_dir)
+    if args.agent_args and Path(args.agent_args).exists():
+        args.agent_args = _resolve_repo_path(args.agent_args)
+    args.trace_output_dir = _resolve_repo_path(args.trace_output_dir)
+
+    debug_namespace = build_debug_namespace(args)
+    rerun_command = serialize_debug_cli(args)
+    original_cwd = Path.cwd()
+    try:
+        os.chdir(HAL_HARNESS_PATH)
+        asyncio.run(debugger_cli._run_pipeline(debug_namespace, rerun_command))  # type: ignore[attr-defined]
+    finally:
+        os.chdir(original_cwd)
+
+
+def run_pipeline(args: argparse.Namespace) -> None:
+    output_dir = getattr(args, "output_dir", None) or getattr(args, "rubrics_output_dir", None) or "rubrics_output"
+    output_dir = _resolve_repo_path(output_dir)
+    args.output_dir = output_dir
+
+    if not args.skip_evaluate:
+        run_evaluate(args)
+    else:
+        print("⚠️  Skipping rubric evaluation as requested (--skip-evaluate).")
+
+    args.rubrics_output_dir = output_dir
+
+    if not args.skip_debug:
+        run_debug(args)
+    else:
+        print("⚠️  Skipping debugger phase as requested (--skip-debug).")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Unified rubric evaluation and auto-debug pipeline.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    eval_parser = subparsers.add_parser("evaluate", help="Run the rubric evaluator only.")
+    add_rubric_args(eval_parser)
+    eval_parser.set_defaults(handler=run_evaluate)
+
+    debug_parser = subparsers.add_parser("debug", help="Run the inspector or runner on rubric CSVs.")
+    add_debugger_args(debug_parser)
+    debug_parser.set_defaults(handler=run_debug)
+
+    pipeline_parser = subparsers.add_parser("pipeline", help="Run rubric evaluation followed by the debugger.")
+    add_rubric_args(pipeline_parser)
+    add_debugger_args(pipeline_parser)
+    pipeline_parser.add_argument(
+        "--skip-evaluate",
+        action="store_true",
+        help="Skip the rubric evaluation stage (expects CSVs to already exist).",
+    )
+    pipeline_parser.add_argument(
+        "--skip-debug",
+        action="store_true",
+        help="Skip the debugger stage after evaluation completes.",
+    )
+    pipeline_parser.set_defaults(handler=run_pipeline)
+
+    return parser
 
 
 def main() -> None:
-    args = parse_args()
-    try:
-        data = load_trace_file(TRACE_DIR)
-    except FileNotFoundError as error:
-        print(f"❌ {error}")
-        return
-
-    dataset_overview(data)
-
-    raw_entries = data.get("raw_logging_results") or []
-    if not raw_entries:
-        print("❌ No raw logging results found in trace file.")
-        return
-
-    tasks = group_entries_by_task(raw_entries)
-    print(f"\n🧵 Found {len(tasks)} unique tasks")
-
-    conversations: list[TaskConversation] = []
-    for task_id, entries in tasks.items():
-        conversation = extract_task_messages(task_id, entries)
-        if conversation.messages:
-            conversations.append(conversation)
-
-    conversations.sort(key=lambda conv: conv.task_id)
-
-    if not conversations:
-        print("❌ Failed to extract any conversations.")
-        return
-
-    if args.max_tasks is not None:
-        if args.max_tasks <= 0:
-            print("❌ --max-tasks must be positive when provided.")
-            return
-        original_count = len(conversations)
-        conversations = conversations[: args.max_tasks]
-        print(f"🔬 Limiting evaluation to {len(conversations)} of {original_count} tasks (--max-tasks).")
-
-    preview_task(conversations[0])
-
-    failed_tasks = set(data.get("results", {}).get("failed_tasks", []))
-    agent_name = data.get("config", {}).get("agent_name", "unknown-agent")
-    model_run_id = (
-        data.get("config", {}).get("run_id") or data.get("config", {}).get("date") or "local-run"
-    )
-
-    if not confirm("\nProceed with Docent rubric evaluation using the configured LLM provider?"):
-        print("ℹ️  Evaluation canceled. Inspect the preview above and rerun when ready.")
-        return
-
-    if DOCENT_IMPORT_ERROR is not None:
-        print(f"❌ Unable to import Docent modules: {DOCENT_IMPORT_ERROR}")
-        print("   Ensure the docent repo is installed (e.g., `pip install -e docent`).")
-        return
-
-    try:
-        agent_runs = build_docent_agent_runs(conversations, failed_tasks, agent_name)
-    except RuntimeError as exc:
-        print(f"❌ {exc}")
-        return
-
-    if not agent_runs:
-        print("❌ No agent runs could be constructed for rubric evaluation.")
-        return
-
-    effort_override = args.reasoning_effort.lower() if args.reasoning_effort else None
-
-    try:
-        model_option = resolve_rubric_model_option(args.rubric_model, reasoning_effort_override=effort_override)
-    except ValueError as exc:
-        print(f"❌ {exc}")
-        return
-
-    try:
-        validate_provider_environment(model_option)
-    except EnvironmentError as exc:
-        print(f"❌ {exc}")
-        print("   Set the missing environment variables (see docs.transluce.org self-hosting env vars).")
-        return
-
-    if args.json_mode and model_option.provider not in {"openai", "azure_openai"}:
-        print("❌ JSON mode is only supported for OpenAI or Azure OpenAI providers.")
-        return
-
-    rubrics_dir = Path(args.rubrics_dir).expanduser()
-    rubric_definitions = load_rubric_definitions(rubrics_dir)
-    if not rubric_definitions:
-        print(f"❌ No rubric definitions found in {rubrics_dir}. Add *.txt files and retry.")
-        return
-
-    batch_size = DEFAULT_RUBRIC_BATCH_SIZE
-    env_batch = os.getenv("DOCENT_RUBRIC_BATCH_SIZE")
-    if env_batch:
-        try:
-            batch_size = max(1, int(env_batch))
-        except ValueError:
-            pass
-
-    for definition in rubric_definitions:
-        rubric = build_rubric_from_definition(definition, model_option)
-        output_path = default_rubric_output_path(model_option, definition.rubric_id)
-
-        print(
-            f"\n🧪 Running rubric '{definition.rubric_id}' on {len(agent_runs)} agent runs "
-            f"with {model_option.provider}:{model_option.model_name} (batch_size={batch_size})..."
-        )
-
-        try:
-            grading_results = asyncio.run(
-                evaluate_environmental_barrier(
-                    agent_runs,
-                    rubric,
-                    batch_size=batch_size,
-                    json_mode=args.json_mode,
-                ),
-            )
-        except Exception as exc:  # pragma: no cover - depends on provider availability
-            print(f"❌ Rubric '{definition.rubric_id}' evaluation failed: {exc}")
-            continue
-
-        print_grading_results(definition.rubric_id, grading_results)
-
-        csv_path = write_cloud_grading_csv(
-            grading_results,
-            model_run_id,
-            output_path=output_path,
-            default_criteria=definition.rubric_id,
-        )
-        if csv_path:
-            print(f"🗂️  Rubric CSV written to {csv_path}")
+    parser = build_parser()
+    args = parser.parse_args()
+    handler = getattr(args, "handler", None)
+    if handler is None:
+        parser.error("No command provided.")
+    handler(args)
 
 
 if __name__ == "__main__":

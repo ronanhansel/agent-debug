@@ -10,3 +10,6 @@ hal-harness/
 rubrics/
 output*/
 fixable_output/
+log/
+debug/
+rubrics_output/

@@ -32,19 +32,34 @@ The script reads SWE-bench evaluation results from JSON files and uploads them a
 
 ## Usage
 
-Run the script to upload traces:
+## Unified Evaluation + Debug Pipeline
+
+Use the redesigned `main.py` to drive rubric evaluation, inspection, and reruns without juggling multiple commands:
 
 ```bash
-python main.py
+# Full unattended run: evaluate traces, then run the inspector (default) or runner
+python main.py pipeline \
+  --trace-file traces/swebench_verified_mini_hal_generalist_agent_o3mini20250131_low_1744603516_UPLOAD.json \
+  --rubrics-dir rubrics \
+  --output-dir rubrics_output \
+  --traces-dir traces \
+  --agent-dir hal-harness/agents/hal_generalist_agent \
+  --agent-args agent_args.azure.json \
+  --benchmark-name swebench_verified_mini \
+  --reasoning-effort medium \  # optional: applies to AutoInspector
+  --debug-mode inspect \
+  --yes
 ```
 
-The script will:
+Add `--debug-mode run` when you want the pipeline to evaluate the traces *and* immediately replay any fixes in Docker. Every invocation logs to `hal-harness/log/pipeline-run-<timestamp>/pipeline.log`, so you can leave the process unattended and review the entire transcript later.
 
-1. Load the trace data from `traces/` directory
-2. Extract task information, messages, and metadata
-3. Create trajectories for each unique task
-4. Upload everything to Lunette
-5. Display a summary with the run ID
+Key stages:
+
+1. **Rubric evaluation (`main.py evaluate ...`)** – reads traces, runs Docent rubrics, and writes `rubrics_output/<rubric>.csv` (no timestamp). Use `--output-mode stdout` to check fixes without overwriting CSVs.
+2. **Inspector (`main.py debug --debug-mode inspect ...`)** – generates structured guidance per task under `hal-harness/debug/<task>/<run>/inspection_report.json`.
+3. **Runner (`main.py debug --debug-mode run ...`)** – replays fixes from `hal-harness/fixes/<task_id>/`, saves rerun summaries, and emits synthetic traces under `traces/debug_runs/` so the evaluator can recheck resolved tasks in “stdout only” mode.
+
+Every debugger invocation emits a consolidated log folder at `hal-harness/log/pipeline-run-<timestamp>`; when chaining commands through `main.py pipeline`, both stages share the same execution context so you can copy/paste the resulting logs for reports.
 
 ## Output
 
