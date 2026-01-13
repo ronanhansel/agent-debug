@@ -194,8 +194,14 @@ def stage_reasoning_effort(stage_value: str | None, default_value: str | None) -
     return stage_value or default_value
 
 
-def run_command(cmd: Sequence[str], logger: FixingPipelineLogger, env: Dict[str, str] | None = None) -> None:
-    display = shlex.join(str(part) for part in cmd)
+def run_command(
+    cmd: Sequence[str],
+    logger: FixingPipelineLogger,
+    env: Dict[str, str] | None = None,
+    *,
+    display_override: str | None = None,
+) -> None:
+    display = display_override or shlex.join(str(part) for part in cmd)
     logger.log(f"Executing: {display}")
     subprocess.run(list(map(str, cmd)), check=True, cwd=REPO_ROOT, env=env)
 
@@ -449,6 +455,20 @@ def build_codex_payload(task_ids: List[str], args: argparse.Namespace, logger: F
     return json.dumps(payload, separators=(",", ":"))
 
 
+def _write_codex_payload_file(
+    *,
+    payload_json: str,
+    logger: FixingPipelineLogger,
+    batch_index: int,
+) -> Path:
+    """Write a pretty-printed Codex payload for debugging/log review."""
+    try:
+        parsed = json.loads(payload_json)
+    except json.JSONDecodeError:
+        parsed = {"raw_payload": payload_json}
+    return logger.write_json(f"codex_payload_batch_{batch_index}.json", parsed)
+
+
 def dispatch_codex_batches(task_ids: List[str], args: argparse.Namespace, logger: FixingPipelineLogger) -> None:
     if not task_ids:
         return
@@ -457,11 +477,19 @@ def dispatch_codex_batches(task_ids: List[str], args: argparse.Namespace, logger
         payload = build_codex_payload(batch, args, logger)
         if not payload:
             continue
+
+        payload_path = _write_codex_payload_file(payload_json=payload, logger=logger, batch_index=index)
+        logger.log(f"Codex payload written to {payload_path}")
+
         if index == 0:
             cmd = [args.codex_bin, "exec", payload]
         else:
             cmd = [args.codex_bin, "exec", "resume", "--last", payload]
-        run_command(cmd, logger)
+
+        # Keep the actual argv unchanged (Codex expects the JSON string), but make logs readable.
+        display_cmd = list(cmd)
+        display_cmd[-1] = f"@{payload_path}"
+        run_command(cmd, logger, display_override=shlex.join(str(part) for part in display_cmd))
 
 
 def failing_rubrics_for_trace(

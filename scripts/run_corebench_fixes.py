@@ -61,9 +61,22 @@ def parse_args() -> argparse.Namespace:
         help="Model identifier for rubric evaluation (e.g., azure_openai:o3-mini or openai:o3-mini).",
     )
     parser.add_argument(
+        "--skip-rubrics",
+        action="store_true",
+        help="Skip running main.py evaluate (per-task and merged trace).",
+    )
+    parser.add_argument(
         "--benchmark",
         default="corebench_hard",
         help="Benchmark variant to evaluate (default: corebench_hard).",
+    )
+    parser.add_argument(
+        "--merged-trace-output",
+        help="Optional output path for the merged trace JSON (must end with .json).",
+    )
+    parser.add_argument(
+        "--merged-run-id",
+        help="Optional run_id to store in the merged trace metadata (defaults to auto-generated).",
     )
     parser.add_argument(
         "--docker",
@@ -187,6 +200,9 @@ def merge_trace_files(
     trace_paths: List[Path],
     benchmark: str,
     agent_dir: Path,
+    *,
+    output_path: Path | None = None,
+    merged_run_id: str | None = None,
 ) -> Path:
     first_trace = json.loads(trace_paths[0].read_text(encoding="utf-8"))
     config: Dict[str, Any] = first_trace.get("config", {})
@@ -197,11 +213,18 @@ def merge_trace_files(
         else None
     ) or "model"
 
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    agent_slug = _slugify(agent_dir.name, "agent")
-    model_slug = _slugify(str(model_name), "model")
-    run_id = f"{benchmark}_{agent_slug}{model_slug}_{timestamp}_FIXED"
-    output_path = REPO_ROOT / "traces" / f"{run_id}_UPLOAD.json"
+    if output_path is None:
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        agent_slug = _slugify(agent_dir.name, "agent")
+        model_slug = _slugify(str(model_name), "model")
+        run_id = merged_run_id or f"{benchmark}_{agent_slug}{model_slug}_{timestamp}_FIXED"
+        output_path = REPO_ROOT / "traces" / f"{run_id}_UPLOAD.json"
+    else:
+        if output_path.suffix != ".json":
+            raise ValueError(f"--merged-trace-output must be a .json file path, got {output_path}")
+        run_id = merged_run_id or output_path.stem
+        if run_id.endswith("_UPLOAD"):
+            run_id = run_id[: -len("_UPLOAD")]
 
     merge_cmd: List[str] = [
         sys.executable,
@@ -323,18 +346,19 @@ def main() -> None:
                 print(f"[trace] Copied {trace_path} -> {final_trace}")
                 generated_traces.append(final_trace)
 
-                eval_cmd = [
-                    "python",
-                    "main.py",
-                    "evaluate",
-                    "--trace-file", str(final_trace),
-                    "--rubrics-dir", str(REPO_ROOT / "rubrics"),
-                    "--output-dir", str(rubric_output_dir),
-                    "--rubric-model", args.rubric_model,
-                    "--yes",
-                ]
-                print(f"[rubric] {' '.join(eval_cmd)}")
-                subprocess.run(eval_cmd, check=True, cwd=REPO_ROOT)
+                if not args.skip_rubrics:
+                    eval_cmd = [
+                        "python",
+                        "main.py",
+                        "evaluate",
+                        "--trace-file", str(final_trace),
+                        "--rubrics-dir", str(REPO_ROOT / "rubrics"),
+                        "--output-dir", str(rubric_output_dir),
+                        "--rubric-model", args.rubric_model,
+                        "--yes",
+                    ]
+                    print(f"[rubric] {' '.join(eval_cmd)}")
+                    subprocess.run(eval_cmd, check=True, cwd=REPO_ROOT)
             finally:
                 if not args.keep_temp:
                     shutil.rmtree(temp_agent_dir, ignore_errors=True)
@@ -344,10 +368,13 @@ def main() -> None:
                 generated_traces,
                 benchmark=args.benchmark,
                 agent_dir=agent_dir,
+                output_path=Path(args.merged_trace_output).resolve() if args.merged_trace_output else None,
+                merged_run_id=args.merged_run_id,
             )
             print(f"[merge] Saved merged trace -> {merged_trace}")
-            evaluate_trace(merged_trace, args.rubric_model, rubric_output_dir)
-            print(f"[merge] Completed rubric evaluation for {merged_trace}")
+            if not args.skip_rubrics:
+                evaluate_trace(merged_trace, args.rubric_model, rubric_output_dir)
+                print(f"[merge] Completed rubric evaluation for {merged_trace}")
 
     finally:
         shutil.move(COREBENCH_BACKUP, COREBENCH_DATA)

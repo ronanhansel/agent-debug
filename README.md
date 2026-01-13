@@ -70,7 +70,7 @@ for task in flagged:
     print(task)
 ```
 
-Generate fixing instruction (inspector) and sequentially fixing all of the rubric items using OpenAI `codex`, skipping rerun of the agent.
+Generate fixing instruction (inspector) 
 
 ```bash
 ./scripts/fixing_pipeline.sh \
@@ -82,7 +82,18 @@ Generate fixing instruction (inspector) and sequentially fixing all of the rubri
     --benchmark-name corebench_hard \
     --rubric-model o3-mini \
     --inspector-model azure/o3-mini \
-    --runner-model azure/gpt-4.1 \
+    --skip-runner \
+    --skip-rubric-eval
+```
+
+and sequentially fixing all of the rubric items using OpenAI `codex`, skipping rerun of the agent.
+
+```bash
+./scripts/fixing_pipeline.sh \
+    --trace-dir traces \
+    --rubrics-dir rubrics \
+    --rubrics-output-dir rubrics_output \
+    --benchmark-name corebench_hard \
     --skip-runner \
     --skip-rubric-eval \
     --skip-inspector
@@ -94,7 +105,7 @@ Generate fixing instruction (inspector) and sequentially fixing all of the rubri
 - `--skip-rubric-eval`: skips re-evaluating rubrics after applying fixes
 - `--skip-inspector`: skips generating fixing instructions, useful if instructions are already generated
 
-Running the corebench with fixes in docker
+Running the corebench with fixes in docker. The runner model is defined in the agent args json file.
 
 ```bash
 python scripts/run_corebench_fixes.py \
