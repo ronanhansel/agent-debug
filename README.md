@@ -10,7 +10,9 @@ conda activate hal
 Install all requirements (this will automatically install packages from submodules `docent` and `hal-harness`)
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt # From agent-debug
+pip install -e ./docent      # Editable install of docent
+pip install -e ./hal-harness  # Editable install of hal-harness
 ```
 
 Build docker env for hal harness
@@ -161,6 +163,7 @@ python scripts/run_corebench_fixes.py \
 ```
 
 ## Note
+
 Watch out for package conflicts when installing
 
 If encountered TLS error, reinstall certifi, click
