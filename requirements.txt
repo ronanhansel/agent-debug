@@ -53,7 +53,7 @@ emoji==2.15.0
 execnet==2.1.2
 executing==2.2.1
 Faker==24.14.1
-fastapi==0.110.3
+fastapi==0.114.1
 fastapi-login==1.10.3
 fastuuid==0.14.0
 fickling==0.1.7

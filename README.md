@@ -168,3 +168,5 @@ If encountered TLS error, reinstall certifi, click
 ```bash
 pip install --upgrade --force-reinstall certifi click
 ```
+
+Make sure
