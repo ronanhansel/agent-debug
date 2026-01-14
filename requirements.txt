@@ -1,9 +1,9 @@
-litellm
-docker
-pydantic
-inspect_ai
-weave
-datasets
+litellm==1.76.0
+docker==7.1.0
+pydantic==2.12.5
+inspect_ai==0.3.160
+weave==0.52.23
+datasets==4.4.2
 aioboto3==15.5.0
 aiobotocore==2.25.1
 aiofiles==25.1.0

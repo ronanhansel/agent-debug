@@ -136,12 +136,15 @@ Rerun only the failed baselines from the mapping file using the fixed code witho
 ```bash
 python scripts/master_rerun_corebench_fixes.py \
     --mapping-file model_to_baseline.json \
-    --rubric-model openai/o3-mini \
     --max-parallel 5 \
-    --max-parallel-capsules 3 \
-    --prefix expA \
-    --wandb-mode online
+    --max-parallel-capsules 5 \
+    --prefix apple \
+    --wandb-mode online \
+    --skip-rubrics
 ```
+
+- `--max-parallel`: max number of parallel processes to run
+- `--max-parallel-capsules`: max number of capsules to run in parallel per process (agent)
 
 - `--prefix`: prefix for the wandb run name
 
@@ -155,4 +158,13 @@ python scripts/run_corebench_fixes.py \
     --task-id capsule-1394704 \
     --wandb-mode online \
     --keep-temp
+```
+
+## Note
+Watch out for package conflicts when installing
+
+If encountered TLS error, reinstall certifi, click
+
+```bash
+pip install --upgrade --force-reinstall certifi click
 ```

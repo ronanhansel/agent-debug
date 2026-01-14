@@ -176,7 +176,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--rubric-model",
-        required=True,
+        required=False,
         help="Rubric model identifier passed through to scripts/run_corebench_fixes.py.",
     )
     parser.add_argument(
@@ -430,8 +430,6 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec, live: _LiveState)
         str((REPO_ROOT / args.agent_dir).resolve()),
         "--agent-args",
         str(temp_agent_args),
-        "--rubric-model",
-        args.rubric_model,
         "--benchmark",
         benchmark,
         "--merged-trace-output",
@@ -439,6 +437,8 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec, live: _LiveState)
         "--merged-run-id",
         run_id,
     ]
+    if not args.skip_rubrics:
+        cmd += ["--rubric-model", args.rubric_model]
     if args.prefix:
         cmd += ["--prefix", args.prefix]
     if args.corebench_dataset:
@@ -538,6 +538,8 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec, live: _LiveState)
 
 def main() -> None:
     args = parse_args()
+    if not args.skip_rubrics and not args.rubric_model:
+        raise SystemExit("--rubric-model is required unless --skip-rubrics is set.")
     mapping_path = (REPO_ROOT / args.mapping_file).resolve()
     specs = load_mapping(mapping_path)
     live = _LiveState(total_specs=len(specs))

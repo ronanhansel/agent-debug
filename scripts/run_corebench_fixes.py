@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import shlex
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
@@ -59,7 +60,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--rubric-model",
-        required=True,
+        required=False,
         help="Model identifier for rubric evaluation (e.g., azure_openai:o3-mini or openai:o3-mini).",
     )
     parser.add_argument(
@@ -162,6 +163,75 @@ def sanitize_tls_env(env: Dict[str, str]) -> None:
             continue
         if "[/]" in value or "[" in value or "]" in value:
             env.pop(key, None)
+
+def _split_channels(raw: str | None) -> List[str]:
+    if not raw:
+        return []
+    parts: List[str] = []
+    for item in shlex.split(raw):
+        parts.extend(x.strip() for x in item.split(",") if x.strip())
+    return [p for p in parts if p]
+
+
+def _split_packages(raw: str | None) -> List[str]:
+    if not raw:
+        return []
+    return [p for p in shlex.split(raw) if p]
+
+
+def _conda_executable() -> str | None:
+    return shutil.which("conda") or os.environ.get("CONDA_EXE")
+
+
+def _install_conda_packages(
+    *,
+    env_name: str,
+    channels: List[str],
+    packages: List[str],
+) -> None:
+    conda = _conda_executable()
+    if not conda:
+        raise FileNotFoundError("conda executable not found (needed for HAL_CONDA_PACKAGES).")
+    if not packages:
+        return
+
+    lock_dir = REPO_ROOT / "log" / "conda_installs"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    cache_key = json.dumps(
+        {"env": env_name, "channels": channels, "packages": packages},
+        sort_keys=True,
+    ).encode("utf-8")
+    cache_id = hashlib.sha256(cache_key).hexdigest()[:16]
+    sentinel = lock_dir / f"{env_name}_{cache_id}.ok"
+    lock_path = lock_dir / f"{env_name}.lock"
+
+    if sentinel.exists():
+        return
+
+    lock_handle = lock_path.open("a", encoding="utf-8")
+    try:
+        try:
+            import fcntl  # type: ignore
+
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        except Exception:
+            pass
+
+        if sentinel.exists():
+            return
+
+        cmd = [conda, "install", "-y", "-n", env_name]
+        for channel in channels:
+            cmd += ["-c", channel]
+        cmd += packages
+        print(f"[setup][conda] {' '.join(map(str, cmd))}")
+        subprocess.run(cmd, check=True, cwd=REPO_ROOT)
+        sentinel.write_text("ok\n", encoding="utf-8")
+    finally:
+        try:
+            lock_handle.close()
+        except Exception:
+            pass
 
 
 def build_hal_eval_cmd(
@@ -413,7 +483,7 @@ def merge_trace_files(
 
 def evaluate_trace(trace_path: Path, rubric_model: str, output_dir: Path) -> None:
     eval_cmd = [
-        "python",
+        sys.executable,
         "main.py",
         "evaluate",
         "--trace-file",
@@ -442,6 +512,7 @@ def run_one_capsule(
     docker: bool,
     vm: bool,
     wandb_mode: str | None,
+    env_override: Dict[str, str] | None,
     rubric_model: str,
     rubric_output_dir: Path,
     skip_rubrics: bool,
@@ -468,6 +539,11 @@ def run_one_capsule(
         print(f"[hal-eval] {' '.join(cmd)}")
         hal_env = os.environ.copy()
         sanitize_tls_env(hal_env)
+        if env_override:
+            for key, value in env_override.items():
+                if value is None:
+                    continue
+                hal_env[str(key)] = str(value)
         extra_path = str(REPO_ROOT / "hal-harness")
         hal_env["PYTHONPATH"] = (
             f"{extra_path}{os.pathsep}{hal_env.get('PYTHONPATH', '')}".rstrip(os.pathsep)
@@ -500,7 +576,7 @@ def run_one_capsule(
 
         if not skip_rubrics:
             eval_cmd = [
-                "python",
+                sys.executable,
                 "main.py",
                 "evaluate",
                 "--trace-file", str(final_trace),
@@ -522,6 +598,8 @@ def run_one_capsule(
 
 def main() -> None:
     args = parse_args()
+    if not args.skip_rubrics and not args.rubric_model:
+        raise SystemExit("--rubric-model is required unless --skip-rubrics is set.")
     fixes_root = Path(args.fixes_root)
     agent_dir = Path(args.agent_dir)
     agent_args_path = Path(args.agent_args)
@@ -552,7 +630,10 @@ def main() -> None:
 
     try:
         fixes_base = fixes_root.parent
-        capsule_jobs: List[tuple[str, str]] = []
+        capsule_jobs: List[tuple[str, str, Dict[str, str] | None]] = []
+        conda_env = "hal"
+        conda_channels: List[str] = []
+        conda_packages: List[str] = []
         for fix_dir in fix_dirs:
             capsule_id = fix_dir.name
             print(f"\n=== Queuing {capsule_id} ===")
@@ -568,21 +649,32 @@ def main() -> None:
                 print(f"[WARN] Failed to load fix for {capsule_id}: {exc}. Skipping.")
                 continue
             input_override = fix.input_override if fix else None
+            env_override = fix.env_override if fix else None
+            if env_override:
+                conda_env = str(env_override.get("HAL_FORCE_CONDA_ENV") or conda_env)
+                conda_channels.extend(_split_channels(env_override.get("HAL_CONDA_CHANNELS")))
+                conda_packages.extend(_split_packages(env_override.get("HAL_CONDA_PACKAGES")))
             payload = build_single_task_payload(
                 original_tasks=capsule_map,
                 capsule_id=capsule_id,
                 input_override=input_override,
             )
-            capsule_jobs.append((capsule_id, payload))
+            capsule_jobs.append((capsule_id, payload, env_override))
 
         if not capsule_jobs:
             print("No runnable capsules found after filtering.")
             return
 
+        # Best-effort: ensure conda packages requested by fix packages are installed once up-front.
+        conda_packages = sorted({p for p in conda_packages if p})
+        conda_channels = sorted({c for c in conda_channels if c}) or ["conda-forge"]
+        if conda_packages:
+            _install_conda_packages(env_name=conda_env, channels=conda_channels, packages=conda_packages)
+
         generated_traces: List[Path] = []
         max_workers = max(1, int(args.max_parallel_capsules))
         if max_workers <= 1 or len(capsule_jobs) <= 1:
-            for capsule_id, payload in capsule_jobs:
+            for capsule_id, payload, env_override in capsule_jobs:
                 print(f"\n=== Processing {capsule_id} ===")
                 generated_traces.append(
                     run_one_capsule(
@@ -597,6 +689,7 @@ def main() -> None:
                         docker=args.docker,
                         vm=args.vm,
                         wandb_mode=args.wandb_mode,
+                        env_override=env_override,
                         rubric_model=args.rubric_model,
                         rubric_output_dir=rubric_output_dir,
                         skip_rubrics=args.skip_rubrics,
@@ -620,12 +713,13 @@ def main() -> None:
                         docker=args.docker,
                         vm=args.vm,
                         wandb_mode=args.wandb_mode,
+                        env_override=env_override,
                         rubric_model=args.rubric_model,
                         rubric_output_dir=rubric_output_dir,
                         skip_rubrics=args.skip_rubrics,
                         keep_temp=args.keep_temp,
                     ): capsule_id
-                    for capsule_id, payload in capsule_jobs
+                    for capsule_id, payload, env_override in capsule_jobs
                 }
                 for future in as_completed(futures):
                     try:

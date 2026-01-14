@@ -1,4 +1,7 @@
 {
-  "HAL_DEPENDENCY_HINT": "Requires Rscript; install R via conda before running.",
-  "HAL_SETUP_COMMANDS": "conda activate hal && conda install -y -c conda-forge r-base && Rscript --version"
+  "HAL_FORCE_CONDA_ENV": "hal",
+  "HAL_CONDA_CHANNELS": "conda-forge",
+  "HAL_CONDA_PACKAGES": "r-base=4.* r-dplyr r-readr r-tidyr r-stringr r-purrr r-lubridate r-data.table r-ggplot2",
+  "R_LIBS_USER": "./.R/library",
+  "HAL_OUTPUT_DIR": "./results"
 }
