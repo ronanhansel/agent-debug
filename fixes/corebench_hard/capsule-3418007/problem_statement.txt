@@ -1,0 +1,5 @@
+If pinned dependencies cannot be installed because the runtime Python version is too new (e.g., numpy/pandas pins incompatible), do not attempt downgrades or network installs. Instead:
+- Explain the dependency/Python mismatch.
+- Provide a compatible requirements set suggestion for modern Python (un-pinned or updated pins) and/or recommend using the project's expected Python version.
+- If matplotlib is required but missing, note it explicitly.
+- Write any outputs only under $HAL_OUTPUT_DIR (default ./results). Use MPLBACKEND=Agg for plots.

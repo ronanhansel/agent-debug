@@ -1,0 +1,4 @@
+If Jupyter/nbconvert are missing and cannot be installed (no network/permissions), avoid attempting to execute the notebook. Instead:
+- Explain the missing `jupyter` toolchain.
+- Note that outputs must be written under $HAL_OUTPUT_DIR (default ./results) rather than ../results.
+- Provide local commands to run `jupyter nbconvert --execute` for PerformanveEval.ipynb.

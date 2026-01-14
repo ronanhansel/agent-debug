@@ -1,0 +1,5 @@
+If required tools for RMarkdown rendering are missing (R/Rscript, pandoc, LaTeX) or file inspection cannot handle .Rmd, do not attempt to install system deps. Instead:
+- Detect missing executables and explain the limitation.
+- If reading files fails due to I/O layer restrictions ("Not a regular file"), note that and proceed with best-effort guidance.
+- Provide local steps to render manuscript.Rmd to PDF.
+- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

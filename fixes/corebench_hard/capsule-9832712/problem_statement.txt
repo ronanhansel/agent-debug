@@ -1,6 +1,5 @@
-Install R inside the conda environment (apt is unavailable) and run the capsule’s scripts entirely within the repo.
-
-1. Activate the env and run `mamba install -y -c conda-forge r-base=4.3 r-essentials` (fallback to `conda install`). Install the packages referenced in `master_script.R` via CRAN, e.g. `Rscript -e "install.packages(c('tidyverse','rmarkdown','knitr','dplyr','readr','ggplot2'), repos='https://cloud.r-project.org', dependencies=TRUE)"`, adding any additional libraries you see.
-2. Create writable directories for packages and outputs: `mkdir -p r_libs results/01_scopus-selection results/02_coding results/03_analyses` and export `R_LIBS_USER="$(pwd)/r_libs"`.
-3. Run the pipeline with `Rscript master_script.R`, ensuring it writes to the `results/…` directories you created instead of unwritable parents.
-4. Inspect the generated figures/tables under `results/` to answer the rubric questions and return the dictionary.
+If Rscript is missing and cannot be installed due to permissions/network restrictions, do not attempt apt-get. Instead:
+- Explain the missing Rscript limitation.
+- Provide best-effort local instructions to run master_script.R and to create the expected results subfolders under the output directory.
+- Use $R_LIBS_USER (writable) for installing required R packages when running locally.
+- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

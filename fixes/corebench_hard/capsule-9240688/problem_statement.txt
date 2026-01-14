@@ -1,5 +1,5 @@
-The instructions mention `run.sh`, but the capsule doesn’t contain that script. Instead, run the actual entry point described in the README (e.g., the R markdown files) and document the alternate workflow.
-
-1. Inspect the repo (especially `README.md` and directories) to find the real execution path (e.g., a Python script or Rmd files). Note that `run.sh` is missing.
-2. Mention this discrepancy in the final answer and follow the documented workflow anyway (for example, run `Rscript 01_motivation.R`, etc., if that matches the repo). Include any steps needed to install dependencies (R via conda, pip requirements, etc.) as in previous capsules.
-3. Return the rubric answers derived from the actual scripts, and clearly state that the original `run.sh` instruction was replaced with the available scripts because the shell script is absent from the repository.
+If the expected entrypoint script (run.sh) is missing from the packaged repository, or the sandbox blocks essential operations (imports like csv or file I/O), do not attempt to bypass restrictions. Instead:
+- Explain that run.sh is missing and list the expected location/name.
+- Explain the sandbox limitations (blocked imports / open()).
+- Provide best-effort guidance on how the task should be executed in a proper environment.
+- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

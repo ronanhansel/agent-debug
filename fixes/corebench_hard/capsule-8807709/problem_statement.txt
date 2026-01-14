@@ -1,6 +1,4 @@
-Install the missing `network_diffusion` dependency (or vendor it into the agent overlay) before running the scripts.
-
-1. If the module is pip-installable, add it via `python -m pip install network-diffusion` (or the package name cited in the paper). If the repository provides a local copy, copy that package into `agent/` so it’s importable.
-2. After `network_diffusion` is on `PYTHONPATH`, rerun the capsule’s workflow (the scripts that import `from network_diffusion import MultiSpreading`). If the module requires extra assets, place them under the repo and adjust `PYTHONPATH` accordingly (e.g., `export PYTHONPATH="$(pwd)/network_diffusion:$PYTHONPATH"`).
-3. Verify that importing `MultiSpreading` succeeds (e.g., `python - <<'PY'\nfrom network_diffusion import MultiSpreading\nPY`).
-4. Execute the capsule’s main program and capture the outputs needed for the rubric answers.
+If required Python dependencies are missing or incompatible (e.g., networkx, network_diffusion lacking required classes like MultiSpreading/PropagationModel), do not attempt network installs in a restricted environment. Instead:
+- Explain the version/API mismatch and that the installed network_diffusion package does not expose the expected classes.
+- Provide best-effort guidance: which dependency versions are needed (or recommend pinning to the repo/README specified versions) and how to verify by `python -c "import network_diffusion; dir(network_diffusion)"`.
+- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

@@ -1,0 +1,4 @@
+If PyTorch (torch) is missing and cannot be installed in this environment, do not attempt downloads. Instead:
+- Detect the missing `torch` import and explain the limitation.
+- Provide best-effort instructions to install the correct torch build locally (CPU/GPU) and rerun code/src/demo.py.
+- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

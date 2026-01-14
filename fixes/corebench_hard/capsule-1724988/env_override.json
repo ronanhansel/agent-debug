@@ -1,0 +1,6 @@
+{
+  "HAL_OUTPUT_DIR": "./results",
+  "HAL_DATA_DIR": "./data",
+  "R_HOME": "",
+  "R_LIBS_USER": ""
+}

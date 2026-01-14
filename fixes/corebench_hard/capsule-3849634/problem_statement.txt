@@ -1,7 +1,4 @@
-Install R locally (no apt) and keep all rendered outputs inside the repository so the run no longer depends on unwritable locations.
-
-1. Inside the provided conda env run `mamba install -y -c conda-forge r-base=4.3 r-essentials` (or `conda install`). Install the packages used in the notebook via CRAN, e.g.  
-   `Rscript -e "install.packages(c('tidyverse','rmarkdown','knitr','ggplot2','dplyr','readr'), repos='https://cloud.r-project.org', dependencies=TRUE)"`, adding any additional libraries referenced in the R scripts.
-2. Export a local library path before installing anything else: `mkdir -p r_libs && export R_LIBS_USER="$(pwd)/r_libs"`.
-3. When the capsule asks to render its Rmd files, use a workspace directory instead of `../results`, e.g. `mkdir -p results && Rscript -e "rmarkdown::render('<file>.Rmd', output_dir='results', output_format='html_document', clean=TRUE)"`.
-4. Review the outputs under `results/` to gather the values needed for the final answer and respond with the required dictionary.
+If Rscript is missing and cannot be installed (no permissions), do not attempt apt-get. Instead:
+- Explain the missing Rscript limitation.
+- Provide best-effort local instructions to run meta-analysis.R (system deps + R packages).
+- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

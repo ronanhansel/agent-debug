@@ -1,6 +1,4 @@
-The container doesn’t ship Rscript and blocks apt, so install R inside conda and set the default packages explicitly before rendering. Also keep outputs inside the repo instead of `../results`.
-
-1. Install R locally: `mamba install -y -c conda-forge r-base=4.3 r-essentials` (or `conda install`). Install every library referenced in `ResultReproducibilityNotebook.Rmd` via CRAN, e.g. `Rscript -e "install.packages(c('tidyverse','rmarkdown','knitr','igraph','reshape2','ggplot2','gridExtra','dplyr'), repos='https://cloud.r-project.org', dependencies=TRUE)"`, adding any others you see.
-2. Before running the notebook, export the default package list the paper expects: `export R_DEFAULT_PACKAGES="datasets,utils,grDevices,graphics,stats,methods"` (or set `options(defaultPackages=...)` at the top of the R session).
-3. Create a writable output folder inside the repo, e.g. `mkdir -p results`, and render with `Rscript -e "rmarkdown::render('ResultReproducibilityNotebook.Rmd', output_format='html_document', output_file='ResultReproducibilityNotebook.html', output_dir='results', clean=TRUE)"`.
-4. Open the generated HTML in `results/` to read Figure 2(a)’s x-axis label and the label of the red line in the Network Density plot, then return those values in the required dictionary.
+If R/Rscript/pandoc are missing and cannot be installed in this environment, do not attempt apt-get. Instead:
+- Detect missing executables and explain the limitation.
+- Provide best-effort instructions to render ResultReproducibilityNotebook.Rmd locally (system deps + R packages).
+- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

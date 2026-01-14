@@ -1,11 +1,4 @@
-Install system-level headers and R inside conda, then render the Rmd into a local results directory.
-
-1. Activate the env and run  
-   `mamba install -y -c conda-forge r-base=4.3 r-essentials curl openssl`  
-   (fallback to `conda install`). This provides libcurl/openssl headers for CRAN installs.
-2. Set a writable R library path: `mkdir -p r_libs && export R_LIBS_USER="$(pwd)/r_libs"`.
-3. Install the packages referenced in `manuscript.Rmd` via CRAN, e.g.  
-   `Rscript -e "install.packages(c('tidyverse','rmarkdown','knitr','readr','dplyr','ggplot2','metafor'), repos='https://cloud.r-project.org', dependencies=TRUE)"`, adding any others you see.
-4. Create a workspace results folder: `mkdir -p results`. Render with  
-   `Rscript -e "rmarkdown::render('manuscript.Rmd', output_format='pdf_document', output_file='manuscript.pdf', output_dir='results', clean=TRUE)"`.
-5. Review `results/manuscript.pdf` to extract the requested table values and return them in the rubric dictionary.
+If rendering manuscript.Rmd requires R/pandoc/pdflatex or specific R package versions not available in this environment, do not attempt system installs. Instead:
+- Explain missing system deps and version constraints.
+- Provide local/container steps to install R, pandoc, TeX, and required packages, using $R_LIBS_USER for a writable library.
+- Write any outputs only under $HAL_OUTPUT_DIR (default ./results) and avoid creating ../results.

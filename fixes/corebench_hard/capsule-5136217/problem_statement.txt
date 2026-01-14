@@ -1,6 +1,5 @@
-Install R locally and run the capsule’s R scripts directly from the repo.
-
-1. Activate the conda environment and run `mamba install -y -c conda-forge r-base=4.3 r-essentials` (or `conda install`). Install every library the capsule uses via CRAN, e.g. `Rscript -e "install.packages(c('tidyverse','rmarkdown','knitr','ggplot2','dplyr','readr'), repos='https://cloud.r-project.org', dependencies=TRUE)"`, adding any additional libraries you see at the top of the scripts.
-2. Set a writable package library: `mkdir -p r_libs && export R_LIBS_USER="$(pwd)/r_libs"`.
-3. Run each required R script with `Rscript <scriptname>`, storing outputs inside a local `results/` directory you create in the workspace.
-4. Inspect the resulting figures/tables to extract the answers for the rubric and respond with the expected dictionary.
+If required system tools or orchestrator scripts are missing (e.g., Rscript or run.sh), and you cannot install/restore them (no permissions/network), do not attempt apt-get downloads. Instead:
+- Explain which tools/files are missing (Rscript, ../agent/environment/code/run.sh).
+- Provide best-effort guidance on expected repository layout and how to run all .R scripts under ../code locally.
+- Use $R_LIBS_USER (writable) if R is present but packages are missing.
+- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

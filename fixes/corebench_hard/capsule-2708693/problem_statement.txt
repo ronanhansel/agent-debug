@@ -1,5 +1,5 @@
-`preregSR_manuscript.Rmd` needs Rscript plus tex dependencies, but the container cannot use apt or write to `/var/lib/apt`. Install R inside conda and write outputs to a repo-local folder.
-
-1. Activate the provided conda env and install R: `mamba install -y -c conda-forge r-base=4.3 r-essentials` (or `conda install` if needed). Then install the R packages referenced in the manuscript via CRAN, e.g. `Rscript -e "install.packages(c('rmarkdown','knitr','tidyverse','metafor','dplyr','readr','ggplot2','scales'), repos='https://cloud.r-project.org', dependencies=TRUE)"`, adding any additional libraries you see in the Rmd file.
-2. Because `../results` is outside the writable sandbox, create a local directory instead: `mkdir -p results`. When rendering, point rmarkdown at that folder: `Rscript -e "rmarkdown::render('preregSR_manuscript.Rmd', output_format='pdf_document', output_file='preregSR_manuscript.pdf', output_dir='results', clean=TRUE)"`.
-3. After the PDF lands in `results/`, open it (or inspect the intermediate tables) to extract the requested k value (medicine discipline) and the n value for the disclosure percentage metric. Return those numbers in the rubric dictionary.
+If system dependencies needed for rendering (R/Rscript, pandoc, LaTeX) are missing or cannot be installed (no permissions/network), do not attempt apt-get or downloads. Instead:
+- Detect missing executables early and explain the limitation.
+- If expected repo files (e.g., preregSR_manuscript.Rmd/README) are absent, explain what is missing.
+- Provide best-effort local instructions to render the Rmd to PDF.
+- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

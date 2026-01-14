@@ -1,6 +1,6 @@
-The sandbox blocks `/data`, so run entirely from the repository’s data directory.
+If code expects an absolute /data directory, treat $HAL_DATA_DIR (default ./data) as the data root and avoid creating /data (may be permission denied).
 
-1. Find where the capsule actually stores its datasets (e.g., `DATA_ROOT=$(pwd)/environment/data`). Use `find environment -name '*.csv'` if needed.
-2. For every script that currently hardcodes `"/data/..."`, edit it (via the agent overlay if necessary) to build paths relative to the repo, e.g. `data_root <- file.path(getwd(), "environment", "data")` and `file.path(data_root, "foo.csv")`.
-3. If a script insists on `/data`, create a local directory instead: `mkdir -p data && ln -s "$(pwd)/environment/data" data/dataset` (or similar) so the code sees the expected files without touching the true `/data`.
-4. After the paths are patched, rerun the capsule’s workflow (bash scripts or Python/R files as instructed) and capture the requested outputs for the final answer.
+If TensorFlow is required but not available/unsupported for this Python version, do not attempt to install it (no network). Instead:
+- Explain the TensorFlow/Python incompatibility.
+- Provide best-effort local instructions: use a compatible Python (often 3.10/3.11) and install tensorflow, then place multiclass_model.h5 under the data directory.
+- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

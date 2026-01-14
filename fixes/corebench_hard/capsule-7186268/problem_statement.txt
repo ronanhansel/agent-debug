@@ -1,7 +1,4 @@
-Install R inside the conda environment (apt is blocked) before running the capsule.
-
-1. Activate the provided env and run `mamba install -y -c conda-forge r-base=4.3 r-essentials` (fallback to `conda install` if needed). Install the capsule’s R dependencies with CRAN, e.g.  
-   `Rscript -e "install.packages(c('tidyverse','ggplot2','gridExtra','dplyr','readr'), repos='https://cloud.r-project.org', dependencies=TRUE)"`, adding any extra libraries you see.
-2. Create a writable library path: `mkdir -p r_libs && export R_LIBS_USER="$(pwd)/r_libs"`.
-3. Run the required R scripts with `Rscript` from the repo root, writing all outputs to a local `results/` directory (`mkdir -p results`) instead of unwritable parents.
-4. Inspect the regenerated figures/tables in `results/` to answer the rubric questions and respond with the expected dictionary.
+If system tools for rendering Rmd are missing (R/Rscript/pandoc) and cannot be installed (no permissions/network), do not attempt apt-get. Instead:
+- Explain missing dependencies.
+- Provide local steps to render SampleCode.Rmd.
+- Write any outputs only under $HAL_OUTPUT_DIR (default ./results), not ../results.

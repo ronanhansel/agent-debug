@@ -1,9 +1,5 @@
-R needs a writable library path, so install it inside conda and point `R_LIBS_USER` at a repo-local directory before running `ktc_11_paper.Rmd`.
-
-1. Install R in the active env: `mamba install -y -c conda-forge r-base=4.3 r-essentials` (use `conda install` if mamba isn’t present). Then install the packages referenced in the Rmd via CRAN, e.g.  
-   `Rscript -e "install.packages(c('rmarkdown','knitr','tidyverse','ggplot2','scales','dplyr','readr'), repos='https://cloud.r-project.org', dependencies=TRUE)"` (add any other libraries you see).
-2. Create a writable library and results folders inside the repo:  
-   `mkdir -p r_libs results/figures` and export `export R_LIBS_USER="$(pwd)/r_libs"`.
-3. Render the manuscript:  
-   `Rscript -e "rmarkdown::render('ktc_11_paper.Rmd', output_format='html_document', output_dir='results', output_file='ktc_11_paper.html', clean=TRUE)"`.
-4. Open `results/ktc_11_paper.html` (or the generated figures) to extract the table/figure answers, then return them as the final dictionary.
+If R/Rscript or R packages cannot be installed due to permissions (e.g., /usr/local/lib/R/site-library not writable), do not attempt system installs. Instead:
+- Set/use a user-writable R library path via $R_LIBS_USER (provided) and explain how to install packages there.
+- If Rscript itself is missing, explain the limitation.
+- Provide local steps to render ktc_11_paper.Rmd.
+- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

@@ -1,5 +1,4 @@
-The parent of this workspace is read-only, so every attempt to create `../results/...` fails. Keep all artifacts inside the repo instead, then answer the rubric questions from the regenerated HTML.
-
-1. Install R in the active conda env: `mamba install -y -c conda-forge r-base=4.3 r-essentials` (fall back to `conda install`). Install the packages used by the Rmd files with CRAN, for example `Rscript -e "install.packages(c('tidyverse','rmarkdown','knitr','lme4','optimx','bayestestR','ggplot2','gridExtra','dplyr','purrr'), repos='https://cloud.r-project.org', dependencies=TRUE)"`, and add any extra libraries you see.
-2. Create writable result folders inside the repo: `mkdir -p results/intermediates results/figures results/stats_figures_markdowns`. Whenever the instructions mention `../results/...`, substitute these local directories. When calling rmarkdown, use something like `Rscript -e "rmarkdown::render('<file>.Rmd', output_dir='results/stats_figures_markdowns', output_format='html_document', clean=TRUE)"`.
-3. Run each `.Rmd` file with those settings so that all intermediate CSVs/plots end up under `results/`. Review the rendered HTMLs in `results/stats_figures_markdowns/` to extract the Study 1 and Study 2 response rate means for the final answer.
+If the environment is missing system dependencies (e.g., R/Rscript) or cannot install packages due to permissions/network restrictions, do not attempt apt-get or network installs. Instead:
+- Detect missing executables early and explain that the task cannot be executed in this runtime.
+- Still provide a best-effort static response: describe how to run/render the project locally and what outputs would be produced.
+- Write any outputs only under the directory specified by $HAL_OUTPUT_DIR (default ./results).

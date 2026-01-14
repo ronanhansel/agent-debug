@@ -1,0 +1,7 @@
+You may be running in a restricted Python interpreter that blocks imports like subprocess/os/pathlib/typing and may not contain the expected repository files.
+
+Rules:
+- Do not attempt to bypass import restrictions.
+- Do not assume demo/README files exist; if file reads fail, explain what files are expected and how to obtain them.
+- Provide a best-effort static answer: describe how to run the demo scripts locally and what outputs/plots would be generated.
+- Write any outputs only under $HAL_OUTPUT_DIR (default ./results). Use a headless plotting backend (MPLBACKEND=Agg).

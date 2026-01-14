@@ -1,6 +1,0 @@
-The required data files already ship with the capsule but live inside the repo. Point the code at those files instead of `../data/...` (which doesn’t exist here).
-
-1. Locate the ini/mat files with `find . -name 'parameter_ini.txt'` and `find . -name 'musk1+.mat'`. Note their actual paths (e.g., `./environment/data/Ini/parameter_ini.txt` and `./environment/data/Benchmark/musk1+.mat`).
-2. Edit the scripts or configuration (via overlay) to set `DATA_ROOT <- file.path(getwd(), "environment", "data")` and replace every `../data/...` reference with `file.path(DATA_ROOT, "Ini", "parameter_ini.txt")`, etc.
-3. After the paths are fixed, execute the capsule’s pipeline (most likely a Python script) so it consumes the local data instead of failing on missing files.
-4. Use the regenerated outputs to answer the rubric questions and return the dictionary.

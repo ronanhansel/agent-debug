@@ -1,10 +1,6 @@
-Install all system dependencies inside conda (no apt) and keep outputs inside the repo.
-
-1. Activate the env and run  
-   `mamba install -y -c conda-forge r-base=4.3 r-essentials cmake make curl openssl`  
-   (use `conda install` if mamba isn’t available). This provides R, Rscript, cmake, and the headers CRAN packages need.
-2. Set a writable R library path: `mkdir -p r_libs && export R_LIBS_USER="$(pwd)/r_libs"`.
-3. Install the R packages referenced in the capsule (e.g., `tidyverse`, `ggplot2`, `dplyr`, `readr`, `rmarkdown`, `knitr`, `BiocManager`) using CRAN/Bioconductor as needed:  
-   `Rscript -e "install.packages(c('tidyverse','rmarkdown','knitr','ggplot2','dplyr','readr'), repos='https://cloud.r-project.org', dependencies=TRUE)"`.
-4. Create a local `results/` directory and adjust any script arguments so outputs go there instead of `/results`.
-5. Run the capsule’s R scripts with `Rscript`, then inspect the regenerated results in `results/` to answer the rubric questions.
+If rendering OncoBird/vignettes/OncoBird.Rmd requires system tools that are missing (R>=4.2, pandoc, LaTeX) or R/Bioconductor packages that cannot be installed due to permissions/network restrictions, do not attempt system installs. Instead:
+- Explain which system deps are missing and that PDF rendering is blocked.
+- Provide best-effort local/container setup steps (R>=4.2 + pandoc + TeX + Bioconductor deps) and how to render the vignette.
+- Respect sandbox limitations (if imports/file I/O are restricted, note that and proceed with guidance).
+- Use $R_LIBS_USER for a writable R library.
+- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

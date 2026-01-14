@@ -1,0 +1,4 @@
+If reading .xlsx fails due to xlrd not supporting xlsx, do not attempt incompatible downgrades. Instead:
+- Explain that modern xlrd dropped xlsx support and recommend using openpyxl (or pandas with engine=openpyxl).
+- If dependency installation is blocked, provide local steps to update requirements and rerun.
+- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

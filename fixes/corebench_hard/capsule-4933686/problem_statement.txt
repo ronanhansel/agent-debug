@@ -1,6 +1,4 @@
-Rscript and `/results` are missing; install R locally and keep outputs inside the repo.
-
-1. In the active conda env, run `mamba install -y -c conda-forge r-base=4.3 r-essentials` (or `conda install`). Install the packages referenced by `Main.R` via CRAN, e.g. `Rscript -e "install.packages(c('tidyverse','ggplot2','dplyr','readr','rmarkdown','knitr'), repos='https://cloud.r-project.org', dependencies=TRUE)"`, adding any additional libraries you see in the script.
-2. Create a writable library and results directory: `mkdir -p r_libs results && export R_LIBS_USER="$(pwd)/r_libs"`.
-3. If the script expects `/results`, override it by setting `export RESULTS_DIR="$(pwd)/results"` (or edit the script via the agent tools) so everything writes to `results/` inside the repo.
-4. Run `Rscript Main.R` (or via `xvfb-run Rscript Main.R` if the notebook requires X11). Once it completes, read the regenerated artifacts in `results/` to answer the rubric questions.
+If required system tools are missing (Rscript, xvfb-run) and cannot be installed (no permissions/network), do not attempt apt-get/conda downloads. Instead:
+- Explain which system dependencies are missing.
+- Note that any outputs should go under $HAL_OUTPUT_DIR (default ./results) and avoid creating ../results or /results.
+- Provide local/container setup instructions (install R + xvfb + required R packages) and how to run Main.R.

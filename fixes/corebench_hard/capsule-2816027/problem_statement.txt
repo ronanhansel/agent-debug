@@ -1,5 +1,4 @@
-`main.R` can’t run because Rscript is missing. Install R inside conda, ensure the requested default packages are exported, then execute the script.
-
-1. From the repo root, run `mamba install -y -c conda-forge r-base=4.3 r-essentials` (or `conda install` if mamba isn’t present). Install the packages that `main.R` loads with CRAN, e.g. `Rscript -e "install.packages(c('tidyverse','limma','GSVA','ggplot2','dplyr','readr'), repos='https://cloud.r-project.org', dependencies=TRUE)"`, adding any additional libraries you see at the top of the script.
-2. Export the default package list the capsule calls out before running: `export R_DEFAULT_PACKAGES="datasets,utils,grDevices,graphics,stats,methods"`.
-3. Run the analysis via `Rscript main.R` (or whatever working directory the capsule expects). When it completes, inspect the resulting plots/tables to identify which group has the highest median GSVA score for the CTCF Signature Enrichment figure, and use that value in the final answer.
+If Rscript is missing and cannot be installed (no permissions/network), do not attempt apt-get. Instead:
+- Detect missing Rscript and explain the limitation.
+- Provide best-effort instructions to run main.R locally and list required packages.
+- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

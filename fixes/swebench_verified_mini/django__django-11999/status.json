@@ -1,8 +1,0 @@
-{
-  "task_id": "django__django-11999",
-  "benchmark": "swebench_verified_mini",
-  "trace_path": "/Users/ronan/Developer/agent-debug/traces/debug_runs/swebench_verified_mini_hal_generalist_agent_o3mini20250131_low_1744603516_UPLOAD_debug_20260112_165718.json",
-  "checked_at": "2026-01-12T16:57:34Z",
-  "failures": [],
-  "status": "passed"
-}

@@ -1,7 +1,4 @@
-Run `01_code.R` with Rscript after installing R inside the conda environment (apt is unavailable in this container).
-
-Steps:
-1. From the repository root, install R into the working conda env: `mamba install -y -c conda-forge r-base=4.3 r-essentials` (use `conda install` if mamba is missing). This installs `Rscript` without requiring root permissions.
-2. Inspect `01_code.R` for its `library()` calls and install those packages locally, e.g. `Rscript -e "install.packages(c('tidyverse','data.table','ggplot2','gridExtra','readr','scales'), repos='https://cloud.r-project.org', dependencies=TRUE)"`. Repeat for any additional packages the script loads (installing from CRAN is sufficient).
-3. Once packages are installed, run `Rscript 01_code.R` from the directory containing the script. Let it finish even if some warnings appear.
-4. Extract the three Type-1 error rates requested in the task from the script’s output/logs and return them as a Python list sorted in descending order.
+If the environment is missing system dependencies (e.g., R/Rscript) or cannot install packages due to permissions/network restrictions, do not attempt apt-get or network installs. Instead:
+- Detect missing executables early and explain that the task cannot be executed in this runtime.
+- Still provide a best-effort static response: describe how to run the provided script locally (commands, required system deps) and what outputs would be produced.
+- Write any outputs only under the directory specified by $HAL_OUTPUT_DIR (default ./results).
