@@ -150,6 +150,19 @@ def normalize_value(value: object) -> str:
         return "null"
     return str(value)
 
+def sanitize_tls_env(env: Dict[str, str]) -> None:
+    """
+    Some environments accidentally set invalid CA bundle paths (e.g. "...cacert.pem[/]"),
+    which breaks Weave/W&B/requests TLS and can cause long retries/hangs.
+    Remove obviously broken overrides and allow defaults to take over.
+    """
+    for key in ("REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "CURL_CA_BUNDLE"):
+        value = env.get(key)
+        if not value:
+            continue
+        if "[/]" in value or "[" in value or "]" in value:
+            env.pop(key, None)
+
 
 def build_hal_eval_cmd(
     *,
@@ -454,6 +467,7 @@ def run_one_capsule(
         )
         print(f"[hal-eval] {' '.join(cmd)}")
         hal_env = os.environ.copy()
+        sanitize_tls_env(hal_env)
         extra_path = str(REPO_ROOT / "hal-harness")
         hal_env["PYTHONPATH"] = (
             f"{extra_path}{os.pathsep}{hal_env.get('PYTHONPATH', '')}".rstrip(os.pathsep)

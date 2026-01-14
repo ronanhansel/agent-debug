@@ -145,7 +145,6 @@ python scripts/master_rerun_corebench_fixes.py \
 
 - `--prefix`: prefix for the wandb run name
 
-
 ```bash
 python scripts/run_corebench_fixes.py \
     --fixes-root fixes/corebench_hard \
