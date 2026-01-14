@@ -468,6 +468,12 @@ def build_codex_prompt(task_ids: List[str], args: argparse.Namespace, logger: Fi
     lines.append("[GLOBAL INSTRUCTIONS]")
     lines.append(common_instructions)
     lines.append("")
+    lines.append("[ENVIRONMENT]")
+    lines.append(
+        "If you include any Python commands in your guidance, assume they should be run inside the preconfigured "
+        "conda environment named `hal` (e.g., `conda activate hal`)."
+    )
+    lines.append("")
 
     for item in tasks_payload:
         task_id = item["task_id"]

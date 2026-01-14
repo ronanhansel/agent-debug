@@ -1,25 +1,26 @@
 {
-  "analysis": "The run failed because the environment lacks the necessary system-level dependencies: both Rscript and xvfb-run are missing, and the expected output directory (/results) does not exist. This prevents installation of required R packages and execution of Main.R.",
-  "rationale": "The evidence shows error messages such as '/bin/sh: 1: Rscript: not found' and '/bin/sh: 1: xvfb-run: not found'. Additionally, installation via apt-get and conda failed due to permission errors and an unsolvable environment, while attempts to access the output directory resulted in 'ls: cannot access \"/results\": No such file or directory'. These clearly indicate that the failure is due to environmental barriers rather than logic or coding errors.",
+  "analysis": "The run failed due to missing and misconfigured system-level dependencies. The R runtime (Rscript) and the Xvfb tool are not available, and the expected output directory (/results) is absent. This is not a coding error in the agent logic but an environmental barrier.",
+  "rationale": "Evidence in the log shows errors such as '/bin/sh: 1: Rscript: not found' and '/bin/sh: 1: xvfb-run: not found', along with permission errors when trying to install these via apt-get. Additionally, the missing '/results' directory further blocks output extraction. Attempts to install via conda also failed, confirming that the environment is missing the requisite R runtime and dependencies.",
   "recommended_files": [
-    "README.md",
-    "Main.R",
-    "requirements.txt"
+    "env_override.json",
+    "problem_statement.txt",
+    "README.md"
   ],
   "recommended_actions": [
-    "In the fix package, add an env override (env_override.json) to set a writable output directory (HAL_OUTPUT_DIR) that replaces '/results' with a directory that exists and is writable.",
-    "Set env overrides for R by defining R_HOME and R_LIBS_USER to point to an R installation and a library path in a writable location.",
-    "If possible within the harness, update the agent overlay or prompt (problem_statement.txt) to instruct the use of vendored or conda-installed R, ensuring that Rscript is available in PATH and that xvfb-run (or an alternative headless execution mechanism) is accessible.",
-    "Adjust the prompt/input overrides to include explicit installation or path configuration instructions for R and xvfb-run without using root privileges, for example by specifying conda-based installations that are supported in the evaluation environment."
+    "1. In the fix package, add env overrides to specify a valid, writable output directory (e.g., set 'HAL_OUTPUT_DIR' to a working directory path).",
+    "2. Configure environment variables for R by setting 'R_HOME' and 'R_LIBS_USER' in env_override.json so that the agent can reliably access Rscript and install required R packages.",
+    "3. Modify the problem_statement/input override (problem_statement.txt) to instruct the coding agent to use harness-supported installation methods (e.g., conda environments) to load R and xvfb-run if possible.",
+    "4. Update repository documentation (README.md) in the overlay with precise steps for installing system-level R dependencies in the evaluation environment, using ambient conda installs if direct apt installations are not permitted."
   ],
   "next_steps": "Create or update /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-4933686 with overlays/patches/input/env overrides. Do NOT run the HAL debugger or any rerun commands as part of this step. Do a careful self-review and produce a complete fix package in one pass.",
-  "inspector_suggested_next_steps": "After applying these recommended fix-package env and prompt/input overrides, the coding agent must re-run the HAL debugger to validate that the changes allow Main.R to execute and generate outputs.",
+  "inspector_suggested_next_steps": "After applying these fixes in the overlay package, ensure that the HAL debugger is re-run to validate that Rscript, xvfb-run, and the proper output directory are correctly configured.",
   "coding_agent_context": {
     "working_directory": "/Users/ronan/Developer/agent-debug/hal-harness",
     "fix_folder": "/Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-4933686",
     "system_prompt": "You are a coding agent operating inside hal-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<task_id>/, and do NOT run any reruns. Never modify repository files directly; only create or update fix packages.",
     "instructions": [
       "cd /Users/ronan/Developer/agent-debug/hal-harness",
+      "If you include any Python commands in your guidance, assume they should be run inside the preconfigured conda env `hal` (e.g., `conda activate hal`).",
       "Inspect inspection_report.json for analysis and rationale.",
       "Do NOT modify repository files directly; place overlays or patches under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-4933686.",
       "Prefer dropping fully-edited files under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-4933686/agent (patch.diff is only a fallback when overlays are impractical).",
