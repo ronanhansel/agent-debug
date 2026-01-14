@@ -371,6 +371,8 @@ def ensure_inspector(args: argparse.Namespace, logger: FixingPipelineLogger) -> 
         "--run-label",
         "latest",
     ]
+    for task_id in args.task_ids or []:
+        cmd += ["--task-id", task_id]
     inspector_agent_args = default_agent_args_cli_value(args.agent_args)
     if inspector_agent_args:
         cmd += ["--agent-args", inspector_agent_args]
