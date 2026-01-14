@@ -1,34 +1,34 @@
 {
-  "analysis": "The run failed because the required system dependency (Rscript) is missing from the environment, and the file inspection tool does not support .Rmd files. Additionally, the I/O layer shows issues with reading files like README.md, indicating environmental restrictions.",
-  "rationale": "The error messages '/bin/sh: 1: Rscript: not found' and 'UnsupportedFormatException: Could not convert './environment/code/manuscript.Rmd' to Markdown' clearly indicate that the environment lacks the necessary tooling for rendering the R Markdown file. Further, repeated 'Not a regular file' errors when accessing README.md reinforce that the file system or I/O tools are not operating as expected under the current environmental constraints.",
+  "analysis": "The run failed due to environmental limitations: the system lacks the required Rscript executable for rendering the .Rmd file, and the file inspection tool does not support .Rmd formats. Additionally, the file I/O tools are misreporting even regular files, indicating infrastructure issues.",
+  "rationale": "Evidence shows the error '/bin/sh: 1: Rscript: not found' and an UnsupportedFormatException when trying to convert 'manuscript.Rmd'. Consistent 'Not a regular file' errors when accessing README.md further confirm an environmental barrier rather than a code logic error.",
   "recommended_files": [
-    "environment/code/manuscript.Rmd",
-    "README.md",
     "env_override.json",
-    "requirements.txt"
+    "problem_statement.txt",
+    "README.md",
+    "environment/code/manuscript.Rmd"
   ],
   "recommended_actions": [
-    "Configure or install the R tooling so that Rscript is available. For example, add an environment override (via env_override.json) or a fix-package that installs R via conda/mamba in a writable directory.",
-    "Update the file inspection configuration to either support .Rmd files or bypass the inspection for these file types if rendering must be handled externally.",
-    "Review the repository's README.md for specifics on the R version and LaTeX dependencies; ensure these are installed per the instructions.",
-    "Ensure all environment variables (e.g., R_HOME, R_LIBS_USER, HAL_OUTPUT_DIR) are correctly set in the env_override.json to allow proper installation and execution of R and other required tools.",
-    "Verify that the ../results directory exists or is created by the fix-package setup so that the rendered PDF can be stored as required."
+    "1. In the fix package, use an env override to specify R_HOME and R_LIBS_USER so that a local R installation (or vendored R environment) can be used, ensuring Rscript becomes available in the evaluation environment.",
+    "2. Include an env override for 'HAL_OUTPUT_DIR' to point to a writable directory for the rendered PDF output.",
+    "3. Add a prompt/input override in problem_statement.txt or input_override.json to instruct the agent to bypass direct file inspection of .Rmd files and to use a fallback method (e.g., specifying expected text extraction or using pandoc if available).",
+    "4. Instruct the coding agent to review the README.md for dependency instructions and check if any additional commands are needed to install LaTeX or pandoc via harness-supported mechanisms (e.g., conda or vendored dependencies).",
+    "5. Ensure that the fix package makes modifications at the environment and prompt/input level only, to work within the constraints of the evaluation environment."
   ],
-  "next_steps": "After applying these remediation actions, the coding agent must re-run the HAL debugger to validate that the environment now supports the complete PDF rendering process. Create or update /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-3262218 with overlays/patches/input/env overrides. After packaging fixes, rerun `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest` to validate queued tasks. For a quick single-task check, rerun `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-3262218`.",
+  "next_steps": "Create or update /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-3262218 with overlays/patches/input/env overrides. Do NOT run the HAL debugger or any rerun commands as part of this step. Do a careful self-review and produce a complete fix package in one pass.",
+  "inspector_suggested_next_steps": "After applying the above fixes in the fix package, the coding agent must re-run the HAL debugger to validate that the environment is correctly configured and the PDF rendering process can proceed successfully.",
   "coding_agent_context": {
     "working_directory": "/Users/ronan/Developer/agent-debug/hal-harness",
     "fix_folder": "/Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-3262218",
-    "rerun_command": "python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest",
-    "rerun_single_task_command": "python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-3262218",
-    "system_prompt": "You are a coding agent operating inside hal-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<task_id>/, and rerun the debugger command to validate. Never modify repository files directly.",
+    "system_prompt": "You are a coding agent operating inside hal-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<task_id>/, and do NOT run any reruns. Never modify repository files directly; only create or update fix packages.",
     "instructions": [
       "cd /Users/ronan/Developer/agent-debug/hal-harness",
       "Inspect inspection_report.json for analysis and rationale.",
       "Do NOT modify repository files directly; place overlays or patches under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-3262218.",
       "Prefer dropping fully-edited files under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-3262218/agent (patch.diff is only a fallback when overlays are impractical).",
       "Use input_override.json / problem_statement.txt / env_override.json if inputs or env vars must change (store them beside the fix).",
-      "After preparing the fix package, rerun the debugger using `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest` for the full backlog.",
-      "To iterate quickly on this task only, run `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-3262218` (leverages --task-id filtering)."
+      "Do NOT run the HAL debugger or any rerun commands as part of this step.",
+      "Do a careful self-review and produce a complete fix package in one pass.",
+      "If the fix needs validation, describe what should be validated, but do not execute commands."
     ]
   }
 }

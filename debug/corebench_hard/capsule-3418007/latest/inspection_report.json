@@ -1,31 +1,32 @@
 {
-  "analysis": "The run failed because the repository\u2019s pinned dependencies (e.g., pandas==1.2.5 and numpy==1.19.5) are incompatible with the environment\u2019s too-new Python version, resulting in a dependency installation failure and subsequent missing module errors.",
-  "rationale": "The error trace clearly shows that pip install -r environment/requirements.txt exited nonzero due to build failures with these pinned versions, and later failed with a ModuleNotFoundError for matplotlib, indicating that the dependencies were not successfully installed.",
+  "analysis": "The run failed because the repository\u2019s pinned dependencies (e.g., pandas==1.2.5 and numpy==1.19.5) are incompatible with the environment\u2019s newer Python version, causing pip to fail during installation and leading to missing modules like matplotlib.",
+  "rationale": "Evidence in the error trace shows pip installation failure with messages for pandas==1.2.5 and numpy==1.19.5 (pip resolver/build failure with exit code 2). The subsequent ModuleNotFoundError for matplotlib confirms that the required dependencies were not installed.",
   "recommended_files": [
     "requirements.txt",
     "README.md"
   ],
   "recommended_actions": [
-    "Review the README.md for any notes about supported Python versions and installation instructions.",
-    "Inspect the requirements.txt file to identify and update or relax the version pins for packages (e.g., pandas and numpy) that are not compatible with the current Python version.",
-    "Consider using a fix-package env override (e.g., in env_override.json) to either adjust the Python environment to a supported version or to allow for updated dependency versions that work with the current environment.",
-    "Run pip install -r requirements.txt manually to verify that all dependencies install successfully, before executing main.py."
+    "Review the requirements.txt file to identify the pinned versions that are incompatible with the current Python version.",
+    "Update the pinned dependency versions to ones that support the environment\u2019s Python version (or remove pinning if possible) so that pip install succeeds.",
+    "Check the repository's README.md for any specific installation instructions; if needed, add environment overrides using fix-package env/input overrides (e.g., specify 'MPLBACKEND' to set matplotlib backend if required).",
+    "Prepare a fix package that includes agent overlays to update the dependency versions, and consider using env_override.json to set a writable output directory (HAL_OUTPUT_DIR) if file permissions or paths are an issue.",
+    "Ensure that after updating dependencies, the main.py script can execute and produce the required performance metrics and figures."
   ],
-  "next_steps": "After making the required changes, re-run the HAL debugger to verify that the task now completes without dependency errors. Create or update /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-3418007 with overlays/patches/input/env overrides. After packaging fixes, rerun `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest` to validate queued tasks. For a quick single-task check, rerun `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-3418007`.",
+  "next_steps": "Create or update /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-3418007 with overlays/patches/input/env overrides. Do NOT run the HAL debugger or any rerun commands as part of this step. Do a careful self-review and produce a complete fix package in one pass.",
+  "inspector_suggested_next_steps": "After applying these fixes, the coding agent must re-run the HAL debugger to validate that the dependency installation now works and the run produces the expected outputs.",
   "coding_agent_context": {
     "working_directory": "/Users/ronan/Developer/agent-debug/hal-harness",
     "fix_folder": "/Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-3418007",
-    "rerun_command": "python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest",
-    "rerun_single_task_command": "python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-3418007",
-    "system_prompt": "You are a coding agent operating inside hal-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<task_id>/, and rerun the debugger command to validate. Never modify repository files directly.",
+    "system_prompt": "You are a coding agent operating inside hal-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<task_id>/, and do NOT run any reruns. Never modify repository files directly; only create or update fix packages.",
     "instructions": [
       "cd /Users/ronan/Developer/agent-debug/hal-harness",
       "Inspect inspection_report.json for analysis and rationale.",
       "Do NOT modify repository files directly; place overlays or patches under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-3418007.",
       "Prefer dropping fully-edited files under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-3418007/agent (patch.diff is only a fallback when overlays are impractical).",
       "Use input_override.json / problem_statement.txt / env_override.json if inputs or env vars must change (store them beside the fix).",
-      "After preparing the fix package, rerun the debugger using `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest` for the full backlog.",
-      "To iterate quickly on this task only, run `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-3418007` (leverages --task-id filtering)."
+      "Do NOT run the HAL debugger or any rerun commands as part of this step.",
+      "Do a careful self-review and produce a complete fix package in one pass.",
+      "If the fix needs validation, describe what should be validated, but do not execute commands."
     ]
   }
 }

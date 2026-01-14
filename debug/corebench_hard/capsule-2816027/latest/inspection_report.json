@@ -1,32 +1,32 @@
 {
-  "analysis": "The run failed because the execution environment is missing the required R interpreter (Rscript), which is needed to run main.R.",
-  "rationale": "The evidence shows error messages like '/bin/sh: 1: Rscript: not found' and exit code 127. These indicate that the system-level dependency for R is unavailable rather than a coding or syntax issue in the repository.",
+  "analysis": "The run failed because the required system-level execution tool, Rscript, is missing from the environment. As a result, both the installation of R packages and the execution of main.R could not be performed.",
+  "rationale": "Multiple error messages in the trace, including '/bin/sh: 1: Rscript: not found' and '/bin/sh: 2: Rscript: not found', indicate that the interpreter for R is not available. This is a clear environmental barrier, not a coding logic error.",
   "recommended_files": [
-    "Readme.md",
     "main.R",
-    "env_override.json"
+    "Readme.md",
+    "requirements.txt"
   ],
   "recommended_actions": [
-    "Inspect the repository's Readme file to confirm the required R package installations and any recommended environment setup.",
-    "Update your fix package by modifying the env_override.json file to include environment variables such as R_HOME and R_LIBS_USER, ensuring that they point to a writable R installation directory if needed.",
-    "Configure the environment to install the R interpreter (Rscript) in a manner compatible with the evaluation environment. For example, add a conda or mamba install command (e.g., 'conda install -y -c r r-base') or use fix-package env overrides to ensure R is available.",
-    "Verify that the installation adds Rscript to the system PATH before attempting to run main.R."
+    "Update the fix-package configuration to include an env_override that provides a proper R environment setup. For instance, specify 'R_HOME' and 'R_LIBS_USER' in env_override.json to point to directories where R is installed and writable.",
+    "If the evaluation environment supports it, add a conda-based installation of R (or vendored R dependencies) in the fix package to ensure that Rscript is available.",
+    "Ensure that the R_DEFAULT_PACKAGES environment variable is correctly exported with the value 'datasets,utils,grDevices,graphics,stats,methods' prior to invoking main.R.",
+    "Review the repository's Readme instructions to verify any additional R package dependencies and installation steps, then incorporate these instructions into the prompt/input override (problem_statement.txt or input_override.json) as needed."
   ],
-  "next_steps": "After applying these changes to install and configure R in the environment, please re-run the HAL debugger. Create or update /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-2816027 with overlays/patches/input/env overrides. After packaging fixes, rerun `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest` to validate queued tasks. For a quick single-task check, rerun `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-2816027`.",
+  "next_steps": "Create or update /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-2816027 with overlays/patches/input/env overrides. Do NOT run the HAL debugger or any rerun commands as part of this step. Do a careful self-review and produce a complete fix package in one pass.",
+  "inspector_suggested_next_steps": "After applying these fixes, the coding agent must re-run the HAL debugger to validate that Rscript is available and that the repository executes successfully.",
   "coding_agent_context": {
     "working_directory": "/Users/ronan/Developer/agent-debug/hal-harness",
     "fix_folder": "/Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-2816027",
-    "rerun_command": "python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest",
-    "rerun_single_task_command": "python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-2816027",
-    "system_prompt": "You are a coding agent operating inside hal-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<task_id>/, and rerun the debugger command to validate. Never modify repository files directly.",
+    "system_prompt": "You are a coding agent operating inside hal-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<task_id>/, and do NOT run any reruns. Never modify repository files directly; only create or update fix packages.",
     "instructions": [
       "cd /Users/ronan/Developer/agent-debug/hal-harness",
       "Inspect inspection_report.json for analysis and rationale.",
       "Do NOT modify repository files directly; place overlays or patches under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-2816027.",
       "Prefer dropping fully-edited files under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-2816027/agent (patch.diff is only a fallback when overlays are impractical).",
       "Use input_override.json / problem_statement.txt / env_override.json if inputs or env vars must change (store them beside the fix).",
-      "After preparing the fix package, rerun the debugger using `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest` for the full backlog.",
-      "To iterate quickly on this task only, run `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-2816027` (leverages --task-id filtering)."
+      "Do NOT run the HAL debugger or any rerun commands as part of this step.",
+      "Do a careful self-review and produce a complete fix package in one pass.",
+      "If the fix needs validation, describe what should be validated, but do not execute commands."
     ]
   }
 }

@@ -1,32 +1,33 @@
 {
-  "analysis": "The run failed not because of a coding logic error but due to environmental barriers: the jupyter executable is missing and the process lacks permission to create the '../results' directory.",
-  "rationale": "Error messages from the trace clearly indicate '/bin/sh: 1: jupyter: not found' when attempting to execute nbconvert and a permission error 'mkdir: cannot create directory \u2018../results\u2019: Permission denied'. These evidences point to the absence of required tooling and insufficient directory write permissions.",
+  "analysis": "The run failed due to environmental barriers: the absence of the Jupyter executable (leading to nbconvert failure) and permission issues when trying to create the ../results directory.",
+  "rationale": "Error messages such as '/bin/sh: 1: jupyter: not found' and 'mkdir: cannot create directory \u2018../results\u2019: Permission denied' indicate that the execution harness lacks the necessary Jupyter tooling and the filesystem path ../results is not writable in this environment.",
   "recommended_files": [
     "requirements.txt",
-    "env_override.json",
+    "main.py",
     "PerformanveEval.ipynb"
   ],
   "recommended_actions": [
-    "Verify and update the environment configuration to ensure that jupyter and nbconvert are installed. This may involve adding a fix-package env override (or using a conda/mamba/vendored install) to install and configure jupyter.",
-    "Adjust the output directory settings by setting the HAL_OUTPUT_DIR (or a similar key in env_override.json) to a writable location instead of '../results', or modify permissions accordingly.",
-    "Review the repository's README and requirements.txt to confirm all dependencies are installed as stated.",
-    "Implement the necessary environment-scoped overrides (using fix-package input_override or env_override) to meet both the tooling and file system requirements before the notebook execution."
+    "Update the fix-package env_override.json to set a writable output directory variable (e.g., set HAL_OUTPUT_DIR to a local writable folder like './results') and modify the command to use that variable instead of '../results'.",
+    "In the input_override (problem_statement.txt or input_override.json), adjust the output path directive to reference ${HAL_OUTPUT_DIR} to ensure the HTML is saved in a writable location.",
+    "Ensure that the repository dependencies include Jupyter (and nbconvert) by adding them to the requirements.txt or deploying them via an env override using conda/vendored dependencies.",
+    "Review the notebook execution command in main.py to confirm that the flags to disable timeout and allow errors are set correctly, and update them if necessary.",
+    "Verify that all file paths referenced in the notebook and required by the repository are relative to the current trusted directories."
   ],
-  "next_steps": "After making these environment adjustments, re-run the HAL debugger to verify that the changes resolve the issue. Create or update /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-4671827 with overlays/patches/input/env overrides. After packaging fixes, rerun `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest` to validate queued tasks. For a quick single-task check, rerun `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-4671827`.",
+  "next_steps": "Create or update /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-4671827 with overlays/patches/input/env overrides. Do NOT run the HAL debugger or any rerun commands as part of this step. Do a careful self-review and produce a complete fix package in one pass.",
+  "inspector_suggested_next_steps": "After making these environment and prompt overrides, the coding agent must re-run the HAL debugger to validate the fix package.",
   "coding_agent_context": {
     "working_directory": "/Users/ronan/Developer/agent-debug/hal-harness",
     "fix_folder": "/Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-4671827",
-    "rerun_command": "python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest",
-    "rerun_single_task_command": "python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-4671827",
-    "system_prompt": "You are a coding agent operating inside hal-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<task_id>/, and rerun the debugger command to validate. Never modify repository files directly.",
+    "system_prompt": "You are a coding agent operating inside hal-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<task_id>/, and do NOT run any reruns. Never modify repository files directly; only create or update fix packages.",
     "instructions": [
       "cd /Users/ronan/Developer/agent-debug/hal-harness",
       "Inspect inspection_report.json for analysis and rationale.",
       "Do NOT modify repository files directly; place overlays or patches under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-4671827.",
       "Prefer dropping fully-edited files under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-4671827/agent (patch.diff is only a fallback when overlays are impractical).",
       "Use input_override.json / problem_statement.txt / env_override.json if inputs or env vars must change (store them beside the fix).",
-      "After preparing the fix package, rerun the debugger using `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest` for the full backlog.",
-      "To iterate quickly on this task only, run `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-4671827` (leverages --task-id filtering)."
+      "Do NOT run the HAL debugger or any rerun commands as part of this step.",
+      "Do a careful self-review and produce a complete fix package in one pass.",
+      "If the fix needs validation, describe what should be validated, but do not execute commands."
     ]
   }
 }

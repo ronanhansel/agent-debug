@@ -1,35 +1,31 @@
 {
-  "analysis": "The run failed because the evaluation environment lacks a required system dependency (Rscript) and the expected data mount directory (/data), and attempts to install R via apt were blocked by permission errors.",
-  "rationale": "Evidence shows that 'which Rscript' failed repeatedly (exit code 1), the apt installation failed due to '/var/lib/apt/lists/lock' permission issues, and the scripts could not access the hardcoded input path '/data' (no such directory).",
+  "analysis": "The run failure is due to environmental limitations: the Rscript executable is missing, the harness prevents system-level installations (apt errors), and the hardcoded input path '/data/...' does not exist.",
+  "rationale": "Evidence from the trace shows repeated failures finding Rscript (exit code 1) and permission errors when attempting to install R via apt (unable to lock '/var/lib/apt/lists/lock'), along with a 'cannot access /data' error indicating the expected data mount is missing.",
   "recommended_files": [
-    "calibration_error.R",
-    "lss1_summary_analyses.R",
-    "lss2_summary_analyses.R",
-    "lss2_peak_analyses.R",
     "README.md",
-    "env_override.json"
+    "requirements.txt"
   ],
   "recommended_actions": [
-    "Review the README.md to identify all system and R package dependencies, and confirm the expected data mounts and paths.",
-    "Configure the evaluation environment using fix-package env overrides (e.g., set R_HOME and R_LIBS_USER in env_override.json) to ensure that R and Rscript are available.",
-    "Set the HAL_DATA_DIR and HAL_OUTPUT_DIR in env_override.json to appropriate, writable directories that contain or map to the expected '/data' mount location.",
-    "If necessary, vendor or set up an R distribution using harness-supported deployment methods (such as conda installs) to provide R/Rscript without requiring apt permissions."
+    "Update the env_override.json to include 'R_HOME' and 'R_LIBS_USER' keys pointing to a properly configured, vendored R installation or conda-managed R environment.",
+    "Set the 'HAL_DATA_DIR' environment variable to a writable data directory and modify the code or input_override (problem_statement) to use this directory instead of the hardcoded '/data' path.",
+    "Configure 'HAL_OUTPUT_DIR' in the env_override.json to a writable directory so that script outputs can be stored correctly.",
+    "Adjust the input_override to pass an updated problem_statement that reflects the new data paths and installation requirements for R so that the scripts can run as expected without system-level dependency installations."
   ],
-  "next_steps": "After applying these changes through the appropriate fix package overrides, be sure to re-run the HAL debugger to verify the fixes. Create or update /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-1724988 with overlays/patches/input/env overrides. After packaging fixes, rerun `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest` to validate queued tasks. For a quick single-task check, rerun `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-1724988`.",
+  "next_steps": "Create or update /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-1724988 with overlays/patches/input/env overrides. Do NOT run the HAL debugger or any rerun commands as part of this step. Do a careful self-review and produce a complete fix package in one pass.",
+  "inspector_suggested_next_steps": "After applying these fixes in the fix package, the coding agent must re-run the HAL debugger to validate that the environmental issues have been resolved.",
   "coding_agent_context": {
     "working_directory": "/Users/ronan/Developer/agent-debug/hal-harness",
     "fix_folder": "/Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-1724988",
-    "rerun_command": "python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest",
-    "rerun_single_task_command": "python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-1724988",
-    "system_prompt": "You are a coding agent operating inside hal-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<task_id>/, and rerun the debugger command to validate. Never modify repository files directly.",
+    "system_prompt": "You are a coding agent operating inside hal-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<task_id>/, and do NOT run any reruns. Never modify repository files directly; only create or update fix packages.",
     "instructions": [
       "cd /Users/ronan/Developer/agent-debug/hal-harness",
       "Inspect inspection_report.json for analysis and rationale.",
       "Do NOT modify repository files directly; place overlays or patches under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-1724988.",
       "Prefer dropping fully-edited files under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-1724988/agent (patch.diff is only a fallback when overlays are impractical).",
       "Use input_override.json / problem_statement.txt / env_override.json if inputs or env vars must change (store them beside the fix).",
-      "After preparing the fix package, rerun the debugger using `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest` for the full backlog.",
-      "To iterate quickly on this task only, run `python scripts/auto_debug_batch.py --rubrics-output-dir ../rubrics_output --traces-dir ../traces --agent-dir agents/hal_generalist_agent --agent-args ../agent_args.azure.json --agent-function main.run --benchmark-name corebench_hard --mode inspect --trace-output-dir ../traces/debug_runs --inspector-model azure/o3-mini --fixed-output --run-label latest --task-id capsule-1724988` (leverages --task-id filtering)."
+      "Do NOT run the HAL debugger or any rerun commands as part of this step.",
+      "Do a careful self-review and produce a complete fix package in one pass.",
+      "If the fix needs validation, describe what should be validated, but do not execute commands."
     ]
   }
 }

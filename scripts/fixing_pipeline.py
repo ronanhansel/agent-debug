@@ -474,17 +474,10 @@ def build_codex_prompt(task_ids: List[str], args: argparse.Namespace, logger: Fi
         report: Dict[str, Any] = item["report"]
         ctx: Dict[str, Any] = report.get("coding_agent_context") or {}
         fix_folder = ctx.get("fix_folder") or f"fixes/{sanitize(args.benchmark_name)}/{sanitize(task_id)}"
-        rerun_single = ctx.get("rerun_single_task_command") or ""
-        rerun_all = ctx.get("rerun_command") or ""
-
         lines.append("=" * 80)
         lines.append(f"[TASK ID] {task_id}")
         lines.append(f"[INSPECTION REPORT] {item['inspection_report_path']}")
         lines.append(f"[FIX FOLDER] {fix_folder}")
-        if rerun_single:
-            lines.append(f"[RERUN SINGLE TASK] {rerun_single}")
-        if rerun_all:
-            lines.append(f"[RERUN BACKLOG] {rerun_all}")
         lines.append("")
 
         analysis = (report.get("analysis") or "").strip()
