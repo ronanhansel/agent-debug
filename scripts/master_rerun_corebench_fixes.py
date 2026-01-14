@@ -236,8 +236,8 @@ def write_temp_agent_args(
 def build_output_names(output_dir: Path, benchmark: str, model_name: str, baseline_trace_stem: str) -> Tuple[str, Path]:
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     baseline_slug = _slugify(baseline_trace_stem)
-    model_slug = _slugify(model_name)
-    run_id = f"{benchmark}_{model_slug}_from_{baseline_slug}_{timestamp}_FIXED"
+    model_slug = _slugify(model_name.replace("/", "_"))
+    run_id = f"{model_slug}_MERGED_{benchmark}_{timestamp}_from_{baseline_slug}_FIXED"
     output_path = output_dir / f"{run_id}_UPLOAD.json"
     return run_id, output_path
 
@@ -259,7 +259,9 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec) -> Dict[str, Any]
 
     with_fixes, missing_fixes = filter_tasks_with_fixes(fixes_root, benchmark, failed_tasks)
 
-    run_id, merged_output = build_output_names(output_dir, benchmark, spec.model_name, baseline_trace_path.stem)
+    # Use the API model id for naming if provided (the mapping key is the pricing name).
+    name_model = spec.model_id or spec.model_name
+    run_id, merged_output = build_output_names(output_dir, benchmark, name_model, baseline_trace_path.stem)
     effective_effort = spec.reasoning_effort or args.reasoning_effort
     pricing_model_name = spec.model_name
     api_model_id = spec.model_id

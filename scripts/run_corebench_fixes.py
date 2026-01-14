@@ -259,8 +259,20 @@ def install_agent_requirements(agent_dir: Path) -> None:
 
 
 def _slugify(value: str, fallback: str) -> str:
-    slug = re.sub(r"[^A-Za-z0-9]+", "", value)
+    # Keep readable identifiers for run_ids / filenames.
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_")
     return slug or fallback
+
+
+def build_task_run_id(benchmark: str, agent_args: Dict[str, object], capsule_id: str) -> str:
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    api_model = str(agent_args.get("api_model_id") or agent_args.get("model_name") or "model")
+    model_slug = _slugify(api_model.replace("/", "_"), "model")
+    effort = str(agent_args.get("reasoning_effort") or "").strip().lower()
+    effort_part = f"_{_slugify(effort, '')}" if effort else ""
+    capsule_slug = _slugify(capsule_id, "task")
+    bench_slug = _slugify(benchmark, "benchmark")
+    return f"{model_slug}{effort_part}_{capsule_slug}_{bench_slug}_{timestamp}"
 
 
 def merge_trace_files(
@@ -401,7 +413,7 @@ def main() -> None:
 
             temp_agent_dir = copy_agent_with_fix(agent_dir, capsule_id, fixes_base)
             try:
-                run_id = f"{capsule_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+                run_id = build_task_run_id(args.benchmark, agent_args, capsule_id)
                 cmd = build_hal_eval_cmd(
                     benchmark=args.benchmark,
                     agent_name=f"hal_generalist_agent ({capsule_id})",
