@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 import re
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "hal-harness"))
@@ -109,6 +110,12 @@ def parse_args() -> argparse.Namespace:
         "--keep-temp",
         action="store_true",
         help="Do not delete temporary agent directories (useful for debugging).",
+    )
+    parser.add_argument(
+        "--max-parallel-capsules",
+        type=int,
+        default=1,
+        help="Maximum number of capsules to run concurrently within this rerun (default: %(default)s).",
     )
     parser.add_argument(
         "--skip-install",
@@ -216,13 +223,12 @@ def load_corebench_dataset(dataset_path: Path) -> List[dict]:
     return json.loads(dataset_path.read_text(encoding="utf-8"))
 
 
-def write_filtered_dataset(
+def build_single_task_payload(
     *,
     original_tasks: Dict[str, dict],
     capsule_id: str,
     input_override: Dict[str, object] | None,
-    dataset_path: Path,
-) -> None:
+) -> str:
     if capsule_id not in original_tasks:
         raise ValueError(f"Capsule {capsule_id} not found in core_test.json")
     task = json.loads(json.dumps(original_tasks[capsule_id]))  # deep copy
@@ -232,7 +238,21 @@ def write_filtered_dataset(
             original_prompt = task.get("task_prompt", "")
             extra = input_override["problem_statement"]
             task["task_prompt"] = f"{original_prompt}\n\n{extra}" if original_prompt else extra
-    payload = json.dumps([task], indent=2)
+    return json.dumps([task], indent=2)
+
+
+def write_filtered_dataset(
+    *,
+    original_tasks: Dict[str, dict],
+    capsule_id: str,
+    input_override: Dict[str, object] | None,
+    dataset_path: Path,
+) -> None:
+    payload = build_single_task_payload(
+        original_tasks=original_tasks,
+        capsule_id=capsule_id,
+        input_override=input_override,
+    )
     tmp_path = dataset_path.with_suffix(dataset_path.suffix + ".tmp")
     tmp_path.write_text(payload, encoding="utf-8")
     tmp_path.replace(dataset_path)
@@ -390,6 +410,85 @@ def evaluate_trace(trace_path: Path, rubric_model: str, output_dir: Path) -> Non
     ]
     subprocess.run(eval_cmd, check=True, cwd=REPO_ROOT)
 
+
+def run_one_capsule(
+    *,
+    capsule_id: str,
+    fixes_base: Path,
+    dataset_dir: Path,
+    dataset_payload: str,
+    agent_dir: Path,
+    agent_args: Dict[str, object],
+    benchmark: str,
+    docker: bool,
+    vm: bool,
+    wandb_mode: str | None,
+    rubric_model: str,
+    rubric_output_dir: Path,
+    skip_rubrics: bool,
+    keep_temp: bool,
+) -> Path:
+    dataset_path = dataset_dir / f"core_test_{capsule_id}_{uuid.uuid4().hex}.json"
+    dataset_path.write_text(dataset_payload, encoding="utf-8")
+
+    temp_agent_dir = copy_agent_with_fix(agent_dir, capsule_id, fixes_base, benchmark=benchmark)
+    try:
+        run_id = build_task_run_id(benchmark, agent_args, capsule_id)
+        cmd = build_hal_eval_cmd(
+            benchmark=benchmark,
+            agent_name=f"hal_generalist_agent ({capsule_id})",
+            agent_dir=temp_agent_dir,
+            agent_args=agent_args,
+            run_id=run_id,
+            docker=docker,
+            vm=vm,
+        )
+        print(f"[hal-eval] {' '.join(cmd)}")
+        hal_env = os.environ.copy()
+        extra_path = str(REPO_ROOT / "hal-harness")
+        hal_env["PYTHONPATH"] = (
+            f"{extra_path}{os.pathsep}{hal_env.get('PYTHONPATH', '')}".rstrip(os.pathsep)
+        )
+        hal_env["HAL_COREBENCH_DATASET_PATH"] = str(dataset_path)
+        hal_env.setdefault("HAL_PRICING_MODEL_NAME", str(agent_args.get("model_name", "")))
+        hal_env.setdefault("WANDB_SILENT", "true")
+        if wandb_mode == "disabled":
+            hal_env["WANDB_MODE"] = "disabled"
+        elif wandb_mode:
+            hal_env["WANDB_MODE"] = wandb_mode
+
+        subprocess.run(cmd, check=True, cwd=REPO_ROOT, env=hal_env)
+
+        results_dir = REPO_ROOT / "results" / benchmark / run_id
+        trace_path = results_dir / f"{run_id}_UPLOAD.json"
+        if not trace_path.exists():
+            raise FileNotFoundError(f"Expected trace {trace_path} not found.")
+
+        final_trace = REPO_ROOT / "traces" / trace_path.name
+        shutil.copyfile(trace_path, final_trace)
+        print(f"[trace] Copied {trace_path} -> {final_trace}")
+
+        if not skip_rubrics:
+            eval_cmd = [
+                "python",
+                "main.py",
+                "evaluate",
+                "--trace-file", str(final_trace),
+                "--rubrics-dir", str(REPO_ROOT / "rubrics"),
+                "--output-dir", str(rubric_output_dir),
+                "--rubric-model", rubric_model,
+                "--yes",
+            ]
+            print(f"[rubric] {' '.join(eval_cmd)}")
+            subprocess.run(eval_cmd, check=True, cwd=REPO_ROOT)
+
+        return final_trace
+    finally:
+        dataset_path.unlink(missing_ok=True)
+        if not keep_temp:
+            shutil.rmtree(temp_agent_dir, ignore_errors=True)
+
+
 def main() -> None:
     args = parse_args()
     fixes_root = Path(args.fixes_root)
@@ -406,8 +505,6 @@ def main() -> None:
         install_agent_requirements(agent_dir)
 
     temp_root = Path(tempfile.mkdtemp(prefix="corebench_dataset_"))
-    dataset_path = temp_root / f"{dataset_source.stem}_{uuid.uuid4().hex}{dataset_source.suffix}"
-    shutil.copyfile(dataset_source, dataset_path)
     tasks_data = load_corebench_dataset(dataset_source)
     capsule_map = {item["capsule_id"]: item for item in tasks_data}
 
@@ -424,88 +521,89 @@ def main() -> None:
 
     try:
         fixes_base = fixes_root.parent
-        generated_traces: List[Path] = []
+        capsule_jobs: List[tuple[str, str]] = []
         for fix_dir in fix_dirs:
             capsule_id = fix_dir.name
-            print(f"\n=== Processing {capsule_id} ===")
-
+            print(f"\n=== Queuing {capsule_id} ===")
             if capsule_id not in capsule_map:
                 print(
-                    f"[WARN] Capsule {capsule_id} not found in dataset {dataset_path}. "
+                    f"[WARN] Capsule {capsule_id} not found in dataset {dataset_source}. "
                     "Skipping this fix folder."
                 )
                 continue
-
             try:
                 fix = load_fix_package(capsule_id, fixes_root=fixes_base, benchmark=args.benchmark)
             except Exception as exc:
                 print(f"[WARN] Failed to load fix for {capsule_id}: {exc}. Skipping.")
                 continue
-
             input_override = fix.input_override if fix else None
-            write_filtered_dataset(
+            payload = build_single_task_payload(
                 original_tasks=capsule_map,
                 capsule_id=capsule_id,
                 input_override=input_override,
-                dataset_path=dataset_path,
             )
+            capsule_jobs.append((capsule_id, payload))
 
-            temp_agent_dir = copy_agent_with_fix(agent_dir, capsule_id, fixes_base, benchmark=args.benchmark)
-            try:
-                run_id = build_task_run_id(args.benchmark, agent_args, capsule_id)
-                cmd = build_hal_eval_cmd(
-                    benchmark=args.benchmark,
-                    agent_name=f"hal_generalist_agent ({capsule_id})",
-                    agent_dir=temp_agent_dir,
-                    agent_args=agent_args,
-                    run_id=run_id,
-                    docker=args.docker,
-                    vm=args.vm,
+        if not capsule_jobs:
+            print("No runnable capsules found after filtering.")
+            return
+
+        generated_traces: List[Path] = []
+        max_workers = max(1, int(args.max_parallel_capsules))
+        if max_workers <= 1 or len(capsule_jobs) <= 1:
+            for capsule_id, payload in capsule_jobs:
+                print(f"\n=== Processing {capsule_id} ===")
+                generated_traces.append(
+                    run_one_capsule(
+                        capsule_id=capsule_id,
+                        fixes_base=fixes_base,
+                        dataset_dir=temp_root,
+                        dataset_payload=payload,
+                        agent_dir=agent_dir,
+                        agent_args=agent_args,
+                        benchmark=args.benchmark,
+                        docker=args.docker,
+                        vm=args.vm,
+                        wandb_mode=args.wandb_mode,
+                        rubric_model=args.rubric_model,
+                        rubric_output_dir=rubric_output_dir,
+                        skip_rubrics=args.skip_rubrics,
+                        keep_temp=args.keep_temp,
+                    )
                 )
-                print(f"[hal-eval] {' '.join(cmd)}")
-                hal_env = os.environ.copy()
-                extra_path = str(REPO_ROOT / "hal-harness")
-                hal_env["PYTHONPATH"] = (
-                    f"{extra_path}{os.pathsep}{hal_env.get('PYTHONPATH', '')}".rstrip(os.pathsep)
-                )
-                hal_env["HAL_COREBENCH_DATASET_PATH"] = str(dataset_path)
-                # Ensure cost computation uses the pricing model name even if the API model id differs.
-                hal_env.setdefault("HAL_PRICING_MODEL_NAME", str(agent_args.get("model_name", "")))
-                hal_env.setdefault("WANDB_SILENT", "true")
-                if args.wandb_mode == "disabled":
-                    hal_env["WANDB_MODE"] = "disabled"
-                elif args.wandb_mode:
-                    hal_env["WANDB_MODE"] = args.wandb_mode
-                subprocess.run(cmd, check=True, cwd=REPO_ROOT, env=hal_env)
-
-                results_dir = REPO_ROOT / "results" / args.benchmark / run_id
-                trace_path = results_dir / f"{run_id}_UPLOAD.json"
-                if not trace_path.exists():
-                    raise FileNotFoundError(f"Expected trace {trace_path} not found.")
-
-                final_trace = REPO_ROOT / "traces" / trace_path.name
-                shutil.copyfile(trace_path, final_trace)
-                print(f"[trace] Copied {trace_path} -> {final_trace}")
-                generated_traces.append(final_trace)
-
-                if not args.skip_rubrics:
-                    eval_cmd = [
-                        "python",
-                        "main.py",
-                        "evaluate",
-                        "--trace-file", str(final_trace),
-                        "--rubrics-dir", str(REPO_ROOT / "rubrics"),
-                        "--output-dir", str(rubric_output_dir),
-                        "--rubric-model", args.rubric_model,
-                        "--yes",
-                    ]
-                    print(f"[rubric] {' '.join(eval_cmd)}")
-                    subprocess.run(eval_cmd, check=True, cwd=REPO_ROOT)
-            finally:
-                if not args.keep_temp:
-                    shutil.rmtree(temp_agent_dir, ignore_errors=True)
+        else:
+            print(f"\n=== Running {len(capsule_jobs)} capsules with max_parallel_capsules={max_workers} ===")
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = {
+                    pool.submit(
+                        run_one_capsule,
+                        capsule_id=capsule_id,
+                        fixes_base=fixes_base,
+                        dataset_dir=temp_root,
+                        dataset_payload=payload,
+                        agent_dir=agent_dir,
+                        agent_args=agent_args,
+                        benchmark=args.benchmark,
+                        docker=args.docker,
+                        vm=args.vm,
+                        wandb_mode=args.wandb_mode,
+                        rubric_model=args.rubric_model,
+                        rubric_output_dir=rubric_output_dir,
+                        skip_rubrics=args.skip_rubrics,
+                        keep_temp=args.keep_temp,
+                    ): capsule_id
+                    for capsule_id, payload in capsule_jobs
+                }
+                for future in as_completed(futures):
+                    try:
+                        generated_traces.append(future.result())
+                    except Exception:
+                        for pending in futures:
+                            pending.cancel()
+                        raise
 
         if generated_traces:
+            generated_traces = sorted(generated_traces, key=lambda p: p.name)
             merged_trace = merge_trace_files(
                 generated_traces,
                 benchmark=args.benchmark,

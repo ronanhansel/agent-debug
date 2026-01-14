@@ -159,6 +159,12 @@ def parse_args() -> argparse.Namespace:
         default=5,
         help="Maximum number of rerun subprocesses to run concurrently (default: %(default)s).",
     )
+    parser.add_argument(
+        "--max-parallel-capsules",
+        type=int,
+        default=1,
+        help="Maximum number of capsules to run concurrently within each rerun subprocess (default: %(default)s).",
+    )
     return parser.parse_args()
 
 
@@ -353,6 +359,8 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec) -> Dict[str, Any]
         cmd.append("--skip-install")
     if args.skip_rubrics:
         cmd.append("--skip-rubrics")
+    if args.max_parallel_capsules and int(args.max_parallel_capsules) > 1:
+        cmd += ["--max-parallel-capsules", str(int(args.max_parallel_capsules))]
     for task_id in with_fixes:
         cmd += ["--task-id", task_id]
 
