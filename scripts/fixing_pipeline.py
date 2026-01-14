@@ -451,8 +451,12 @@ def build_codex_prompt(task_ids: List[str], args: argparse.Namespace, logger: Fi
         "- `patch.diff` (only if overlays are impractical)\n"
         "- `problem_statement.txt` (to add environment-specific, actionable steps)\n"
         "- `input_override.json` / `env_override.json` (to adjust inputs/env vars)\n\n"
-        "After writing fixes for a task, validate by rerunning the single-task command in its report.\n"
-        "Do not directly edit benchmark source files outside the fix package."
+        "Do not directly edit benchmark source files outside the fix package.\n\n"
+        "DELIVERABLE REQUIREMENT:\n"
+        "- You MUST actually create/update the fix files on disk under fixes/<benchmark>/<task_id>/.\n"
+        "- Do NOT only describe what files to create.\n"
+        "- Before finishing each task, list the exact files you wrote under fixes/<benchmark>/<task_id>/.\n"
+        "- Only the fixes folder is allowed to change (no edits to README.md, hal-harness/, src/, etc.).\n"
     )
 
     lines: List[str] = []
@@ -486,8 +490,35 @@ def build_codex_prompt(task_ids: List[str], args: argparse.Namespace, logger: Fi
         lines.append(f"[FIX FOLDER] {fix_folder}")
         lines.append("")
 
+        system_prompt = (ctx.get("system_prompt") or "").strip()
+        if system_prompt:
+            lines.append("[CODING AGENT SYSTEM PROMPT]")
+            lines.append(system_prompt)
+            lines.append("")
+
+        context_instructions = ctx.get("instructions") or []
+        if context_instructions:
+            lines.append("[CODING AGENT INSTRUCTIONS]")
+            for instruction in context_instructions:
+                lines.append(f"- {str(instruction).strip()}")
+            lines.append("")
+
+        lines.append("[DELIVERABLES]")
+        lines.append(f"- Create or update files under `{fix_folder}`.")
+        lines.append("- Minimum expected files (when applicable):")
+        lines.append(f"  - `{fix_folder}/problem_statement.txt`")
+        lines.append(f"  - `{fix_folder}/env_override.json`")
+        lines.append(f"  - `{fix_folder}/input_override.json`")
+        lines.append(f"  - `{fix_folder}/agent/` (overlay files mirroring repo paths)")
+        lines.append("- If a file is not needed, omit it, but explain why.")
+        lines.append("")
+
         analysis = (report.get("analysis") or "").strip()
         rationale = (report.get("rationale") or "").strip()
+        evidence_summary = (report.get("evidence_summary") or "").strip()
+        environment_assumptions = report.get("environment_assumptions") or []
+        fix_package_plan = report.get("fix_package_plan") or []
+        self_review = report.get("self_review_checklist") or []
         if analysis:
             lines.append("[INSPECTOR ANALYSIS]")
             lines.append(analysis)
@@ -495,6 +526,15 @@ def build_codex_prompt(task_ids: List[str], args: argparse.Namespace, logger: Fi
         if rationale:
             lines.append("[INSPECTOR RATIONALE]")
             lines.append(rationale)
+            lines.append("")
+        if evidence_summary:
+            lines.append("[EVIDENCE SUMMARY]")
+            lines.append(evidence_summary)
+            lines.append("")
+        if environment_assumptions:
+            lines.append("[ENVIRONMENT ASSUMPTIONS]")
+            for item_text in environment_assumptions:
+                lines.append(f"- {str(item_text).strip()}")
             lines.append("")
 
         recommended_files = report.get("recommended_files") or []
@@ -511,10 +551,16 @@ def build_codex_prompt(task_ids: List[str], args: argparse.Namespace, logger: Fi
                 lines.append(f"- {str(action).strip()}")
             lines.append("")
 
-        next_steps = (report.get("next_steps") or "").strip()
-        if next_steps:
-            lines.append("[NEXT STEPS]")
-            lines.append(next_steps)
+        if fix_package_plan:
+            lines.append("[FIX PACKAGE PLAN]")
+            for step_text in fix_package_plan:
+                lines.append(f"- {str(step_text).strip()}")
+            lines.append("")
+
+        if self_review:
+            lines.append("[SELF-REVIEW CHECKLIST]")
+            for item_text in self_review:
+                lines.append(f"- {str(item_text).strip()}")
             lines.append("")
 
     return "\n".join(lines).strip() + "\n"
