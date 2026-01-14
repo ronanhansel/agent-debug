@@ -4,10 +4,6 @@ pydantic
 inspect_ai
 weave
 datasets
-<<<<<<< Updated upstream
-swebench@git+https://github.com/SWE-bench/SWE-benchabnf==2.2.0
-=======
->>>>>>> Stashed changes
 aioboto3==15.5.0
 aiobotocore==2.25.1
 aiofiles==25.1.0
@@ -249,7 +245,4 @@ xxhash==3.6.0
 yarl==1.22.0
 youtube-transcript-api==1.2.3
 zipp==3.23.0
-<<<<<<< Updated upstream
-=======
 scipy==1.17.0
->>>>>>> Stashed changes
