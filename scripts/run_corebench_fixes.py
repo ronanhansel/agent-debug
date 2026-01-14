@@ -27,8 +27,7 @@ import re
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "hal-harness"))
 
-COREBENCH_DATA = REPO_ROOT / "hal-harness" / "hal" / "benchmarks" / "corebench" / "core_test.json"
-COREBENCH_BACKUP = COREBENCH_DATA.with_suffix(".bak")
+DEFAULT_COREBENCH_DATA = REPO_ROOT / "hal-harness" / "hal" / "benchmarks" / "corebench" / "core_test.json"
 SMOLAGENTS_SRC = REPO_ROOT / "hal-harness" / "agents" / "open_deep_research" / "src" / "smolagents"
 
 from hal.debugger.fix_loader import (  # type: ignore
@@ -69,6 +68,13 @@ def parse_args() -> argparse.Namespace:
         "--benchmark",
         default="corebench_hard",
         help="Benchmark variant to evaluate (default: corebench_hard).",
+    )
+    parser.add_argument(
+        "--corebench-dataset",
+        help=(
+            "Path to the CoreBench task dataset JSON (core_test.json). "
+            "If omitted, auto-detect under hal-harness/hal/benchmarks."
+        ),
     )
     parser.add_argument(
         "--merged-trace-output",
@@ -167,8 +173,36 @@ def copy_agent_with_fix(base_dir: Path, task_id: str, fix_root: Path) -> Path:
     return temp_dir
 
 
-def load_corebench_dataset() -> List[dict]:
-    return json.loads(COREBENCH_DATA.read_text(encoding="utf-8"))
+def resolve_corebench_dataset_path(override: str | None) -> Path:
+    if override:
+        candidate = Path(override)
+        if not candidate.is_absolute():
+            candidate = (REPO_ROOT / candidate).resolve()
+        if not candidate.exists():
+            raise FileNotFoundError(f"--corebench-dataset not found: {candidate}")
+        return candidate
+
+    if DEFAULT_COREBENCH_DATA.exists():
+        return DEFAULT_COREBENCH_DATA
+
+    root = REPO_ROOT / "hal-harness" / "hal" / "benchmarks"
+    if root.exists():
+        candidates = sorted(root.rglob("core_test.json"))
+        if candidates:
+            for path in candidates:
+                if "corebench" in {part.lower() for part in path.parts}:
+                    return path
+            return candidates[0]
+
+    raise FileNotFoundError(
+        "CoreBench dataset file core_test.json not found. "
+        "Ensure hal-harness is present (and any submodules/assets are initialized), "
+        "or pass --corebench-dataset /path/to/core_test.json."
+    )
+
+
+def load_corebench_dataset(dataset_path: Path) -> List[dict]:
+    return json.loads(dataset_path.read_text(encoding="utf-8"))
 
 
 def write_filtered_dataset(
@@ -176,6 +210,7 @@ def write_filtered_dataset(
     original_tasks: Dict[str, dict],
     capsule_id: str,
     input_override: Dict[str, object] | None,
+    dataset_path: Path,
 ) -> None:
     if capsule_id not in original_tasks:
         raise ValueError(f"Capsule {capsule_id} not found in core_test.json")
@@ -186,7 +221,7 @@ def write_filtered_dataset(
             original_prompt = task.get("task_prompt", "")
             extra = input_override["problem_statement"]
             task["task_prompt"] = f"{original_prompt}\n\n{extra}" if original_prompt else extra
-    COREBENCH_DATA.write_text(json.dumps([task], indent=2), encoding="utf-8")
+    dataset_path.write_text(json.dumps([task], indent=2), encoding="utf-8")
 
 def install_agent_requirements(agent_dir: Path) -> None:
     requirements = agent_dir / "requirements.txt"
@@ -277,6 +312,8 @@ def main() -> None:
     fixes_root = Path(args.fixes_root)
     agent_dir = Path(args.agent_dir)
     agent_args_path = Path(args.agent_args)
+    dataset_path = resolve_corebench_dataset_path(args.corebench_dataset)
+    dataset_backup = dataset_path.with_suffix(dataset_path.suffix + ".bak")
     rubric_output_dir = REPO_ROOT / "rubrics_output"
     rubric_output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -286,7 +323,7 @@ def main() -> None:
     if not args.skip_install:
         install_agent_requirements(agent_dir)
 
-    tasks_data = load_corebench_dataset()
+    tasks_data = load_corebench_dataset(dataset_path)
     capsule_map = {item["capsule_id"]: item for item in tasks_data}
 
     fix_dirs = sorted([p for p in fixes_root.iterdir() if p.is_dir()])
@@ -300,8 +337,8 @@ def main() -> None:
         print(f"No fix directories found in {fixes_root}")
         return
 
-    shutil.copyfile(COREBENCH_DATA, COREBENCH_BACKUP)
-    print(f"Backed up core_test.json -> {COREBENCH_BACKUP}")
+    shutil.copyfile(dataset_path, dataset_backup)
+    print(f"Backed up {dataset_path} -> {dataset_backup}")
 
     try:
         fixes_base = fixes_root.parent
@@ -321,6 +358,7 @@ def main() -> None:
                 original_tasks=capsule_map,
                 capsule_id=capsule_id,
                 input_override=input_override,
+                dataset_path=dataset_path,
             )
 
             temp_agent_dir = copy_agent_with_fix(agent_dir, capsule_id, fixes_base)
@@ -386,8 +424,8 @@ def main() -> None:
                 print(f"[merge] Completed rubric evaluation for {merged_trace}")
 
     finally:
-        shutil.move(COREBENCH_BACKUP, COREBENCH_DATA)
-        print("Restored original core_test.json")
+        shutil.move(dataset_backup, dataset_path)
+        print(f"Restored original dataset file: {dataset_path}")
 
 
 if __name__ == "__main__":
