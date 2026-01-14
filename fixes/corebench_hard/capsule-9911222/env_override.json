@@ -1,5 +1,5 @@
 {
-  "HAL_FORCE_CONDA_ENV": "hal",
+  "HAL_FORCE_CONDA_ENV": "base",
   "HAL_CONDA_CHANNELS": "conda-forge",
   "HAL_CONDA_PACKAGES": "r-base=4.* pandoc texlive-core r-rmarkdown r-knitr r-matrix r-mass",
   "R_LIBS_USER": "./.R/library",

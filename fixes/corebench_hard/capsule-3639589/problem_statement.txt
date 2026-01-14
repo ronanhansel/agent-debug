@@ -3,6 +3,6 @@ This task failed because `torch` (PyTorch) is missing.
 Guidance:
 - Install PyTorch before running `demo.py`.
 - Prefer a CPU-only install (no GPU drivers assumed).
-- Do not use `apt-get`; install via pip/conda within the `hal` environment.
+- Do not use `apt-get`; install via pip/conda within the `base` environment.
 
 After installation, rerun `demo.py`.

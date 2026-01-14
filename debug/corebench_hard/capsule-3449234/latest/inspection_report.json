@@ -23,19 +23,19 @@
     "fixes/corebench_hard/capsule-3449234/input_override.json: If needed, adjust notebook execution parameters (e.g., kernel name, timeout settings) to ensure compatibility with the environment."
   ],
   "self_review_checklist": [
-    "Verify that the environment override installs jupyter, nbconvert, and matplotlib in the correct conda environment ('hal').",
+    "Verify that the environment override installs jupyter, nbconvert, and matplotlib in the correct conda environment ('base').",
     "Confirm that the working directory used in the nbconvert command is properly set to the repository root to avoid duplicated path issues.",
     "Review that the notebook 'visualize_results.ipynb' is executed with the --allow-errors and --ExecutePreprocessor.timeout=-1 options.",
     "Check that after these environment fixes the notebook execution produces the expected executed notebook and HTML output as required."
   ],
   "fix_folder": "/Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-3449234",
   "coding_agent_context": {
-    "working_directory": "/Users/ronan/Developer/agent-debug/hal-harness",
+    "working_directory": "/Users/ronan/Developer/agent-debug/base-harness",
     "fix_folder": "/Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-3449234",
-    "system_prompt": "You are a coding agent operating inside hal-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<benchmark>/<task_id>/, and do NOT run any reruns. Never modify repository files directly; only create or update fix packages. You MUST write the fix package to disk under the fix folder (do not just describe it). Only files under the fix folder may be changed.",
+    "system_prompt": "You are a coding agent operating inside base-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<benchmark>/<task_id>/, and do NOT run any reruns. Never modify repository files directly; only create or update fix packages. You MUST write the fix package to disk under the fix folder (do not just describe it). Only files under the fix folder may be changed.",
     "instructions": [
-      "cd /Users/ronan/Developer/agent-debug/hal-harness",
-      "If you include any Python commands in your guidance, assume they should be run inside the preconfigured conda env `hal` (e.g., `conda activate hal`).",
+      "cd /Users/ronan/Developer/agent-debug/base-harness",
+      "If you include any Python commands in your guidance, assume they should be run inside the preconfigured conda env `base` (e.g., `conda activate base`).",
       "Inspect inspection_report.json for analysis and rationale.",
       "Do NOT modify repository files directly; place overlays or patches under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-3449234.",
       "Prefer dropping fully-edited files under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-3449234/agent (patch.diff is only a fallback when overlays are impractical).",

@@ -1,6 +1,6 @@
 This task failed because `Rscript` is not available and `apt-get` installs are blocked.
 
 Guidance:
-- Install/provide `Rscript` via conda in env `hal` (`r-base` from `conda-forge`).
+- Install/provide `Rscript` via conda in env `base` (`r-base` from `conda-forge`).
 - Set a writable R library path (`R_LIBS_USER=./.R/library`) for any package installs.
 - Run `pancancer_calculation.R` using the conda-provided `Rscript` only after `Rscript --version` succeeds.

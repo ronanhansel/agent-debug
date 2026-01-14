@@ -3,7 +3,7 @@
   "rationale": "Evidence shows initial errors ('Rscript: not found', 'Unable to lock directory /var/lib/apt/lists/'), followed by a conda installation of R but persistent missing dependencies (e.g., Matrix, MASS, and bioconductor-complexheatmap) and absent LaTeX executables. These external environment constraints (lack of root privileges and missing system dependencies) prevent PDF rendering via rmarkdown::render.",
   "evidence_summary": "- Error messages indicating Rscript is not found and permission denied for apt locks\n- Conda-installed R is available but missing base and Bioconductor packages\n- LaTeX executables (pdflatex, latexmk) are absent, making PDF compilation impossible\n- Python tool errors caused by forbidden file I/O and disallowed imports are present but non-blocking",
   "environment_assumptions": [
-    "The conda environment 'hal' is active for all Python and R commands",
+    "The conda environment 'base' is active for all Python and R commands",
     "The evaluation environment does not allow root-level apt installations",
     "Writable directories are available using fix-package env overrides"
   ],
@@ -32,12 +32,12 @@
   ],
   "fix_folder": "/Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-9911222",
   "coding_agent_context": {
-    "working_directory": "/Users/ronan/Developer/agent-debug/hal-harness",
+    "working_directory": "/Users/ronan/Developer/agent-debug/base-harness",
     "fix_folder": "/Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-9911222",
-    "system_prompt": "You are a coding agent operating inside hal-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<benchmark>/<task_id>/, and do NOT run any reruns. Never modify repository files directly; only create or update fix packages. You MUST write the fix package to disk under the fix folder (do not just describe it). Only files under the fix folder may be changed.",
+    "system_prompt": "You are a coding agent operating inside base-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<benchmark>/<task_id>/, and do NOT run any reruns. Never modify repository files directly; only create or update fix packages. You MUST write the fix package to disk under the fix folder (do not just describe it). Only files under the fix folder may be changed.",
     "instructions": [
-      "cd /Users/ronan/Developer/agent-debug/hal-harness",
-      "If you include any Python commands in your guidance, assume they should be run inside the preconfigured conda env `hal` (e.g., `conda activate hal`).",
+      "cd /Users/ronan/Developer/agent-debug/base-harness",
+      "If you include any Python commands in your guidance, assume they should be run inside the preconfigured conda env `base` (e.g., `conda activate base`).",
       "Inspect inspection_report.json for analysis and rationale.",
       "Do NOT modify repository files directly; place overlays or patches under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-9911222.",
       "Prefer dropping fully-edited files under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-9911222/agent (patch.diff is only a fallback when overlays are impractical).",

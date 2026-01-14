@@ -2,7 +2,7 @@ This task requires rendering an RMarkdown manuscript to PDF, but the environment
 
 Guidance:
 - Do not use `apt-get`.
-- Use conda env `hal` to provide:
+- Use conda env `base` to provide:
   - A modern R (`r-base` 4.x),
   - `pandoc`,
   - a TeX engine (`texlive-core`),

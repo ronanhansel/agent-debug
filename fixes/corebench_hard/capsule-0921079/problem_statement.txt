@@ -1,10 +1,10 @@
 Environment prerequisite: R must be available.
 
 - Do not use `apt-get` (blocked).
-- Ensure `Rscript` is on PATH by using the existing conda env `hal`.
+- Ensure `Rscript` is on PATH by using the existing conda env `base`.
 
 Suggested setup (run inside the task container before executing `01_code.R`):
-- `conda activate hal`
+- `conda activate base`
 - `conda install -y -c conda-forge r-base`
 - `Rscript --version`
 

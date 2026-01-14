@@ -1,5 +1,5 @@
 Environment prerequisite:
-- `Rscript` must be available (do not use `apt-get`). Use conda in env `hal` to provide `r-base`.
+- `Rscript` must be available (do not use `apt-get`). Use conda in env `base` to provide `r-base`.
 
 After ensuring `Rscript --version` works, run `main.R` with `Rscript` as the task requires.
 Ensure `R_DEFAULT_PACKAGES` remains set to `datasets,utils,grDevices,graphics,stats,methods` if relied upon.

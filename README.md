@@ -3,8 +3,8 @@
 Setting up environment
 
 ```bash
-CONDA_PLUGINS_AUTO_ACCEPT_TOS=yes conda create -n hal python=3.12 -y
-conda activate hal
+CONDA_PLUGINS_AUTO_ACCEPT_TOS=yes conda create -n agent python=3.12 -y
+conda activate agent
 ```
 
 Install all requirements (this will automatically install packages from submodules `docent` and `hal-harness`)
@@ -13,6 +13,7 @@ Install all requirements (this will automatically install packages from submodul
 pip install -r requirements.txt # From agent-debug
 pip install -e ./docent      # Editable install of docent
 pip install -e ./hal-harness  # Editable install of hal-harness
+pip install --upgrade --force-reinstall certifi click
 ```
 
 Build docker env for hal harness
@@ -140,8 +141,9 @@ python scripts/master_rerun_corebench_fixes.py \
     --mapping-file model_to_baseline.json \
     --max-parallel 5 \
     --max-parallel-capsules 5 \
-    --prefix mango \
+    --prefix ss \
     --wandb-mode online \
+    --stream-logs \
     --skip-rubrics
 ```
 

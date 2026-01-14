@@ -5,6 +5,6 @@ Environment constraints:
 - The parent directory is not writable, so creating `../results` fails.
 
 Guidance:
-- Install `jupyter` + `nbconvert` (and `ipykernel`) inside conda env `hal`.
+- Install `jupyter` + `nbconvert` (and `ipykernel`) inside conda env `base`.
 - Write outputs to `./results` instead of `../results`.
 - Keep required nbconvert flags (e.g., allow errors, disable timeout) as specified by the task.

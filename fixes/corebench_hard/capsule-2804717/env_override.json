@@ -1,5 +1,5 @@
 {
-  "HAL_FORCE_CONDA_ENV": "hal",
+  "HAL_FORCE_CONDA_ENV": "base",
   "HAL_CONDA_CHANNELS": "conda-forge",
   "HAL_CONDA_PACKAGES": "r-base=4.* pandoc r-rmarkdown r-knitr",
   "R_DEFAULT_PACKAGES": "datasets,utils,grDevices,graphics,stats,methods",

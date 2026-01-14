@@ -5,7 +5,7 @@ Environment constraints:
 - `.R` file inspection may be limited; treat `.R` scripts as executable inputs rather than relying on file-inspection tooling.
 
 Guidance:
-- Install/provide `Rscript` via conda env `hal` (e.g., `r-base` from `conda-forge`).
+- Install/provide `Rscript` via conda env `base` (e.g., `r-base` from `conda-forge`).
 - If `run.sh` is missing, do not depend on it; instead run the scripts directly with `Rscript` (in the order specified by the README).
 - Write outputs into a writable directory like `./results` and ensure subfolders exist (`tables`, `figures`, `for_publication/tables`, `for_publication/figures`).
 

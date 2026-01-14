@@ -2,7 +2,7 @@ This task failed because PDF rendering requires external tooling that is missing
 
 Guidance:
 - Do not use `apt-get`.
-- Use conda env `hal` to provide:
+- Use conda env `base` to provide:
   - `r-base` (4.x),
   - `pandoc`,
   - a TeX toolchain (e.g., `texlive-core`),

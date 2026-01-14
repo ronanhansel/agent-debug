@@ -13,29 +13,29 @@
     "env_override.json"
   ],
   "recommended_actions": [
-    "Update the fix package to install Jupyter (or nbconvert) if it is not present via an environment override that uses a vendored dependency or conda install instructions within the 'hal' environment.",
+    "Update the fix package to install Jupyter (or nbconvert) if it is not present via an environment override that uses a vendored dependency or conda install instructions within the 'base' environment.",
     "Configure an env_override.json to redirect output to a writable directory instead of '../results'; for example, choose a subdirectory within the current working directory.",
     "Edit prompt/input overrides so that notebook execution uses the alternate output directory path and properly disable the timeout and allow errors for nbconvert.",
     "Ensure that the repository's installation steps install dependencies correctly, including jupyter if required."
   ],
   "fix_package_plan": [
-    "fixes/corebench_hard/capsule-4671827/env_override.json: Set an override that defines a writable output directory (e.g., './results' instead of '../results') and include commands or PATH updates to install/run jupyter/nbconvert in the 'hal' conda environment.",
+    "fixes/corebench_hard/capsule-4671827/env_override.json: Set an override that defines a writable output directory (e.g., './results' instead of '../results') and include commands or PATH updates to install/run jupyter/nbconvert in the 'base' conda environment.",
     "fixes/corebench_hard/capsule-4671827/problem_statement.txt: Update the task instructions to replace '../results' with the new output directory and include a note to install jupyter via conda (e.g., 'conda install jupyter nbconvert') if needed."
   ],
   "self_review_checklist": [
     "Verify that the new env_override.json directs output to a directory that the process can write to (e.g., './results').",
-    "Confirm that jupyter and nbconvert are available in the 'hal' environment, either via conda install steps or by vendoring them in the fix package.",
+    "Confirm that jupyter and nbconvert are available in the 'base' environment, either via conda install steps or by vendoring them in the fix package.",
     "Double-check that the modified problem statement reflects the correct output path and includes installation instructions for the missing dependencies.",
     "Review that the fix package does not require re-running the HAL debugger or any rerun commands."
   ],
   "fix_folder": "/Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-4671827",
   "coding_agent_context": {
-    "working_directory": "/Users/ronan/Developer/agent-debug/hal-harness",
+    "working_directory": "/Users/ronan/Developer/agent-debug/base-harness",
     "fix_folder": "/Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-4671827",
-    "system_prompt": "You are a coding agent operating inside hal-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<benchmark>/<task_id>/, and do NOT run any reruns. Never modify repository files directly; only create or update fix packages. You MUST write the fix package to disk under the fix folder (do not just describe it). Only files under the fix folder may be changed.",
+    "system_prompt": "You are a coding agent operating inside base-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<benchmark>/<task_id>/, and do NOT run any reruns. Never modify repository files directly; only create or update fix packages. You MUST write the fix package to disk under the fix folder (do not just describe it). Only files under the fix folder may be changed.",
     "instructions": [
-      "cd /Users/ronan/Developer/agent-debug/hal-harness",
-      "If you include any Python commands in your guidance, assume they should be run inside the preconfigured conda env `hal` (e.g., `conda activate hal`).",
+      "cd /Users/ronan/Developer/agent-debug/base-harness",
+      "If you include any Python commands in your guidance, assume they should be run inside the preconfigured conda env `base` (e.g., `conda activate base`).",
       "Inspect inspection_report.json for analysis and rationale.",
       "Do NOT modify repository files directly; place overlays or patches under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-4671827.",
       "Prefer dropping fully-edited files under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-4671827/agent (patch.diff is only a fallback when overlays are impractical).",

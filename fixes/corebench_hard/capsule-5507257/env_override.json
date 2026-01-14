@@ -1,4 +1,4 @@
 {
   "DATA_DIR": "./data",
-  "HAL_FORCE_CONDA_ENV": "hal"
+  "HAL_FORCE_CONDA_ENV": "base"
 }

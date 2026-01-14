@@ -2,7 +2,7 @@ This task failed due to missing `Rscript`, missing `xvfb-run`, and a missing res
 
 Environment constraints:
 - Do not use `apt-get`.
-- Provide dependencies via conda (env `hal`) where possible.
+- Provide dependencies via conda (env `base`) where possible.
 
 Guidance:
 - Install `r-base` and an X virtual framebuffer implementation (e.g., `xorg-xvfb`) via `conda-forge`.

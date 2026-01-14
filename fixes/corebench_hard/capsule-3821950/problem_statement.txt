@@ -2,7 +2,7 @@ This task failed because `Rscript` is missing and R package installation tried t
 
 Guidance:
 - Do not use `apt-get`.
-- Install R + required R packages via conda (env `hal`) where possible.
+- Install R + required R packages via conda (env `base`) where possible.
 - Set a writable user library for R packages via `R_LIBS_USER` (e.g., `./.R/library`).
 - Ensure output directories are writable (use `./results` and create `./results/figures` if needed).
 

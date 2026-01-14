@@ -2,7 +2,7 @@ This task failed because `Rscript` is missing and system installs via `apt-get` 
 
 Guidance:
 - Do not use `apt-get`.
-- Provide `Rscript` via conda in env `hal` (install `r-base` from `conda-forge`).
+- Provide `Rscript` via conda in env `base` (install `r-base` from `conda-forge`).
 - Use a writable R library path (`R_LIBS_USER=./.R/library`) if packages need to be installed.
 
 Before running `master_script.R`:

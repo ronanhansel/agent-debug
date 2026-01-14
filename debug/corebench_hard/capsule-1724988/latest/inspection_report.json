@@ -21,24 +21,24 @@
     "Review and update the README to confirm dependency paths align with the evaluation environment constraints."
   ],
   "fix_package_plan": [
-    "fixes/corebench_hard/capsule-1724988/env_override.json -> Include overrides that set the R executable path to a conda-installed R (e.g., 'conda activate hal' and Rscript available in PATH) and redirect the data path from '/data' to a valid directory within the workspace.",
+    "fixes/corebench_hard/capsule-1724988/env_override.json -> Include overrides that set the R executable path to a conda-installed R (e.g., 'conda activate base' and Rscript available in PATH) and redirect the data path from '/data' to a valid directory within the workspace.",
     "fixes/corebench_hard/capsule-1724988/input_override.json -> Override the input path used in R scripts (replace '/data/...' with a correct relative path accessible in the environment).",
     "fixes/corebench_hard/capsule-1724988/problem_statement.txt -> Edit the problem statement to instruct the agent to use the conda environment for installing R packages and to use the alternate data directory."
   ],
   "self_review_checklist": [
-    "Verify that the conda environment 'hal' contains R and Rscript, and that they are accessible via PATH.",
+    "Verify that the conda environment 'base' contains R and Rscript, and that they are accessible via PATH.",
     "Ensure that the env_override.json correctly sets a writable directory path for data access, replacing '/data' with an available directory.",
     "Confirm that no apt-level installations are attempted and that R package installations occur via conda or in a vendorized manner.",
     "Double-check that the fix package instructions allow a one-pass fix without requiring environment reruns."
   ],
   "fix_folder": "/Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-1724988",
   "coding_agent_context": {
-    "working_directory": "/Users/ronan/Developer/agent-debug/hal-harness",
+    "working_directory": "/Users/ronan/Developer/agent-debug/base-harness",
     "fix_folder": "/Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-1724988",
-    "system_prompt": "You are a coding agent operating inside hal-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<benchmark>/<task_id>/, and do NOT run any reruns. Never modify repository files directly; only create or update fix packages. You MUST write the fix package to disk under the fix folder (do not just describe it). Only files under the fix folder may be changed.",
+    "system_prompt": "You are a coding agent operating inside base-harness. Follow the inspection report guidance, prepare self-contained fixes under fixes/<benchmark>/<task_id>/, and do NOT run any reruns. Never modify repository files directly; only create or update fix packages. You MUST write the fix package to disk under the fix folder (do not just describe it). Only files under the fix folder may be changed.",
     "instructions": [
-      "cd /Users/ronan/Developer/agent-debug/hal-harness",
-      "If you include any Python commands in your guidance, assume they should be run inside the preconfigured conda env `hal` (e.g., `conda activate hal`).",
+      "cd /Users/ronan/Developer/agent-debug/base-harness",
+      "If you include any Python commands in your guidance, assume they should be run inside the preconfigured conda env `base` (e.g., `conda activate base`).",
       "Inspect inspection_report.json for analysis and rationale.",
       "Do NOT modify repository files directly; place overlays or patches under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-1724988.",
       "Prefer dropping fully-edited files under /Users/ronan/Developer/agent-debug/fixes/corebench_hard/capsule-1724988/agent (patch.diff is only a fallback when overlays are impractical).",

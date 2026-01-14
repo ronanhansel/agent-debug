@@ -6,7 +6,7 @@ Environment constraints:
 - Avoid unsupported conda flags like `--force`.
 
 Guidance:
-- Use the existing conda env `hal` to install/provide `r-base` from `conda-forge`.
+- Use the existing conda env `base` to install/provide `r-base` from `conda-forge`.
 - Use a writable R package library (set `R_LIBS_USER=./.R/library`) if packages must be installed.
 - Write outputs into a writable directory like `./results` (not `../results`).
 
