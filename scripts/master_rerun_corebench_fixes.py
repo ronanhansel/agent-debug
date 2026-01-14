@@ -108,6 +108,10 @@ def parse_args() -> argparse.Namespace:
         help="Rubric model identifier passed through to scripts/run_corebench_fixes.py.",
     )
     parser.add_argument(
+        "--corebench-dataset",
+        help="Optional path to core_test.json to pass through to scripts/run_corebench_fixes.py.",
+    )
+    parser.add_argument(
         "--reasoning-effort",
         choices=["low", "medium", "high"],
         help="If set, inject reasoning_effort into agent args for all mapping entries (unless overridden per entry).",
@@ -283,6 +287,8 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec) -> Dict[str, Any]
         "--merged-run-id",
         run_id,
     ]
+    if args.corebench_dataset:
+        cmd += ["--corebench-dataset", args.corebench_dataset]
     if args.docker:
         cmd.append("--docker")
     if args.vm:
