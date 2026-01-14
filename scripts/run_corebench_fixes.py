@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import shlex
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
@@ -193,6 +194,47 @@ def _conda_executable() -> str | None:
     return shutil.which("conda") or os.environ.get("CONDA_EXE")
 
 
+def _conda_spec_name(spec: str) -> str:
+    for sep in ("==", ">=", "<=", "=", ">", "<"):
+        if sep in spec:
+            return spec.split(sep, 1)[0].strip()
+    return spec.strip()
+
+
+def _conda_available_package_names(conda: str, *, channels: List[str], names: List[str]) -> set[str] | None:
+    unique = sorted({name for name in names if name})
+    if not unique:
+        return set()
+    cmd = [conda, "search", "--json"]
+    for channel in channels:
+        cmd += ["-c", channel]
+    cmd += unique
+    proc = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+    if proc.returncode != 0:
+        return None
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError:
+        return None
+    available: set[str] = set()
+    for name in unique:
+        entries = payload.get(name)
+        if isinstance(entries, list) and entries:
+            available.add(name)
+    return available
+
+
+def _drop_missing_packages_from_conda_output(output: str) -> List[str]:
+    if "PackagesNotFoundError" not in output:
+        return []
+    missing: List[str] = []
+    for line in output.splitlines():
+        line = line.strip()
+        if line.startswith("- "):
+            missing.append(line[2:].strip())
+    return missing
+
+
 def _install_conda_packages(
     *,
     env_name: str,
@@ -218,25 +260,69 @@ def _install_conda_packages(
     if sentinel.exists():
         return
 
+    # Best-effort filter: skip package specs whose names are not present in the configured channels.
+    # Some environments mirror only a subset of conda-forge (e.g. no xorg packages).
+    names = [_conda_spec_name(spec) for spec in packages]
+    available = _conda_available_package_names(conda, channels=channels, names=names)
+    if available is not None:
+        filtered = [spec for spec in packages if _conda_spec_name(spec) in available]
+        dropped = sorted({spec for spec in packages if spec not in filtered})
+        if dropped:
+            print(f"[setup][conda] Skipping unavailable package specs: {', '.join(dropped)}")
+        packages = filtered
+        if not packages:
+            sentinel.write_text("ok (no available packages)\n", encoding="utf-8")
+            return
+
     lock_handle = lock_path.open("a", encoding="utf-8")
     try:
         try:
             import fcntl  # type: ignore
 
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            # Serialize conda installs across concurrent specs without hanging forever on flock().
+            while True:
+                try:
+                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    time.sleep(0.5)
         except Exception:
             pass
 
         if sentinel.exists():
             return
 
-        cmd = [conda, "install", "-y", "-n", env_name]
-        for channel in channels:
-            cmd += ["-c", channel]
-        cmd += packages
-        print(f"[setup][conda] {' '.join(map(str, cmd))}")
-        subprocess.run(cmd, check=True, cwd=REPO_ROOT)
-        sentinel.write_text("ok\n", encoding="utf-8")
+        def run_install(current: List[str]) -> subprocess.CompletedProcess[str]:
+            cmd = [conda, "install", "-y", "-n", env_name]
+            for channel in channels:
+                cmd += ["-c", channel]
+            cmd += current
+            print(f"[setup][conda] {' '.join(map(str, cmd))}")
+            return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+
+        remaining = list(packages)
+        for _attempt in range(2):
+            proc = run_install(remaining)
+            if proc.returncode == 0:
+                sentinel.write_text("ok\n", encoding="utf-8")
+                return
+            output = (proc.stdout or "") + "\n" + (proc.stderr or "")
+            missing = _drop_missing_packages_from_conda_output(output)
+            if not missing:
+                raise subprocess.CalledProcessError(proc.returncode, proc.args, output=proc.stdout, stderr=proc.stderr)
+            missing_names = {_conda_spec_name(item) for item in missing if item}
+            new_remaining = [
+                spec for spec in remaining if _conda_spec_name(spec) not in missing_names and spec not in missing
+            ]
+            if new_remaining == remaining:
+                raise subprocess.CalledProcessError(proc.returncode, proc.args, output=proc.stdout, stderr=proc.stderr)
+            print(f"[setup][conda] Dropping missing packages and retrying: {', '.join(sorted(missing_names))}")
+            remaining = new_remaining
+            if not remaining:
+                sentinel.write_text("ok (all packages unavailable)\n", encoding="utf-8")
+                return
+
+        raise subprocess.CalledProcessError(proc.returncode, proc.args, output=proc.stdout, stderr=proc.stderr)
     finally:
         try:
             lock_handle.close()
