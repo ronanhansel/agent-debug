@@ -14,11 +14,6 @@
     "baseline_trace": "corebench_hard_hal_generalist_agento3medium_1755626315_UPLOAD.json",
     "reasoning_effort": "medium"
   },
-  "openai/gpt-5-2025-08-07": {
-    "model_id": "openai/gpt-5_2025-08-07",
-    "baseline_trace": "corebench_hard_hal_generalist_agentgpt5medium_1756137340_UPLOAD.json",
-    "reasoning_effort": "medium"
-  },
   "openai/gpt-4.1-2025-04-14": {
     "model_id": "openai/gpt-4.1_2025-04-14",
     "baseline_trace": "corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json"
