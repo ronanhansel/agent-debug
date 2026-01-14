@@ -73,6 +73,7 @@ class ModelRunSpec:
     model_name: str
     baseline_trace: str
     reasoning_effort: str | None = None
+    model_id: str | None = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -180,11 +181,15 @@ def load_mapping(path: Path) -> List[ModelRunSpec]:
                     f"Invalid reasoning_effort for {model_name}: {reasoning_effort} "
                     "(expected low|medium|high)"
                 )
+            model_id = baseline.get("model_id")
+            if model_id is not None and (not isinstance(model_id, str) or not model_id.strip()):
+                raise ValueError(f"Invalid model_id for {model_name}: must be a non-empty string when provided.")
             specs.append(
                 ModelRunSpec(
                     model_name=model_name,
                     baseline_trace=baseline_trace,
                     reasoning_effort=reasoning_effort,
+                    model_id=model_id,
                 )
             )
             continue
@@ -209,17 +214,20 @@ def filter_tasks_with_fixes(fixes_root: Path, benchmark: str, failed_tasks: List
 
 def write_temp_agent_args(
     base_agent_args: Path,
-    model_name: str,
+    pricing_model_name: str,
     benchmark: str,
     reasoning_effort: str | None,
+    api_model_id: str | None,
 ) -> Path:
     base = json.loads(base_agent_args.read_text(encoding="utf-8"))
     if not isinstance(base, dict):
         raise ValueError(f"Base agent args must be an object JSON file: {base_agent_args}")
-    base["model_name"] = model_name
+    base["model_name"] = pricing_model_name
     base["benchmark_name"] = benchmark
     if reasoning_effort:
         base["reasoning_effort"] = reasoning_effort
+    if api_model_id:
+        base["api_model_id"] = api_model_id
     handle = tempfile.NamedTemporaryFile("w", delete=False, suffix=".json")
     Path(handle.name).write_text(json.dumps(base, indent=2) + "\n", encoding="utf-8")
     return Path(handle.name)
@@ -253,9 +261,14 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec) -> Dict[str, Any]
 
     run_id, merged_output = build_output_names(output_dir, benchmark, spec.model_name, baseline_trace_path.stem)
     effective_effort = spec.reasoning_effort or args.reasoning_effort
+    pricing_model_name = spec.model_name
+    api_model_id = spec.model_id
 
     summary: Dict[str, Any] = {
         "model_name": spec.model_name,
+        "model_id": spec.model_id,
+        "pricing_model_name": pricing_model_name,
+        "api_model_id": api_model_id,
         "baseline_trace": str(baseline_trace_path),
         "benchmark": benchmark,
         "reasoning_effort": effective_effort,
@@ -272,7 +285,13 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec) -> Dict[str, Any]
         return summary
 
     base_agent_args = (REPO_ROOT / args.base_agent_args).resolve()
-    temp_agent_args = write_temp_agent_args(base_agent_args, spec.model_name, benchmark, effective_effort)
+    temp_agent_args = write_temp_agent_args(
+        base_agent_args,
+        pricing_model_name,
+        benchmark,
+        effective_effort,
+        api_model_id,
+    )
 
     cmd: List[str] = [
         sys.executable,

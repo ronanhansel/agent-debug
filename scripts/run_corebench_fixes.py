@@ -417,6 +417,8 @@ def main() -> None:
                 hal_env["PYTHONPATH"] = (
                     f"{extra_path}{os.pathsep}{hal_env.get('PYTHONPATH', '')}".rstrip(os.pathsep)
                 )
+                # Ensure cost computation uses the pricing model name even if the API model id differs.
+                hal_env.setdefault("HAL_PRICING_MODEL_NAME", str(agent_args.get("model_name", "")))
                 hal_env.setdefault("WANDB_SILENT", "true")
                 if args.wandb_mode == "disabled":
                     hal_env["WANDB_MODE"] = "disabled"
