@@ -1,0 +1,4 @@
+{
+  "HAL_DEPENDENCY_HINT": "Requires Rscript; install R via conda before running.",
+  "HAL_SETUP_COMMANDS": "conda activate hal && conda install -y -c conda-forge r-base && Rscript --version"
+}

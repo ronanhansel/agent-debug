@@ -1,0 +1,7 @@
+{
+  "HAL_FORCE_CONDA_ENV": "hal",
+  "HAL_CONDA_CHANNELS": "conda-forge",
+  "HAL_CONDA_PACKAGES": "r-base=4.* pandoc texlive-core r-rmarkdown r-knitr r-scales",
+  "R_LIBS_USER": "./.R/library",
+  "HAL_OUTPUT_DIR": "./results"
+}

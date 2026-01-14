@@ -1,0 +1,8 @@
+Environment prerequisites and filesystem constraints:
+
+- Do not write to `../results` (parent directory is not writable). Use `./results` (or `HAL_OUTPUT_DIR`) instead.
+- Ensure the Python environment has notebook execution/export tooling.
+  - `nbconvert`, `jupyter`, `jupyter_core`, and `ipykernel` must be importable.
+- Ensure `scikit-learn` is installed (the notebook imports `sklearn`).
+
+After dependencies are present, re-run the notebook export/execution, writing the generated HTML (and any artifacts) into `./results`.

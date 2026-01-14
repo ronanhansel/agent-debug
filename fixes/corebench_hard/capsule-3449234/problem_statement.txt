@@ -1,0 +1,10 @@
+This task failed due to missing notebook tooling (`jupyter`/`nbconvert`) and missing `matplotlib`, plus a path error that duplicated `environment/code`.
+
+Guidance:
+- Install `jupyter`, `nbconvert`, `ipykernel`, and `matplotlib` in the `hal` environment.
+- Use headless plotting: `MPLBACKEND=Agg`.
+- Run nbconvert from the correct working directory to avoid duplicated paths.
+  - Example: `cd environment/code` then reference `visualize_results.ipynb` by filename (not `environment/code/...`).
+- Write outputs to a writable directory (e.g., `./results`).
+
+Keep nbconvert flags required by the task, including `--allow-errors` and `--ExecutePreprocessor.timeout=-1`.

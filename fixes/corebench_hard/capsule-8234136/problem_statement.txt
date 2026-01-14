@@ -1,0 +1,9 @@
+This task failed because `matplotlib==3.3.2` could not be built in this environment, causing missing `matplotlib` and `joblib`.
+
+Guidance:
+- Do not pin to `matplotlib==3.3.2`.
+- Install a compatible prebuilt `matplotlib` wheel (or conda-provided matplotlib) and ensure `joblib` is installed.
+- Use headless plotting: set `MPLBACKEND=Agg`.
+- Ensure outputs/logs go to a writable directory (e.g., `./results`).
+
+After dependencies install cleanly, rerun `main.py` and `grapher.py` to generate outputs.

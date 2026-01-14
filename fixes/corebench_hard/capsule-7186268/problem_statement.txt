@@ -1,0 +1,7 @@
+This task failed due to missing `Rscript` and `pandoc`, plus an unwritable `../results` directory.
+
+Guidance:
+- Do not use `apt-get`.
+- Provide `Rscript` + `pandoc` via conda env `hal` (`r-base`, `pandoc`, and R packages like `rmarkdown/knitr` if needed).
+- Write outputs to `./results` (not `../results`).
+- Render `SampleCode.Rmd` using `Rscript` (e.g., `rmarkdown::render(..., clean=TRUE)`) with the output directory set to `./results`.

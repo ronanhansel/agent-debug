@@ -1,0 +1,8 @@
+This task failed because `Rscript` is not installed and system installs via `apt-get` are blocked.
+
+Guidance:
+- Provide `Rscript` via conda (env `hal`) by installing `r-base`.
+- If any R packages are needed, install them into a writable user library (set `R_LIBS_USER=./.R/library`).
+- Do not attempt `apt-get`.
+
+After `Rscript --version` succeeds, proceed with the CSV analysis/rendering steps in the task.

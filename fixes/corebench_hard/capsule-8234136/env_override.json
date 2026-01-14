@@ -1,0 +1,6 @@
+{
+  "HAL_FORCE_CONDA_ENV": "hal",
+  "HAL_PIP_PACKAGES": "matplotlib joblib",
+  "MPLBACKEND": "Agg",
+  "HAL_OUTPUT_DIR": "./results"
+}

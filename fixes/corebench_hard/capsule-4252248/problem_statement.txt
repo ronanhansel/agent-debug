@@ -1,0 +1,13 @@
+This task requires running several R scripts (e.g., `main-ctrpv.R`, `main-nci.R`, `main-network-generation.R`) to compute PR curve AUC.
+
+Environment constraints:
+- `R`/`Rscript` are not available by default.
+- Do not use `apt-get` (blocked).
+- Avoid unsupported conda flags like `--force`.
+
+Guidance:
+- Use the existing conda env `hal` to install/provide `r-base` from `conda-forge`.
+- Use a writable R package library (set `R_LIBS_USER=./.R/library`) if packages must be installed.
+- Write outputs into a writable directory like `./results` (not `../results`).
+
+After setup, verify `Rscript --version` works and then run the R scripts as instructed.

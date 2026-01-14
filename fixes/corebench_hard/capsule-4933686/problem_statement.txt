@@ -1,0 +1,13 @@
+This task failed due to missing `Rscript`, missing `xvfb-run`, and a missing results directory.
+
+Environment constraints:
+- Do not use `apt-get`.
+- Provide dependencies via conda (env `hal`) where possible.
+
+Guidance:
+- Install `r-base` and an X virtual framebuffer implementation (e.g., `xorg-xvfb`) via `conda-forge`.
+- Use `xvfb-run` only if the pipeline requires a virtual display; otherwise run `Rscript` directly.
+- Ensure outputs are written to a writable directory like `./results` and create it before running.
+- Set `R_LIBS_USER=./.R/library` for any R package installs.
+
+After setup, run `Main.R` and ensure the expected results artifacts are produced under `./results`.

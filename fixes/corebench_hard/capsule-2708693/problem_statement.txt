@@ -1,0 +1,10 @@
+Environment constraints:
+- Do not use `apt-get` (blocked).
+- Provide R + pandoc + LaTeX via conda in env `hal`.
+- Do not write to parent directories; write outputs to a writable directory like `./results`.
+
+If `preregSR_manuscript.Rmd` is missing from the workspace, the rendering step cannot run. In that case:
+- Fail fast with a clear message that the repository content is missing.
+- Do not attempt OS-level cloning or system installs.
+
+If the file exists, render it using conda-provided `Rscript`/`pandoc`/TeX into `./results`.

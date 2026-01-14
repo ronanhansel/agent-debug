@@ -1,0 +1,13 @@
+Environment prerequisites and data path constraint:
+
+1) R must be available.
+- Do not use `apt-get`.
+- Use conda (env `hal`) to provide `R`/`Rscript`.
+  - `conda activate hal`
+  - `conda install -y -c conda-forge r-base`
+
+2) The scripts assume data exists at `/data`, but `/data` is not present.
+- Point the analysis scripts at a valid data directory under the workspace (e.g. `./data`).
+- Prefer reading the data directory from an environment variable (e.g. `HAL_DATA_DIR`) so the code does not hardcode `/data`.
+
+Once `Rscript` is available and the data path is corrected, run the R scripts (e.g., `lss1_summary_analyses.R`, `lss2_summary_analyses.R`, etc.) as instructed.

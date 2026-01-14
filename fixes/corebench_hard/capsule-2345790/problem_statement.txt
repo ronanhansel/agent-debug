@@ -1,0 +1,9 @@
+Environment prerequisites and filesystem constraints:
+
+- Do not write to `../results` (parent directory is not writable). Use `./results` (or `HAL_OUTPUT_DIR`) instead.
+- R must be available (`Rscript` on PATH) and required R packages must be installed.
+  - Do not use `apt-get`.
+  - Use conda (env `hal`) to install `r-base`.
+  - Install required R packages via conda when possible (e.g., `r-rmarkdown`, `r-readr`, `r-kableextra`) or via `install.packages()` into a user library.
+
+After the above, render the available `.Rmd` files into HTML, writing outputs into `./results`.

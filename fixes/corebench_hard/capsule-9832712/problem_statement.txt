@@ -1,0 +1,14 @@
+This task failed because `Rscript` is missing and system installs via `apt-get` are blocked.
+
+Guidance:
+- Do not use `apt-get`.
+- Provide `Rscript` via conda in env `hal` (install `r-base` from `conda-forge`).
+- Use a writable R library path (`R_LIBS_USER=./.R/library`) if packages need to be installed.
+
+Before running `master_script.R`:
+- Ensure required output subdirectories exist and are writable:
+  - `01_scopus-selection/`
+  - `02_coding/`
+  - `03_analyses/`
+
+Then run the pipeline using the conda-provided `Rscript`, and proceed to extract the required output values from the generated cleaned results.

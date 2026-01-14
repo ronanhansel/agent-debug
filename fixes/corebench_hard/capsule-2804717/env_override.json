@@ -1,0 +1,7 @@
+{
+  "HAL_FORCE_CONDA_ENV": "hal",
+  "HAL_CONDA_CHANNELS": "conda-forge",
+  "HAL_CONDA_PACKAGES": "r-base=4.* pandoc",
+  "R_DEFAULT_PACKAGES": "datasets,utils,grDevices,graphics,stats,methods",
+  "HAL_OUTPUT_DIR": "./results"
+}

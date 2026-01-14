@@ -1,0 +1,11 @@
+Before running any analysis scripts, ensure the R runtime is available.
+
+Environment requirement:
+- `Rscript` must be on `PATH` (e.g., install `r-base` via conda in the `hal` env).
+
+Suggested setup commands (run once in the task environment):
+- `conda activate hal`
+- `conda install -y -c conda-forge r-base`
+- `Rscript --version`
+
+Then proceed with the task as written.

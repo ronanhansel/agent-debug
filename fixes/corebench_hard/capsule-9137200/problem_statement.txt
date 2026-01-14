@@ -1,0 +1,13 @@
+This task fails due to environment restrictions:
+- Importing `os` is disallowed.
+- `torch==1.7.1` is incompatible with Python 3.12.
+- A required checkpoint file is missing at `./data/cache/variable/bert/resume`.
+
+Guidance:
+- Do not pin torch to 1.7.1; install a Python-3.12-compatible `torch`.
+- Update the code to avoid importing `os` (or guard the import and use allowed alternatives).
+- Handle the missing checkpoint gracefully:
+  - If the checkpoint is optional, skip loading when absent and run with random/initialized weights.
+  - If it is required, include a placeholder file at the expected path via the fix package overlay.
+
+Keep all paths relative to the workspace.

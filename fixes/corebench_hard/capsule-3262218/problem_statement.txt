@@ -1,0 +1,8 @@
+Environment constraints:
+- Do not use `apt-get`.
+- Rendering `manuscript.Rmd` to PDF requires `Rscript`, `pandoc`, and a LaTeX distribution; use conda (env `hal`).
+- The file-reading tool cannot parse `.Rmd` reliably here; do not attempt to convert/read it via special file-inspection tooling.
+
+Write outputs to a writable directory like `./results`.
+Render via a direct command like:
+- `Rscript -e "rmarkdown::render('manuscript.Rmd', output_format='pdf_document', output_dir='./results', clean=TRUE)"`

@@ -1,0 +1,7 @@
+Environment constraints:
+- Do not use `apt-get`.
+- RMarkdown rendering requires `Rscript` and `pandoc`; use conda (env `hal`).
+- Write outputs into `./results` (not `../results`).
+
+Ensure `R_DEFAULT_PACKAGES` is set to `datasets,utils,grDevices,graphics,stats,methods`.
+Before rendering, verify `ResultReproducibilityNotebook.Rmd` exists at the expected path.

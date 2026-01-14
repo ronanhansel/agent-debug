@@ -1,0 +1,11 @@
+This task requires rendering an RMarkdown manuscript to PDF, but the environment lacks R/pandoc/pdflatex and cannot write to `../results`.
+
+Guidance:
+- Do not use `apt-get`.
+- Use conda env `hal` to provide:
+  - A modern R (`r-base` 4.x),
+  - `pandoc`,
+  - a TeX engine (`texlive-core`),
+  - and required R packages (e.g., `scales`, `rmarkdown`, `knitr`).
+- Write outputs to a writable directory `./results`.
+- Bypass `.Rmd` file-inspection limitations and render directly via `Rscript -e "rmarkdown::render('manuscript.Rmd', output_format='pdf_document', output_dir='./results', clean=TRUE)"`.

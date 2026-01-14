@@ -1,0 +1,16 @@
+This task failed because PDF rendering requires external tooling that is missing (Rscript, pandoc, LaTeX tools) and required R/Bioconductor packages were not available.
+
+Guidance:
+- Do not use `apt-get`.
+- Use conda env `hal` to provide:
+  - `r-base` (4.x),
+  - `pandoc`,
+  - a TeX toolchain (e.g., `texlive-core`),
+  - and core R packages (`Matrix`, `MASS`, plus `rmarkdown`, `knitr`).
+- If additional Bioconductor packages are required (e.g., ComplexHeatmap), install via conda-forge/bioconda when available, or use `BiocManager::install()` into `R_LIBS_USER=./.R/library`.
+
+Rendering:
+- Ensure the output directory is writable (use `./results`, not `../results`).
+- Render with a direct command (bypassing `.Rmd` inspection tools), e.g.:
+  - `Rscript -e "rmarkdown::render('OncoBird/vignettes/OncoBird.Rmd', output_format='pdf_document', output_dir='./results', clean=TRUE)"`
+- If `pdflatex/latexmk` are still missing, use `tinytex::install_tinytex()` from within R as a fallback.

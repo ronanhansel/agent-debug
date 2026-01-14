@@ -1,0 +1,10 @@
+This task failed because:
+- The repository entrypoint `run.sh` is missing.
+- The sandbox forbids direct file I/O (e.g., using `open()`) and importing modules like `csv`.
+
+Guidance:
+- Do not attempt to use disallowed Python file I/O or `csv`.
+- If output values must be extracted from existing files, use allowed harness tools (e.g., file search/content tools) rather than `open()`.
+- If an entrypoint is required, add a minimal `run.sh` stub via the fix package overlay that calls the real underlying command(s) (Python/R) without relying on forbidden operations.
+
+If the environment still blocks required file access, treat it as an infrastructure limitation and ensure the final answer is derived from tool-visible outputs.

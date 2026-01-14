@@ -1,0 +1,11 @@
+This task failed due to missing/incompatible dependencies:
+- `networkx` was missing.
+- The installed `network_diffusion` package does not provide required classes (`MultiSpreading`, `PropagationModel`).
+
+Guidance:
+- Install `networkx`.
+- If `network_diffusion` still lacks the required API, do not attempt web search. Instead:
+  - Vendor a minimal local implementation (or compatibility shim) that provides the missing classes used by `epidemic.py`, OR
+  - Adjust the code to avoid importing those classes if they are not actually needed for producing the required plots/outputs.
+
+Use headless plotting (`MPLBACKEND=Agg`). If the task requires reporting plot metadata (titles/line colors), add a small code path that prints/saves those details in plain text.

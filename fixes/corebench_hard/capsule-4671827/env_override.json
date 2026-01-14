@@ -1,0 +1,6 @@
+{
+  "HAL_FORCE_CONDA_ENV": "hal",
+  "HAL_PIP_PACKAGES": "jupyter nbconvert jupyter_core ipykernel",
+  "HAL_OUTPUT_DIR": "./results",
+  "MPLBACKEND": "Agg"
+}

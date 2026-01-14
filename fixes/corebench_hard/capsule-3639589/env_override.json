@@ -1,0 +1,4 @@
+{
+  "HAL_FORCE_CONDA_ENV": "hal",
+  "HAL_PIP_PACKAGES": "torch"
+}

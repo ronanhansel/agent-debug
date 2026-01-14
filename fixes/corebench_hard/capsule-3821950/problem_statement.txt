@@ -1,0 +1,9 @@
+This task failed because `Rscript` is missing and R package installation tried to write to a non-writable system library.
+
+Guidance:
+- Do not use `apt-get`.
+- Install R + required R packages via conda (env `hal`) where possible.
+- Set a writable user library for R packages via `R_LIBS_USER` (e.g., `./.R/library`).
+- Ensure output directories are writable (use `./results` and create `./results/figures` if needed).
+
+Then render `ktc_11_paper.Rmd` using `Rscript`/`rmarkdown::render()`.

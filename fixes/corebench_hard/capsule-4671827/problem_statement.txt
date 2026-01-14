@@ -1,0 +1,10 @@
+This task failed due to missing notebook tooling and an unwritable output path.
+
+Environment constraints:
+- `jupyter` is not installed by default.
+- The parent directory is not writable, so creating `../results` fails.
+
+Guidance:
+- Install `jupyter` + `nbconvert` (and `ipykernel`) inside conda env `hal`.
+- Write outputs to `./results` instead of `../results`.
+- Keep required nbconvert flags (e.g., allow errors, disable timeout) as specified by the task.

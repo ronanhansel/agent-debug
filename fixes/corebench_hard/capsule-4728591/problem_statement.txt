@@ -1,0 +1,12 @@
+This task failed because `Rscript` and required R packages (notably `bookdown`) are missing.
+
+Environment constraints:
+- Do not use `apt-get`.
+- Provide R + packages via conda in env `hal`.
+- The output directory referenced by the reproducibility script must exist and be writable.
+
+Guidance:
+- Install `r-base` and required packages (e.g., `r-bookdown`, `r-rmarkdown`, `r-knitr`) via `conda-forge`.
+- Set `R_LIBS_USER=./.R/library` so any additional `install.packages()` calls succeed.
+- Ensure outputs go to a writable directory (e.g., `./results`) and create needed subdirs before running.
+- Then run `Rscript tests/replicate.R`.
