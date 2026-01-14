@@ -95,6 +95,15 @@ def parse_args() -> argparse.Namespace:
         help="Run hal-eval with the --vm flag (use VM execution, e.g. for GPU tasks).",
     )
     parser.add_argument(
+        "--wandb-mode",
+        choices=["online", "offline", "disabled"],
+        help=(
+            "Optionally override WANDB_MODE for HAL runs. "
+            "Use 'online' to enable Weave trace fetching, 'offline' to avoid network, "
+            "or 'disabled' to turn off wandb/weave entirely."
+        ),
+    )
+    parser.add_argument(
         "--keep-temp",
         action="store_true",
         help="Do not delete temporary agent directories (useful for debugging).",
@@ -221,7 +230,22 @@ def write_filtered_dataset(
             original_prompt = task.get("task_prompt", "")
             extra = input_override["problem_statement"]
             task["task_prompt"] = f"{original_prompt}\n\n{extra}" if original_prompt else extra
-    dataset_path.write_text(json.dumps([task], indent=2), encoding="utf-8")
+    payload = json.dumps([task], indent=2)
+    tmp_path = dataset_path.with_suffix(dataset_path.suffix + ".tmp")
+    tmp_path.write_text(payload, encoding="utf-8")
+    tmp_path.replace(dataset_path)
+
+
+def recover_dataset_if_needed(dataset_path: Path, dataset_backup: Path) -> None:
+    """Restore dataset_path from a leftover backup if a prior run was interrupted."""
+    if not dataset_backup.exists():
+        return
+    print(
+        f"[WARN] Found leftover dataset backup at {dataset_backup}. "
+        f"Restoring {dataset_path} from backup before continuing."
+    )
+    dataset_path.unlink(missing_ok=True)
+    shutil.move(dataset_backup, dataset_path)
 
 def install_agent_requirements(agent_dir: Path) -> None:
     requirements = agent_dir / "requirements.txt"
@@ -337,6 +361,13 @@ def main() -> None:
         print(f"No fix directories found in {fixes_root}")
         return
 
+    recover_dataset_if_needed(dataset_path, dataset_backup)
+    if dataset_backup.exists():
+        suffix = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        extra_backup = dataset_backup.with_name(dataset_backup.name + f".{suffix}")
+        print(f"[WARN] Backup path already exists; moving {dataset_backup} -> {extra_backup}")
+        shutil.move(dataset_backup, extra_backup)
+
     shutil.copyfile(dataset_path, dataset_backup)
     print(f"Backed up {dataset_path} -> {dataset_backup}")
 
@@ -346,6 +377,13 @@ def main() -> None:
         for fix_dir in fix_dirs:
             capsule_id = fix_dir.name
             print(f"\n=== Processing {capsule_id} ===")
+
+            if capsule_id not in capsule_map:
+                print(
+                    f"[WARN] Capsule {capsule_id} not found in dataset {dataset_path}. "
+                    "Skipping this fix folder."
+                )
+                continue
 
             try:
                 fix = load_fix_package(capsule_id, fixes_root=fixes_base, benchmark=args.benchmark)
@@ -379,8 +417,11 @@ def main() -> None:
                 hal_env["PYTHONPATH"] = (
                     f"{extra_path}{os.pathsep}{hal_env.get('PYTHONPATH', '')}".rstrip(os.pathsep)
                 )
-                hal_env.setdefault("WANDB_MODE", "offline")
                 hal_env.setdefault("WANDB_SILENT", "true")
+                if args.wandb_mode == "disabled":
+                    hal_env["WANDB_MODE"] = "disabled"
+                elif args.wandb_mode:
+                    hal_env["WANDB_MODE"] = args.wandb_mode
                 subprocess.run(cmd, check=True, cwd=REPO_ROOT, env=hal_env)
 
                 results_dir = REPO_ROOT / "results" / args.benchmark / run_id

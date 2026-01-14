@@ -127,6 +127,11 @@ def parse_args() -> argparse.Namespace:
         help="Pass --vm through to scripts/run_corebench_fixes.py (run tasks on a VM, e.g. for GPU).",
     )
     parser.add_argument(
+        "--wandb-mode",
+        choices=["online", "offline", "disabled"],
+        help="Pass --wandb-mode through to scripts/run_corebench_fixes.py.",
+    )
+    parser.add_argument(
         "--skip-install",
         action="store_true",
         help="Pass --skip-install through to scripts/run_corebench_fixes.py.",
@@ -293,6 +298,8 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec) -> Dict[str, Any]
         cmd.append("--docker")
     if args.vm:
         cmd.append("--vm")
+    if args.wandb_mode:
+        cmd += ["--wandb-mode", args.wandb_mode]
     if args.skip_install:
         cmd.append("--skip-install")
     if args.skip_rubrics:
