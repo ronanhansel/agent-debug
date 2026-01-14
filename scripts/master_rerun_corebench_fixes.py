@@ -18,8 +18,9 @@ import json
 import sys
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Tuple
 
 
@@ -152,6 +153,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Print what would be rerun without executing.",
     )
+    parser.add_argument(
+        "--max-parallel",
+        type=int,
+        default=5,
+        help="Maximum number of rerun subprocesses to run concurrently (default: %(default)s).",
+    )
     return parser.parse_args()
 
 
@@ -228,18 +235,39 @@ def write_temp_agent_args(
         base["reasoning_effort"] = reasoning_effort
     if api_model_id:
         base["api_model_id"] = api_model_id
-    handle = tempfile.NamedTemporaryFile("w", delete=False, suffix=".json")
-    Path(handle.name).write_text(json.dumps(base, indent=2) + "\n", encoding="utf-8")
-    return Path(handle.name)
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".json", encoding="utf-8") as handle:
+        handle.write(json.dumps(base, indent=2) + "\n")
+        return Path(handle.name)
 
 
 def build_output_names(output_dir: Path, benchmark: str, model_name: str, baseline_trace_stem: str) -> Tuple[str, Path]:
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     baseline_slug = _slugify(baseline_trace_stem)
     model_slug = _slugify(model_name.replace("/", "_"))
     run_id = f"{model_slug}_MERGED_{benchmark}_{timestamp}_from_{baseline_slug}_FIXED"
     output_path = output_dir / f"{run_id}_UPLOAD.json"
     return run_id, output_path
+
+
+def _validate_merged_trace(path: Path, *, expected_run_id: str, expected_task_ids: List[str]) -> None:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("Merged trace is not a JSON object.")
+    config = data.get("config")
+    if not isinstance(config, dict):
+        raise ValueError("Merged trace missing config object.")
+    run_id = config.get("run_id")
+    if run_id != expected_run_id:
+        raise ValueError(f"Merged trace run_id mismatch: expected {expected_run_id}, got {run_id}")
+    results = data.get("results")
+    if not isinstance(results, dict):
+        raise ValueError("Merged trace missing results object.")
+    if "successful_tasks" not in results or "failed_tasks" not in results:
+        raise ValueError("Merged trace results missing successful_tasks/failed_tasks.")
+    observed = set(str(x) for x in (results.get("successful_tasks") or []) + (results.get("failed_tasks") or []))
+    missing = [task_id for task_id in expected_task_ids if task_id not in observed]
+    if missing:
+        raise ValueError(f"Merged trace missing {len(missing)} expected task_ids (example: {missing[0]}).")
 
 
 def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec) -> Dict[str, Any]:
@@ -337,8 +365,33 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec) -> Dict[str, Any]
     try:
         import subprocess
 
-        subprocess.run(cmd, cwd=REPO_ROOT, check=True)
+        logs_dir = (REPO_ROOT / "log" / "master_rerun").resolve()
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        log_path = logs_dir / f"{run_id}.log"
+        summary["log_path"] = str(log_path)
+
+        with log_path.open("w", encoding="utf-8") as handle:
+            proc = subprocess.run(
+                cmd,
+                cwd=REPO_ROOT,
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+        if proc.returncode != 0:
+            summary["status"] = "failed"
+            summary["returncode"] = proc.returncode
+            return summary
+
+        if not merged_output.exists():
+            summary["status"] = "failed_missing_merged_trace"
+            return summary
+        _validate_merged_trace(merged_output, expected_run_id=run_id, expected_task_ids=with_fixes)
         summary["status"] = "completed"
+        return summary
+    except Exception as exc:
+        summary["status"] = "failed_exception"
+        summary["error"] = str(exc)
         return summary
     finally:
         try:
@@ -352,20 +405,36 @@ def main() -> None:
     mapping_path = (REPO_ROOT / args.mapping_file).resolve()
     specs = load_mapping(mapping_path)
     results: List[Dict[str, Any]] = []
-    for spec in specs:
-        results.append(run_one_spec(args, spec))
+    if args.dry_run or args.max_parallel <= 1 or len(specs) <= 1:
+        for spec in specs:
+            results.append(run_one_spec(args, spec))
+    else:
+        max_workers = max(1, int(args.max_parallel))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(run_one_spec, args, spec): spec for spec in specs}
+            for future in as_completed(futures):
+                results.append(future.result())
 
     output = {
-        "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "mapping_file": str(mapping_path),
         "results": results,
     }
-    out_path = REPO_ROOT / "traces" / f"master_rerun_summary_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+    out_path = (
+        REPO_ROOT
+        / "traces"
+        / f"master_rerun_summary_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.json"
+    )
     out_path.write_text(json.dumps(output, indent=2) + "\n", encoding="utf-8")
     print(f"Wrote summary -> {out_path}")
     for item in results:
         if item.get("status") == "completed":
             print(f"[merged] {item['model_name']} -> {item['merged_trace']}")
+        elif item.get("status", "").startswith("failed"):
+            model = item.get("model_name", "unknown")
+            log_path = item.get("log_path")
+            extra = f" (log: {log_path})" if log_path else ""
+            print(f"[failed] {model}{extra}")
 
 
 if __name__ == "__main__":

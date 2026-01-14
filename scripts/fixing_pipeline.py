@@ -791,10 +791,17 @@ def main() -> None:
             return
 
     debug_summary_path = DEBUG_ROOT / args.benchmark_name / "rubric_summary.json"
-    if debug_summary_path.exists():
-        summary = json.loads(debug_summary_path.read_text(encoding="utf-8"))
+    if args.skip_inspector:
+        if debug_summary_path.exists():
+            logger.log(
+                f"Skipping inspector and ignoring {debug_summary_path} (may reflect a partial prior run); "
+                "using pre-inspection rubric summary instead."
+            )
     else:
-        logger.log(f"Inspector did not emit {debug_summary_path}; using pre-inspection summary.")
+        if debug_summary_path.exists():
+            summary = json.loads(debug_summary_path.read_text(encoding="utf-8"))
+        else:
+            logger.log(f"Inspector did not emit {debug_summary_path}; using pre-inspection summary.")
 
     grouped: Dict[str, List[Dict[str, object]]] = defaultdict(list)
     task_filters = {tid.strip() for tid in (args.task_ids or []) if tid}

@@ -19,10 +19,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 import re
+import uuid
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "hal-harness"))
@@ -167,12 +168,12 @@ def build_hal_eval_cmd(
     return cmd
 
 
-def copy_agent_with_fix(base_dir: Path, task_id: str, fix_root: Path) -> Path:
+def copy_agent_with_fix(base_dir: Path, task_id: str, fix_root: Path, *, benchmark: str) -> Path:
     temp_dir = Path(tempfile.mkdtemp(prefix="corebench_fix_"))
     shutil.copytree(base_dir, temp_dir, dirs_exist_ok=True)
     if SMOLAGENTS_SRC.exists():
         shutil.copytree(SMOLAGENTS_SRC, temp_dir / "smolagents", dirs_exist_ok=True)
-    fix = load_fix_package(task_id, fixes_root=fix_root, benchmark="corebench_hard")
+    fix = load_fix_package(task_id, fixes_root=fix_root, benchmark=benchmark)
     if not fix:
         return temp_dir
     if fix.agent_overlay:
@@ -265,7 +266,7 @@ def _slugify(value: str, fallback: str) -> str:
 
 
 def build_task_run_id(benchmark: str, agent_args: Dict[str, object], capsule_id: str) -> str:
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     api_model = str(agent_args.get("api_model_id") or agent_args.get("model_name") or "model")
     model_slug = _slugify(api_model.replace("/", "_"), "model")
     effort = str(agent_args.get("reasoning_effort") or "").strip().lower()
@@ -319,7 +320,7 @@ def merge_trace_files(
         "--agent-name",
         agent_name,
         "--date",
-        datetime.utcnow().strftime("%Y-%m-%d"),
+        datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "--force",
     ]
     subprocess.run(merge_cmd, check=True, cwd=REPO_ROOT)
@@ -348,8 +349,7 @@ def main() -> None:
     fixes_root = Path(args.fixes_root)
     agent_dir = Path(args.agent_dir)
     agent_args_path = Path(args.agent_args)
-    dataset_path = resolve_corebench_dataset_path(args.corebench_dataset)
-    dataset_backup = dataset_path.with_suffix(dataset_path.suffix + ".bak")
+    dataset_source = resolve_corebench_dataset_path(args.corebench_dataset)
     rubric_output_dir = REPO_ROOT / "rubrics_output"
     rubric_output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -359,7 +359,10 @@ def main() -> None:
     if not args.skip_install:
         install_agent_requirements(agent_dir)
 
-    tasks_data = load_corebench_dataset(dataset_path)
+    temp_root = Path(tempfile.mkdtemp(prefix="corebench_dataset_"))
+    dataset_path = temp_root / f"{dataset_source.stem}_{uuid.uuid4().hex}{dataset_source.suffix}"
+    shutil.copyfile(dataset_source, dataset_path)
+    tasks_data = load_corebench_dataset(dataset_source)
     capsule_map = {item["capsule_id"]: item for item in tasks_data}
 
     fix_dirs = sorted([p for p in fixes_root.iterdir() if p.is_dir()])
@@ -372,16 +375,6 @@ def main() -> None:
     if not fix_dirs:
         print(f"No fix directories found in {fixes_root}")
         return
-
-    recover_dataset_if_needed(dataset_path, dataset_backup)
-    if dataset_backup.exists():
-        suffix = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        extra_backup = dataset_backup.with_name(dataset_backup.name + f".{suffix}")
-        print(f"[WARN] Backup path already exists; moving {dataset_backup} -> {extra_backup}")
-        shutil.move(dataset_backup, extra_backup)
-
-    shutil.copyfile(dataset_path, dataset_backup)
-    print(f"Backed up {dataset_path} -> {dataset_backup}")
 
     try:
         fixes_base = fixes_root.parent
@@ -411,7 +404,7 @@ def main() -> None:
                 dataset_path=dataset_path,
             )
 
-            temp_agent_dir = copy_agent_with_fix(agent_dir, capsule_id, fixes_base)
+            temp_agent_dir = copy_agent_with_fix(agent_dir, capsule_id, fixes_base, benchmark=args.benchmark)
             try:
                 run_id = build_task_run_id(args.benchmark, agent_args, capsule_id)
                 cmd = build_hal_eval_cmd(
@@ -429,6 +422,7 @@ def main() -> None:
                 hal_env["PYTHONPATH"] = (
                     f"{extra_path}{os.pathsep}{hal_env.get('PYTHONPATH', '')}".rstrip(os.pathsep)
                 )
+                hal_env["HAL_COREBENCH_DATASET_PATH"] = str(dataset_path)
                 # Ensure cost computation uses the pricing model name even if the API model id differs.
                 hal_env.setdefault("HAL_PRICING_MODEL_NAME", str(agent_args.get("model_name", "")))
                 hal_env.setdefault("WANDB_SILENT", "true")
@@ -479,8 +473,7 @@ def main() -> None:
                 print(f"[merge] Completed rubric evaluation for {merged_trace}")
 
     finally:
-        shutil.move(dataset_backup, dataset_path)
-        print(f"Restored original dataset file: {dataset_path}")
+        shutil.rmtree(temp_root, ignore_errors=True)
 
 
 if __name__ == "__main__":
