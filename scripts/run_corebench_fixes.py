@@ -330,6 +330,31 @@ def _install_conda_packages(
             pass
 
 
+def _python_can_import(module: str) -> bool:
+    proc = subprocess.run(
+        [sys.executable, "-c", f"import {module}"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+    return proc.returncode == 0
+
+
+def ensure_hal_cli_dependencies(env_name: str, channels: List[str]) -> None:
+    # hal.cli requires click at import-time, but it is not consistently present in all envs.
+    if _python_can_import("click"):
+        return
+    print("[setup][hal] Missing python module 'click'; attempting to install via conda.")
+    try:
+        _install_conda_packages(env_name=env_name, channels=channels or ["conda-forge"], packages=["click"])
+        if _python_can_import("click"):
+            return
+    except Exception as exc:
+        print(f"[setup][hal] Conda install for click failed: {exc}")
+    print("[setup][hal] Falling back to pip install click.")
+    subprocess.run([sys.executable, "-m", "pip", "install", "click"], check=True, cwd=REPO_ROOT)
+
+
 def build_hal_eval_cmd(
     *,
     benchmark: str,
@@ -658,7 +683,19 @@ def run_one_capsule(
         elif wandb_mode:
             hal_env["WANDB_MODE"] = wandb_mode
 
-        subprocess.run(cmd, check=True, cwd=REPO_ROOT, env=hal_env)
+        proc = subprocess.run(
+            cmd,
+            cwd=REPO_ROOT,
+            env=hal_env,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            output = (proc.stdout or "") + "\n" + (proc.stderr or "")
+            output = output.strip()
+            if output:
+                print(f"[hal-eval][error] capsule_id={capsule_id} run_id={run_id}\n{output}\n")
+            raise subprocess.CalledProcessError(proc.returncode, proc.args, output=proc.stdout, stderr=proc.stderr)
 
         results_dir = REPO_ROOT / "results" / benchmark / run_id
         trace_path = results_dir / f"{run_id}_UPLOAD.json"
@@ -764,6 +801,7 @@ def main() -> None:
         # Best-effort: ensure conda packages requested by fix packages are installed once up-front.
         conda_packages = sorted({p for p in conda_packages if p})
         conda_channels = sorted({c for c in conda_channels if c}) or ["conda-forge"]
+        ensure_hal_cli_dependencies(conda_env, conda_channels)
         if conda_packages:
             _install_conda_packages(env_name=conda_env, channels=conda_channels, packages=conda_packages)
 
