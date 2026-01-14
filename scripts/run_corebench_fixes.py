@@ -84,6 +84,11 @@ def parse_args() -> argparse.Namespace:
         help="Run hal-eval with the --docker flag.",
     )
     parser.add_argument(
+        "--vm",
+        action="store_true",
+        help="Run hal-eval with the --vm flag (use VM execution, e.g. for GPU tasks).",
+    )
+    parser.add_argument(
         "--keep-temp",
         action="store_true",
         help="Do not delete temporary agent directories (useful for debugging).",
@@ -125,6 +130,7 @@ def build_hal_eval_cmd(
     agent_args: Dict[str, object],
     run_id: str,
     docker: bool,
+    vm: bool,
 ) -> List[str]:
     cmd: List[str] = [
         sys.executable,
@@ -141,6 +147,8 @@ def build_hal_eval_cmd(
         cmd += ["-A", f"{key}={normalize_value(value)}"]
     if docker:
         cmd.append("--docker")
+    if vm:
+        cmd.append("--vm")
     return cmd
 
 
@@ -325,6 +333,7 @@ def main() -> None:
                     agent_args=agent_args,
                     run_id=run_id,
                     docker=args.docker,
+                    vm=args.vm,
                 )
                 print(f"[hal-eval] {' '.join(cmd)}")
                 hal_env = os.environ.copy()

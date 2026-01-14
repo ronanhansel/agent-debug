@@ -104,6 +104,11 @@ def parse_args() -> argparse.Namespace:
         help="Pass --docker through to scripts/run_corebench_fixes.py (recommended if Weave networking is required).",
     )
     parser.add_argument(
+        "--vm",
+        action="store_true",
+        help="Pass --vm through to scripts/run_corebench_fixes.py (run tasks on a VM, e.g. for GPU).",
+    )
+    parser.add_argument(
         "--skip-install",
         action="store_true",
         help="Pass --skip-install through to scripts/run_corebench_fixes.py.",
@@ -266,6 +271,8 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec) -> Dict[str, Any]
     ]
     if args.docker:
         cmd.append("--docker")
+    if args.vm:
+        cmd.append("--vm")
     if args.skip_install:
         cmd.append("--skip-install")
     if args.skip_rubrics:
