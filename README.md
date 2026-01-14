@@ -6,7 +6,9 @@ Setting up environment
 CONDA_PLUGINS_AUTO_ACCEPT_TOS=yes conda create -n hal python=3.12 -y
 conda activate hal
 ```
+
 Install all requirements (this will automatically install packages from submodules `docent` and `hal-harness`)
+
 ```bash
 pip install -r requirements.txt
 ```
@@ -73,7 +75,7 @@ for task in flagged:
     print(task)
 ```
 
-## Generate fixing instruction (inspector) 
+## Generate fixing instruction (inspector)
 
 ```bash
 ./scripts/fixing_pipeline.sh \
@@ -118,20 +120,24 @@ python scripts/run_corebench_fixes.py \
          --task-id capsule-0921079 \
          --task-id ...
 ```
+
 downloading COREBench test set
+
 ```bash
 gpg --output hal-harness/hal/benchmarks/corebench/core_test.json \
       --decrypt hal-harness/hal/benchmarks/corebench/core_test.json.gpg
 ```
+
 When prompted for the passphrase, use: `reproducibility` (this is also hardcoded as the hint in hal-harness/hal/
 benchmarks/corebench.py).
 
-
 Rerun only the failed baselines from the mapping file using the fixed code withou
+
 ```bash
 python scripts/master_rerun_corebench_fixes.py \
     --mapping-file model_to_baseline.json \
     --rubric-model openai/o3-mini \
+    --max-parallel 5 \
     --wandb-mode online
 ```
 

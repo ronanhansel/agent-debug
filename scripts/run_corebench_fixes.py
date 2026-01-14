@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -253,10 +254,55 @@ def install_agent_requirements(agent_dir: Path) -> None:
     if not requirements.exists():
         raise FileNotFoundError(f"requirements.txt not found at {requirements}")
     print(f"[setup] Installing requirements from {requirements}")
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-r", str(requirements)],
-        check=True,
-    )
+    req_fingerprint = hashlib.sha256(
+        (sys.executable + "\n" + requirements.read_text(encoding="utf-8")).encode("utf-8")
+    ).hexdigest()[:16]
+    sentinel = REPO_ROOT / ".agent_requirements_installed" / f"{agent_dir.name}_{req_fingerprint}.ok"
+    lock_path = REPO_ROOT / ".agent_requirements_install.lock"
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    lock_handle = lock_path.open("w", encoding="utf-8")
+    try:
+        try:
+            import fcntl  # type: ignore
+
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+        except Exception:
+            # Best-effort: on platforms without fcntl, run without a lock.
+            pass
+
+        if sentinel.exists():
+            print(f"[setup] Requirements already installed (sentinel: {sentinel.name}); skipping.")
+            return
+
+        env = os.environ.copy()
+        env.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
+        env.setdefault("PIP_NO_INPUT", "1")
+
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-r", str(requirements)],
+                check=True,
+                env=env,
+            )
+        except subprocess.CalledProcessError as exc:
+            # Common in parallel runs if the env is mid-mutation or already partially corrupted.
+            print(f"[WARN] pip install failed (attempting minimal repair): {exc}")
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "--ignore-installed", "rich"],
+                check=False,
+                env=env,
+            )
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-r", str(requirements)],
+                check=True,
+                env=env,
+            )
+        sentinel.write_text("ok\n", encoding="utf-8")
+    finally:
+        try:
+            lock_handle.close()
+        except Exception:
+            pass
 
 
 def _slugify(value: str, fallback: str) -> str:
