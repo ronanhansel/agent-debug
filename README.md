@@ -138,7 +138,7 @@ python scripts/master_rerun_corebench_fixes.py \
     --mapping-file model_to_baseline.json \
     --max-parallel 5 \
     --max-parallel-capsules 5 \
-    --prefix apple \
+    --prefix mango \
     --wandb-mode online \
     --skip-rubrics
 ```

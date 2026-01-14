@@ -176,7 +176,17 @@ def _split_channels(raw: str | None) -> List[str]:
 def _split_packages(raw: str | None) -> List[str]:
     if not raw:
         return []
-    return [p for p in shlex.split(raw) if p]
+    aliases = {
+        # Some older fix packages used this name; conda-forge ships `xorg-server-xvfb`.
+        "xorg-xvfb": "xorg-server-xvfb",
+    }
+    packages: List[str] = []
+    for token in shlex.split(raw):
+        token = token.strip()
+        if not token:
+            continue
+        packages.append(aliases.get(token, token))
+    return packages
 
 
 def _conda_executable() -> str | None:
