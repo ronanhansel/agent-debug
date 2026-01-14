@@ -58,6 +58,7 @@ def _load_json(path: Path) -> Dict[str, Any]:
 class ModelRunSpec:
     model_name: str
     baseline_trace: str
+    reasoning_effort: str | None = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -93,6 +94,11 @@ def parse_args() -> argparse.Namespace:
         help="Rubric model identifier passed through to scripts/run_corebench_fixes.py.",
     )
     parser.add_argument(
+        "--reasoning-effort",
+        choices=["low", "medium", "high"],
+        help="If set, inject reasoning_effort into agent args for all mapping entries (unless overridden per entry).",
+    )
+    parser.add_argument(
         "--docker",
         action="store_true",
         help="Pass --docker through to scripts/run_corebench_fixes.py (recommended if Weave networking is required).",
@@ -126,9 +132,38 @@ def load_mapping(path: Path) -> List[ModelRunSpec]:
         raise ValueError("--mapping-file must contain an object: {\"model_name\": \"baseline_run_id\", ...}")
     specs: List[ModelRunSpec] = []
     for model_name, baseline in payload.items():
-        if not isinstance(model_name, str) or not isinstance(baseline, str):
-            raise ValueError("Mapping values must be strings: model_name -> baseline_run_id (or path)")
-        specs.append(ModelRunSpec(model_name=model_name, baseline_trace=baseline))
+        if not isinstance(model_name, str):
+            raise ValueError("Mapping keys must be strings (model_name).")
+
+        if isinstance(baseline, str):
+            specs.append(ModelRunSpec(model_name=model_name, baseline_trace=baseline))
+            continue
+
+        if isinstance(baseline, dict):
+            baseline_trace = baseline.get("baseline_trace") or baseline.get("baseline_run_id") or baseline.get("trace")
+            if not isinstance(baseline_trace, str) or not baseline_trace.strip():
+                raise ValueError(
+                    f"Mapping entry for {model_name} must include baseline_trace (string). "
+                    "Example: {\"baseline_trace\": \"corebench_..._UPLOAD\"}"
+                )
+            reasoning_effort = baseline.get("reasoning_effort")
+            if reasoning_effort is not None and reasoning_effort not in {"low", "medium", "high"}:
+                raise ValueError(
+                    f"Invalid reasoning_effort for {model_name}: {reasoning_effort} "
+                    "(expected low|medium|high)"
+                )
+            specs.append(
+                ModelRunSpec(
+                    model_name=model_name,
+                    baseline_trace=baseline_trace,
+                    reasoning_effort=reasoning_effort,
+                )
+            )
+            continue
+
+        raise ValueError(
+            "Mapping values must be either a string baseline run_id/path, or an object with baseline_trace."
+        )
     return specs
 
 
@@ -144,12 +179,19 @@ def filter_tasks_with_fixes(fixes_root: Path, benchmark: str, failed_tasks: List
     return present, missing
 
 
-def write_temp_agent_args(base_agent_args: Path, model_name: str, benchmark: str) -> Path:
+def write_temp_agent_args(
+    base_agent_args: Path,
+    model_name: str,
+    benchmark: str,
+    reasoning_effort: str | None,
+) -> Path:
     base = json.loads(base_agent_args.read_text(encoding="utf-8"))
     if not isinstance(base, dict):
         raise ValueError(f"Base agent args must be an object JSON file: {base_agent_args}")
     base["model_name"] = model_name
     base["benchmark_name"] = benchmark
+    if reasoning_effort:
+        base["reasoning_effort"] = reasoning_effort
     handle = tempfile.NamedTemporaryFile("w", delete=False, suffix=".json")
     Path(handle.name).write_text(json.dumps(base, indent=2) + "\n", encoding="utf-8")
     return Path(handle.name)
@@ -182,11 +224,13 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec) -> Dict[str, Any]
     with_fixes, missing_fixes = filter_tasks_with_fixes(fixes_root, benchmark, failed_tasks)
 
     run_id, merged_output = build_output_names(output_dir, benchmark, spec.model_name, baseline_trace_path.stem)
+    effective_effort = spec.reasoning_effort or args.reasoning_effort
 
     summary: Dict[str, Any] = {
         "model_name": spec.model_name,
         "baseline_trace": str(baseline_trace_path),
         "benchmark": benchmark,
+        "reasoning_effort": effective_effort,
         "failed_tasks_total": len(failed_tasks),
         "tasks_with_fixes": with_fixes,
         "tasks_missing_fixes": missing_fixes,
@@ -200,7 +244,7 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec) -> Dict[str, Any]
         return summary
 
     base_agent_args = (REPO_ROOT / args.base_agent_args).resolve()
-    temp_agent_args = write_temp_agent_args(base_agent_args, spec.model_name, benchmark)
+    temp_agent_args = write_temp_agent_args(base_agent_args, spec.model_name, benchmark, effective_effort)
 
     cmd: List[str] = [
         sys.executable,
@@ -271,4 +315,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
