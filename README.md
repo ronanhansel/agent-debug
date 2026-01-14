@@ -138,8 +138,13 @@ python scripts/master_rerun_corebench_fixes.py \
     --mapping-file model_to_baseline.json \
     --rubric-model openai/o3-mini \
     --max-parallel 5 \
+    --max-parallel-capsules 3 \
+    --prefix expA \
     --wandb-mode online
 ```
+
+- `--prefix`: prefix for the wandb run name
+
 
 ```bash
 python scripts/run_corebench_fixes.py \

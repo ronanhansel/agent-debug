@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 from typing import Any, Dict, List, Tuple
 
 
@@ -77,12 +78,81 @@ class ModelRunSpec:
     model_id: str | None = None
 
 
+class _LiveState:
+    def __init__(self, *, total_specs: int):
+        self._lock = Lock()
+        self.total_specs = total_specs
+        self.completed_specs = 0
+        self.failed_specs = 0
+        self.running_specs = 0
+        self.planned_capsules = 0
+        self.completed_capsules = 0
+        self.running_capsules = 0
+
+    def _print(self, message: str) -> None:
+        with self._lock:
+            print(message, flush=True)
+
+    def spec_started(self, *, model_name: str, capsule_total: int) -> None:
+        with self._lock:
+            self.running_specs += 1
+            self.planned_capsules += capsule_total
+            print(
+                f"[spec][start] model={model_name} capsules={capsule_total} "
+                f"(specs {self.completed_specs}/{self.total_specs} done, {self.running_specs} running; "
+                f"capsules {self.completed_capsules}/{self.planned_capsules} done, {self.running_capsules} running)",
+                flush=True,
+            )
+
+    def capsule_started(self, *, model_name: str, capsule_id: str) -> None:
+        with self._lock:
+            self.running_capsules += 1
+            print(
+                f"[capsule][start] model={model_name} capsule={capsule_id} "
+                f"(capsules {self.completed_capsules}/{self.planned_capsules} done, {self.running_capsules} running)",
+                flush=True,
+            )
+
+    def capsule_done(self, *, model_name: str, capsule_id: str) -> None:
+        with self._lock:
+            self.running_capsules = max(0, self.running_capsules - 1)
+            self.completed_capsules += 1
+            print(
+                f"[capsule][done]  model={model_name} capsule={capsule_id} "
+                f"(capsules {self.completed_capsules}/{self.planned_capsules} done, {self.running_capsules} running)",
+                flush=True,
+            )
+
+    def spec_finished(self, *, model_name: str, status: str, merged_trace: str | None) -> None:
+        with self._lock:
+            self.running_specs = max(0, self.running_specs - 1)
+            if status in {"completed", "dry_run", "skipped_no_fixes"}:
+                self.completed_specs += 1
+            elif status.startswith("failed"):
+                self.failed_specs += 1
+            extra = f" merged={merged_trace}" if merged_trace else ""
+            print(
+                f"[spec][{status}] model={model_name}{extra} "
+                f"(specs {self.completed_specs}/{self.total_specs} done, {self.failed_specs} failed, {self.running_specs} running; "
+                f"capsules {self.completed_capsules}/{self.planned_capsules} done, {self.running_capsules} running)",
+                flush=True,
+            )
+
+    def stream_line(self, *, model_name: str, line: str) -> None:
+        self._print(f"[{model_name}] {line}")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Rerun CoreBench failures with fixes per model/run mapping.")
     parser.add_argument(
         "--mapping-file",
         required=True,
         help="Path to JSON file mapping model_name -> baseline trace run_id (or trace path).",
+    )
+    parser.add_argument(
+        "--prefix",
+        default="",
+        help="Optional prefix to prepend to merged run_ids/trace filenames and downstream wandb project/group (default: empty).",
     )
     parser.add_argument(
         "--traces-dir",
@@ -165,6 +235,12 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Maximum number of capsules to run concurrently within each rerun subprocess (default: %(default)s).",
     )
+    parser.add_argument(
+        "--stream-logs",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Stream child process logs to stdout while running (default: enabled).",
+    )
     return parser.parse_args()
 
 
@@ -246,11 +322,20 @@ def write_temp_agent_args(
         return Path(handle.name)
 
 
-def build_output_names(output_dir: Path, benchmark: str, model_name: str, baseline_trace_stem: str) -> Tuple[str, Path]:
+def build_output_names(
+    output_dir: Path,
+    benchmark: str,
+    model_name: str,
+    baseline_trace_stem: str,
+    *,
+    prefix: str,
+) -> Tuple[str, Path]:
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     baseline_slug = _slugify(baseline_trace_stem)
     model_slug = _slugify(model_name.replace("/", "_"))
-    run_id = f"{model_slug}_MERGED_{benchmark}_{timestamp}_from_{baseline_slug}_FIXED"
+    prefix_value = prefix.strip()
+    prefix_part = f"{_slugify(prefix_value)}_" if prefix_value else ""
+    run_id = f"{prefix_part}{model_slug}_MERGED_{benchmark}_{timestamp}_from_{baseline_slug}_FIXED"
     output_path = output_dir / f"{run_id}_UPLOAD.json"
     return run_id, output_path
 
@@ -276,7 +361,7 @@ def _validate_merged_trace(path: Path, *, expected_run_id: str, expected_task_id
         raise ValueError(f"Merged trace missing {len(missing)} expected task_ids (example: {missing[0]}).")
 
 
-def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec) -> Dict[str, Any]:
+def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec, live: _LiveState) -> Dict[str, Any]:
     traces_dir = (REPO_ROOT / args.traces_dir).resolve()
     fixes_root = (REPO_ROOT / args.fixes_root).resolve()
     output_dir = (REPO_ROOT / args.output_dir).resolve()
@@ -295,7 +380,13 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec) -> Dict[str, Any]
 
     # Use the API model id for naming if provided (the mapping key is the pricing name).
     name_model = spec.model_id or spec.model_name
-    run_id, merged_output = build_output_names(output_dir, benchmark, name_model, baseline_trace_path.stem)
+    run_id, merged_output = build_output_names(
+        output_dir,
+        benchmark,
+        name_model,
+        baseline_trace_path.stem,
+        prefix=args.prefix,
+    )
     effective_effort = spec.reasoning_effort or args.reasoning_effort
     pricing_model_name = spec.model_name
     api_model_id = spec.model_id
@@ -318,6 +409,7 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec) -> Dict[str, Any]
 
     if not with_fixes:
         summary["status"] = "skipped_no_fixes"
+        live.spec_finished(model_name=spec.model_name, status=summary["status"], merged_trace=None)
         return summary
 
     base_agent_args = (REPO_ROOT / args.base_agent_args).resolve()
@@ -347,6 +439,8 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec) -> Dict[str, Any]
         "--merged-run-id",
         run_id,
     ]
+    if args.prefix:
+        cmd += ["--prefix", args.prefix]
     if args.corebench_dataset:
         cmd += ["--corebench-dataset", args.corebench_dataset]
     if args.docker:
@@ -368,6 +462,7 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec) -> Dict[str, Any]
 
     if args.dry_run:
         summary["status"] = "dry_run"
+        live.spec_finished(model_name=spec.model_name, status=summary["status"], merged_trace=None)
         return summary
 
     try:
@@ -378,28 +473,61 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec) -> Dict[str, Any]
         log_path = logs_dir / f"{run_id}.log"
         summary["log_path"] = str(log_path)
 
+        capsule_total = len(with_fixes)
+        live.spec_started(model_name=spec.model_name, capsule_total=capsule_total)
+        started_capsules: set[str] = set()
+        done_capsules: set[str] = set()
+
         with log_path.open("w", encoding="utf-8") as handle:
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
                 cwd=REPO_ROOT,
-                stdout=handle,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                bufsize=1,
             )
-        if proc.returncode != 0:
+            assert proc.stdout is not None
+            for raw_line in proc.stdout:
+                handle.write(raw_line)
+                line = raw_line.rstrip("\n")
+                if args.stream_logs:
+                    live.stream_line(model_name=spec.model_name, line=line)
+
+                # Parse structured capsule lifecycle markers from run_corebench_fixes.py.
+                if line.startswith("[capsule][start]"):
+                    parts = dict(item.split("=", 1) for item in line.split() if "=" in item)
+                    capsule_id = parts.get("capsule_id")
+                    if capsule_id and capsule_id not in started_capsules:
+                        started_capsules.add(capsule_id)
+                        live.capsule_started(model_name=spec.model_name, capsule_id=capsule_id)
+                elif line.startswith("[capsule][done]"):
+                    parts = dict(item.split("=", 1) for item in line.split() if "=" in item)
+                    capsule_id = parts.get("capsule_id") or "unknown"
+                    if capsule_id not in done_capsules:
+                        done_capsules.add(capsule_id)
+                        live.capsule_done(model_name=spec.model_name, capsule_id=capsule_id)
+
+            returncode = proc.wait()
+
+        if returncode != 0:
             summary["status"] = "failed"
-            summary["returncode"] = proc.returncode
+            summary["returncode"] = returncode
+            live.spec_finished(model_name=spec.model_name, status=summary["status"], merged_trace=None)
             return summary
 
         if not merged_output.exists():
             summary["status"] = "failed_missing_merged_trace"
+            live.spec_finished(model_name=spec.model_name, status=summary["status"], merged_trace=None)
             return summary
         _validate_merged_trace(merged_output, expected_run_id=run_id, expected_task_ids=with_fixes)
         summary["status"] = "completed"
+        live.spec_finished(model_name=spec.model_name, status=summary["status"], merged_trace=str(merged_output))
         return summary
     except Exception as exc:
         summary["status"] = "failed_exception"
         summary["error"] = str(exc)
+        live.spec_finished(model_name=spec.model_name, status=summary["status"], merged_trace=None)
         return summary
     finally:
         try:
@@ -412,14 +540,15 @@ def main() -> None:
     args = parse_args()
     mapping_path = (REPO_ROOT / args.mapping_file).resolve()
     specs = load_mapping(mapping_path)
+    live = _LiveState(total_specs=len(specs))
     results: List[Dict[str, Any]] = []
     if args.dry_run or args.max_parallel <= 1 or len(specs) <= 1:
         for spec in specs:
-            results.append(run_one_spec(args, spec))
+            results.append(run_one_spec(args, spec, live))
     else:
         max_workers = max(1, int(args.max_parallel))
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {pool.submit(run_one_spec, args, spec): spec for spec in specs}
+            futures = {pool.submit(run_one_spec, args, spec, live): spec for spec in specs}
             for future in as_completed(futures):
                 results.append(future.result())
 

@@ -80,6 +80,11 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--prefix",
+        default="",
+        help="Optional prefix to prepend to per-capsule run_ids and the WANDB project/group (default: empty).",
+    )
+    parser.add_argument(
         "--merged-trace-output",
         help="Optional output path for the merged trace JSON (must end with .json).",
     )
@@ -420,6 +425,7 @@ def run_one_capsule(
     agent_dir: Path,
     agent_args: Dict[str, object],
     benchmark: str,
+    prefix: str,
     docker: bool,
     vm: bool,
     wandb_mode: str | None,
@@ -433,7 +439,10 @@ def run_one_capsule(
 
     temp_agent_dir = copy_agent_with_fix(agent_dir, capsule_id, fixes_base, benchmark=benchmark)
     try:
-        run_id = build_task_run_id(benchmark, agent_args, capsule_id)
+        prefix_value = str(prefix or "").strip()
+        prefix_part = f"{_slugify(prefix_value, '')}_" if prefix_value else ""
+        run_id = prefix_part + build_task_run_id(benchmark, agent_args, capsule_id)
+        print(f"[capsule][start] capsule_id={capsule_id} run_id={run_id} benchmark={benchmark}")
         cmd = build_hal_eval_cmd(
             benchmark=benchmark,
             agent_name=f"hal_generalist_agent ({capsule_id})",
@@ -452,6 +461,12 @@ def run_one_capsule(
         hal_env["HAL_COREBENCH_DATASET_PATH"] = str(dataset_path)
         hal_env.setdefault("HAL_PRICING_MODEL_NAME", str(agent_args.get("model_name", "")))
         hal_env.setdefault("WANDB_SILENT", "true")
+        if prefix_value:
+            base_project = hal_env.get("WANDB_PROJECT") or "hal"
+            prefix_slug = _slugify(prefix_value, "run")
+            if not base_project.startswith(f"{prefix_slug}_"):
+                hal_env["WANDB_PROJECT"] = f"{prefix_slug}_{base_project}"
+            hal_env.setdefault("WANDB_RUN_GROUP", prefix_slug)
         if wandb_mode == "disabled":
             hal_env["WANDB_MODE"] = "disabled"
         elif wandb_mode:
@@ -467,6 +482,7 @@ def run_one_capsule(
         final_trace = REPO_ROOT / "traces" / trace_path.name
         shutil.copyfile(trace_path, final_trace)
         print(f"[trace] Copied {trace_path} -> {final_trace}")
+        print(f"[capsule][done] capsule_id={capsule_id} run_id={run_id} trace={final_trace}")
 
         if not skip_rubrics:
             eval_cmd = [
@@ -481,6 +497,7 @@ def run_one_capsule(
             ]
             print(f"[rubric] {' '.join(eval_cmd)}")
             subprocess.run(eval_cmd, check=True, cwd=REPO_ROOT)
+            print(f"[capsule][rubric_done] capsule_id={capsule_id} run_id={run_id}")
 
         return final_trace
     finally:
@@ -562,6 +579,7 @@ def main() -> None:
                         agent_dir=agent_dir,
                         agent_args=agent_args,
                         benchmark=args.benchmark,
+                        prefix=args.prefix,
                         docker=args.docker,
                         vm=args.vm,
                         wandb_mode=args.wandb_mode,
@@ -584,6 +602,7 @@ def main() -> None:
                         agent_dir=agent_dir,
                         agent_args=agent_args,
                         benchmark=args.benchmark,
+                        prefix=args.prefix,
                         docker=args.docker,
                         vm=args.vm,
                         wandb_mode=args.wandb_mode,
