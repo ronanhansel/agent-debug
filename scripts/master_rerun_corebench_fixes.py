@@ -17,6 +17,7 @@ import argparse
 import json
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -107,21 +108,32 @@ class _LiveState:
     def capsule_started(self, *, model_name: str, capsule_id: str) -> None:
         with self._lock:
             self.running_capsules += 1
+            # Intentionally quiet: terminals get overwhelmed with 10s+ concurrent capsules.
+
+    def capsule_finished(
+        self,
+        *,
+        model_name: str,
+        capsule_id: str,
+        status: str,
+        run_id: str | None = None,
+        elapsed_s: float | None = None,
+        extra: str | None = None,
+    ) -> None:
+        with self._lock:
+            self.running_capsules = max(0, self.running_capsules - 1)
+            self.completed_capsules += 1
+            run_part = f" run_id={run_id}" if run_id else ""
+            elapsed_part = f" secs={elapsed_s:.1f}" if elapsed_s is not None else ""
+            extra_part = f" {extra}" if extra else ""
             print(
-                f"[capsule][start] model={model_name} capsule={capsule_id} "
+                f"[capsule][{status}] model={model_name} capsule={capsule_id}{run_part}{elapsed_part}{extra_part} "
                 f"(capsules {self.completed_capsules}/{self.planned_capsules} done, {self.running_capsules} running)",
                 flush=True,
             )
 
     def capsule_done(self, *, model_name: str, capsule_id: str) -> None:
-        with self._lock:
-            self.running_capsules = max(0, self.running_capsules - 1)
-            self.completed_capsules += 1
-            print(
-                f"[capsule][done]  model={model_name} capsule={capsule_id} "
-                f"(capsules {self.completed_capsules}/{self.planned_capsules} done, {self.running_capsules} running)",
-                flush=True,
-            )
+        self.capsule_finished(model_name=model_name, capsule_id=capsule_id, status="done")
 
     def spec_finished(self, *, model_name: str, status: str, merged_trace: str | None) -> None:
         with self._lock:
@@ -238,8 +250,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--stream-logs",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Stream child process logs to stdout while running (default: enabled).",
+        default=False,
+        help="Stream child process logs to stdout while running (default: disabled).",
     )
     return parser.parse_args()
 
@@ -477,6 +489,9 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec, live: _LiveState)
         live.spec_started(model_name=spec.model_name, capsule_total=capsule_total)
         started_capsules: set[str] = set()
         done_capsules: set[str] = set()
+        capsule_started_at: Dict[str, float] = {}
+        capsule_run_id: Dict[str, str] = {}
+        capsule_status: Dict[str, str] = {}
 
         with log_path.open("w", encoding="utf-8") as handle:
             proc = subprocess.Popen(
@@ -498,21 +513,75 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec, live: _LiveState)
                 if line.startswith("[capsule][start]"):
                     parts = dict(item.split("=", 1) for item in line.split() if "=" in item)
                     capsule_id = parts.get("capsule_id")
+                    run_id_value = parts.get("run_id")
                     if capsule_id and capsule_id not in started_capsules:
                         started_capsules.add(capsule_id)
+                        capsule_started_at[capsule_id] = time.monotonic()
+                        if run_id_value:
+                            capsule_run_id[capsule_id] = run_id_value
+                        capsule_status[capsule_id] = "running"
                         live.capsule_started(model_name=spec.model_name, capsule_id=capsule_id)
                 elif line.startswith("[capsule][done]"):
                     parts = dict(item.split("=", 1) for item in line.split() if "=" in item)
                     capsule_id = parts.get("capsule_id") or "unknown"
+                    run_id_value = parts.get("run_id") or capsule_run_id.get(capsule_id)
+                    trace_value = parts.get("trace")
+                    if capsule_id not in started_capsules:
+                        started_capsules.add(capsule_id)
+                        capsule_started_at.setdefault(capsule_id, time.monotonic())
+                        if run_id_value:
+                            capsule_run_id.setdefault(capsule_id, run_id_value)
+                        capsule_status.setdefault(capsule_id, "running")
+                        live.capsule_started(model_name=spec.model_name, capsule_id=capsule_id)
                     if capsule_id not in done_capsules:
                         done_capsules.add(capsule_id)
-                        live.capsule_done(model_name=spec.model_name, capsule_id=capsule_id)
+                        capsule_status[capsule_id] = "succeeded"
+                        elapsed = None
+                        if capsule_id in capsule_started_at:
+                            elapsed = time.monotonic() - capsule_started_at[capsule_id]
+                        extra = f"trace={trace_value}" if trace_value else None
+                        live.capsule_finished(
+                            model_name=spec.model_name,
+                            capsule_id=capsule_id,
+                            status="succeeded",
+                            run_id=run_id_value,
+                            elapsed_s=elapsed,
+                            extra=extra,
+                        )
+                elif line.startswith("[hal-eval][error]"):
+                    parts = dict(item.split("=", 1) for item in line.split() if "=" in item)
+                    capsule_id = parts.get("capsule_id") or "unknown"
+                    run_id_value = parts.get("run_id") or capsule_run_id.get(capsule_id)
+                    if capsule_id not in started_capsules:
+                        started_capsules.add(capsule_id)
+                        capsule_started_at.setdefault(capsule_id, time.monotonic())
+                        if run_id_value:
+                            capsule_run_id.setdefault(capsule_id, run_id_value)
+                        capsule_status.setdefault(capsule_id, "running")
+                        live.capsule_started(model_name=spec.model_name, capsule_id=capsule_id)
+                    if capsule_id not in done_capsules:
+                        done_capsules.add(capsule_id)
+                        capsule_status[capsule_id] = "failed"
+                        elapsed = None
+                        if capsule_id in capsule_started_at:
+                            elapsed = time.monotonic() - capsule_started_at[capsule_id]
+                        live.capsule_finished(
+                            model_name=spec.model_name,
+                            capsule_id=capsule_id,
+                            status="failed",
+                            run_id=run_id_value,
+                            elapsed_s=elapsed,
+                            extra=f"log={log_path}",
+                        )
 
             returncode = proc.wait()
 
         if returncode != 0:
             summary["status"] = "failed"
             summary["returncode"] = returncode
+            incomplete = sorted(started_capsules - done_capsules)
+            if incomplete:
+                summary["incomplete_capsules"] = incomplete
             live.spec_finished(model_name=spec.model_name, status=summary["status"], merged_trace=None)
             return summary
 
@@ -521,6 +590,7 @@ def run_one_spec(args: argparse.Namespace, spec: ModelRunSpec, live: _LiveState)
             live.spec_finished(model_name=spec.model_name, status=summary["status"], merged_trace=None)
             return summary
         _validate_merged_trace(merged_output, expected_run_id=run_id, expected_task_ids=with_fixes)
+        summary["capsule_status"] = {task_id: capsule_status.get(task_id, "unknown") for task_id in with_fixes}
         summary["status"] = "completed"
         live.spec_finished(model_name=spec.model_name, status=summary["status"], merged_trace=str(merged_output))
         return summary
