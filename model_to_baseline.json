@@ -1,0 +1,19 @@
+{
+  "openai/o4-mini-2025-04-16": {
+    "baseline_trace": "corebench_hard_hal_generalist_agento4minihigh_1755580383_UPLOAD.json",
+    "reasoning_effort": "high"
+  },
+  "o4-mini-2025-04-16": {
+    "baseline_trace": "corebench_hard_hal_generalist_agento4minilow_1755608756_UPLOAD.json",
+    "reasoning_effort": "low"
+  },
+  "openai/o3-2025-04-16": {
+    "baseline_trace": "corebench_hard_hal_generalist_agento3medium_1755626315_UPLOAD.json",
+    "reasoning_effort": "medium"
+  },
+  "openai/gpt-5-2025-08-07": {
+    "baseline_trace": "corebench_hard_hal_generalist_agentgpt5medium_1756137340_UPLOAD.json",
+    "reasoning_effort": "medium"
+  },
+  "openai/gpt-4.1-2025-04-14": "corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json"
+}

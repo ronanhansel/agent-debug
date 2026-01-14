@@ -35,6 +35,10 @@ def _resolve_trace_path(traces_dir: Path, run_id_or_path: str) -> Path:
     candidate = Path(run_id_or_path).expanduser()
     if candidate.exists():
         return candidate
+    if not candidate.is_absolute():
+        in_traces = traces_dir / candidate
+        if in_traces.exists():
+            return in_traces
 
     # Common case: config value is a "run id" stem.
     for suffix in (".json", "_UPLOAD.json"):
@@ -42,10 +46,20 @@ def _resolve_trace_path(traces_dir: Path, run_id_or_path: str) -> Path:
         if maybe.exists():
             return maybe
 
-    # Some traces are already stored with _UPLOAD in the name.
-    maybe = traces_dir / f"{run_id_or_path}.json"
-    if maybe.exists():
-        return maybe
+    # Handle callers passing a filename that already ends with .json or _UPLOAD.json.
+    if run_id_or_path.endswith(".json"):
+        maybe = traces_dir / run_id_or_path
+        if maybe.exists():
+            return maybe
+        stem = run_id_or_path[: -len(".json")]
+        maybe = traces_dir / f"{stem}_UPLOAD.json"
+        if maybe.exists():
+            return maybe
+    if run_id_or_path.endswith("_UPLOAD.json"):
+        stem = run_id_or_path[: -len("_UPLOAD.json")]
+        maybe = traces_dir / f"{stem}.json"
+        if maybe.exists():
+            return maybe
 
     raise FileNotFoundError(f"Could not resolve baseline trace: {run_id_or_path} (searched under {traces_dir})")
 
