@@ -428,7 +428,7 @@ def load_inspection_payload(task_id: str, args: argparse.Namespace, logger: Fixi
         return None
 
 
-def build_codex_payload(task_ids: List[str], args: argparse.Namespace, logger: FixingPipelineLogger) -> str | None:
+def build_codex_prompt(task_ids: List[str], args: argparse.Namespace, logger: FixingPipelineLogger) -> str | None:
     tasks_payload: List[Dict[str, Any]] = []
     for task_id in task_ids:
         report = load_inspection_payload(task_id, args, logger)
@@ -438,21 +438,87 @@ def build_codex_payload(task_ids: List[str], args: argparse.Namespace, logger: F
             {
                 "task_id": task_id,
                 "report": report,
+                "inspection_report_path": str(inspection_report_path(task_id, args.benchmark_name)),
             }
         )
     if not tasks_payload:
         return None
-    instructions = (
-        "For each task, follow the inspection guidance to build a fix package under fixes/<task_id>/ "
-        "(agent overlays, input/env overrides, or fully edited files). After staging fixes, rerun the "
-        "debugger command provided in coding_agent_context and document results."
+    common_instructions = (
+        "For each task, follow the inspector guidance and create or update a fix package under:\n"
+        "  fixes/<benchmark>/<task_id>/\n\n"
+        "Use one or more of:\n"
+        "- `agent/` overlay files (preferred)\n"
+        "- `patch.diff` (only if overlays are impractical)\n"
+        "- `problem_statement.txt` (to add environment-specific, actionable steps)\n"
+        "- `input_override.json` / `env_override.json` (to adjust inputs/env vars)\n\n"
+        "After writing fixes for a task, validate by rerunning the single-task command in its report.\n"
+        "Do not directly edit benchmark source files outside the fix package."
     )
-    payload = {
-        "benchmark": args.benchmark_name,
-        "tasks": tasks_payload,
-        "instructions": instructions,
-    }
-    return json.dumps(payload, separators=(",", ":"))
+
+    lines: List[str] = []
+    lines.append("[SYSTEM PROMPT]")
+    lines.append(
+        "You are a coding agent operating in this repository. Your job is to implement fix packages for the tasks "
+        "listed below. Do not modify repository files directly; place all changes under the fix folders."
+    )
+    lines.append("")
+    lines.append("[BENCHMARK]")
+    lines.append(str(args.benchmark_name))
+    lines.append("")
+    lines.append("[GLOBAL INSTRUCTIONS]")
+    lines.append(common_instructions)
+    lines.append("")
+
+    for item in tasks_payload:
+        task_id = item["task_id"]
+        report: Dict[str, Any] = item["report"]
+        ctx: Dict[str, Any] = report.get("coding_agent_context") or {}
+        fix_folder = ctx.get("fix_folder") or f"fixes/{sanitize(args.benchmark_name)}/{sanitize(task_id)}"
+        rerun_single = ctx.get("rerun_single_task_command") or ""
+        rerun_all = ctx.get("rerun_command") or ""
+
+        lines.append("=" * 80)
+        lines.append(f"[TASK ID] {task_id}")
+        lines.append(f"[INSPECTION REPORT] {item['inspection_report_path']}")
+        lines.append(f"[FIX FOLDER] {fix_folder}")
+        if rerun_single:
+            lines.append(f"[RERUN SINGLE TASK] {rerun_single}")
+        if rerun_all:
+            lines.append(f"[RERUN BACKLOG] {rerun_all}")
+        lines.append("")
+
+        analysis = (report.get("analysis") or "").strip()
+        rationale = (report.get("rationale") or "").strip()
+        if analysis:
+            lines.append("[INSPECTOR ANALYSIS]")
+            lines.append(analysis)
+            lines.append("")
+        if rationale:
+            lines.append("[INSPECTOR RATIONALE]")
+            lines.append(rationale)
+            lines.append("")
+
+        recommended_files = report.get("recommended_files") or []
+        if recommended_files:
+            lines.append("[RECOMMENDED FILES]")
+            for path in recommended_files:
+                lines.append(f"- {path}")
+            lines.append("")
+
+        recommended_actions = report.get("recommended_actions") or []
+        if recommended_actions:
+            lines.append("[RECOMMENDED ACTIONS]")
+            for action in recommended_actions:
+                lines.append(f"- {str(action).strip()}")
+            lines.append("")
+
+        next_steps = (report.get("next_steps") or "").strip()
+        if next_steps:
+            lines.append("[NEXT STEPS]")
+            lines.append(next_steps)
+            lines.append("")
+
+    return "\n".join(lines).strip() + "\n"
 
 
 def _write_codex_payload_file(
@@ -469,26 +535,32 @@ def _write_codex_payload_file(
     return logger.write_json(f"codex_payload_batch_{batch_index}.json", parsed)
 
 
+def _write_codex_prompt_file(*, prompt: str, logger: FixingPipelineLogger, batch_index: int) -> Path:
+    path = logger.root / f"codex_prompt_batch_{batch_index}.txt"
+    path.write_text(prompt, encoding="utf-8")
+    return path
+
+
 def dispatch_codex_batches(task_ids: List[str], args: argparse.Namespace, logger: FixingPipelineLogger) -> None:
     if not task_ids:
         return
     batches = chunked(task_ids, 5)
     for index, batch in enumerate(batches):
-        payload = build_codex_payload(batch, args, logger)
-        if not payload:
+        prompt = build_codex_prompt(batch, args, logger)
+        if not prompt:
             continue
 
-        payload_path = _write_codex_payload_file(payload_json=payload, logger=logger, batch_index=index)
-        logger.log(f"Codex payload written to {payload_path}")
+        prompt_path = _write_codex_prompt_file(prompt=prompt, logger=logger, batch_index=index)
+        logger.log(f"Codex prompt written to {prompt_path}")
 
         if index == 0:
-            cmd = [args.codex_bin, "exec", payload]
+            cmd = [args.codex_bin, "exec", prompt]
         else:
-            cmd = [args.codex_bin, "exec", "resume", "--last", payload]
+            cmd = [args.codex_bin, "exec", "resume", "--last", prompt]
 
         # Keep the actual argv unchanged (Codex expects the JSON string), but make logs readable.
         display_cmd = list(cmd)
-        display_cmd[-1] = f"@{payload_path}"
+        display_cmd[-1] = f"@{prompt_path}"
         run_command(cmd, logger, display_override=shlex.join(str(part) for part in display_cmd))
 
 
