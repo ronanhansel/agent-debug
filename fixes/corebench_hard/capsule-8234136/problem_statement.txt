@@ -1,5 +1,0 @@
-If dependency pins (e.g., matplotlib==3.3.2) cannot be built/installed in this Python environment, do not attempt network installs. Instead:
-- Explain the incompatibility and that building old matplotlib may require system libs.
-- Suggest updating pins to a compatible matplotlib (or using the project's intended Python version).
-- Note missing runtime deps like joblib/matplotlib and how to install them locally.
-- Write any outputs only under $HAL_OUTPUT_DIR (default ./results). Use MPLBACKEND=Agg.

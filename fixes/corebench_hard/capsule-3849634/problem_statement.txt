@@ -1,4 +1,0 @@
-If Rscript is missing and cannot be installed (no permissions), do not attempt apt-get. Instead:
-- Explain the missing Rscript limitation.
-- Provide best-effort local instructions to run meta-analysis.R (system deps + R packages).
-- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

@@ -1,4 +1,0 @@
-If required system tools are missing (Rscript, xvfb-run) and cannot be installed (no permissions/network), do not attempt apt-get/conda downloads. Instead:
-- Explain which system dependencies are missing.
-- Note that any outputs should go under $HAL_OUTPUT_DIR (default ./results) and avoid creating ../results or /results.
-- Provide local/container setup instructions (install R + xvfb + required R packages) and how to run Main.R.

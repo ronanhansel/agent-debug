@@ -1,5 +1,0 @@
-If system dependencies needed for rendering (R/Rscript, pandoc, LaTeX) are missing or cannot be installed (no permissions/network), do not attempt apt-get or downloads. Instead:
-- Detect missing executables early and explain the limitation.
-- If expected repo files (e.g., preregSR_manuscript.Rmd/README) are absent, explain what is missing.
-- Provide best-effort local instructions to render the Rmd to PDF.
-- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

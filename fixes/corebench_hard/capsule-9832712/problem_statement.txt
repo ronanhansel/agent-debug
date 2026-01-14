@@ -1,5 +1,0 @@
-If Rscript is missing and cannot be installed due to permissions/network restrictions, do not attempt apt-get. Instead:
-- Explain the missing Rscript limitation.
-- Provide best-effort local instructions to run master_script.R and to create the expected results subfolders under the output directory.
-- Use $R_LIBS_USER (writable) for installing required R packages when running locally.
-- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

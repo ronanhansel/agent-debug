@@ -1,4 +1,0 @@
-If Rscript is missing and cannot be installed in this environment, do not attempt system package installs. Instead:
-- Explain the missing Rscript limitation.
-- Provide best-effort local setup steps (install R + required R packages) and how to run the scripts.
-- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

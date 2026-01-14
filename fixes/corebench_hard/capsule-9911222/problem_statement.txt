@@ -1,6 +1,0 @@
-If rendering OncoBird/vignettes/OncoBird.Rmd requires system tools that are missing (R>=4.2, pandoc, LaTeX) or R/Bioconductor packages that cannot be installed due to permissions/network restrictions, do not attempt system installs. Instead:
-- Explain which system deps are missing and that PDF rendering is blocked.
-- Provide best-effort local/container setup steps (R>=4.2 + pandoc + TeX + Bioconductor deps) and how to render the vignette.
-- Respect sandbox limitations (if imports/file I/O are restricted, note that and proceed with guidance).
-- Use $R_LIBS_USER for a writable R library.
-- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

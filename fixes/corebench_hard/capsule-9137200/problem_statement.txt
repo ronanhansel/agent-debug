@@ -1,8 +1,0 @@
-This task may run under a restrictive Python sandbox that blocks standard library imports (e.g., os) and may not allow installing old torch versions on modern Python.
-
-Rules:
-- Do not attempt to bypass sandbox import/file I/O restrictions.
-- Explain that torch==1.7.1 is incompatible with Python>=3.12 and recommend using the repo's intended Python (often 3.7/3.8) or updating torch pins.
-- If a required checkpoint is missing (e.g., ./data/cache/variable/bert/resume), explain what file is expected and how to obtain it.
-- Use $HAL_DATA_DIR (default ./data) as the data root.
-- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

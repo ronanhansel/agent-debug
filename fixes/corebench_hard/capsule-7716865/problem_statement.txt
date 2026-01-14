@@ -1,4 +1,0 @@
-If rendering manuscript.Rmd requires R/pandoc/pdflatex or specific R package versions not available in this environment, do not attempt system installs. Instead:
-- Explain missing system deps and version constraints.
-- Provide local/container steps to install R, pandoc, TeX, and required packages, using $R_LIBS_USER for a writable library.
-- Write any outputs only under $HAL_OUTPUT_DIR (default ./results) and avoid creating ../results.

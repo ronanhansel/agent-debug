@@ -1,6 +1,0 @@
-If code expects an absolute /data directory, treat $HAL_DATA_DIR (default ./data) as the data root and avoid creating /data (may be permission denied).
-
-If TensorFlow is required but not available/unsupported for this Python version, do not attempt to install it (no network). Instead:
-- Explain the TensorFlow/Python incompatibility.
-- Provide best-effort local instructions: use a compatible Python (often 3.10/3.11) and install tensorflow, then place multiclass_model.h5 under the data directory.
-- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

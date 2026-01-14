@@ -1,5 +1,0 @@
-If the environment is missing system dependencies (e.g., R/Rscript) or cannot install packages due to permissions/network restrictions, do not attempt apt-get or network installs. Instead:
-- Detect missing executables early and explain that the task cannot be executed in this runtime.
-- When data paths like /data/... are referenced, treat $HAL_DATA_DIR (default ./data) as the data root.
-- Still provide a best-effort static response: describe how to run the R analyses locally and what outputs would be produced.
-- Write any outputs only under the directory specified by $HAL_OUTPUT_DIR (default ./results).

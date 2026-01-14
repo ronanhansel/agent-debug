@@ -1,4 +1,0 @@
-If Rscript is missing and cannot be installed (no permissions/network), do not attempt apt-get. Instead:
-- Detect missing Rscript and explain the limitation.
-- Provide best-effort instructions to run main.R locally and list required packages.
-- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

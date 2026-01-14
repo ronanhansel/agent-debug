@@ -1,4 +1,0 @@
-If Rscript is missing and cannot be installed (no permissions/network), do not attempt apt-get. Instead:
-- Explain the missing Rscript limitation.
-- Provide best-effort local instructions to run pancancer_calculation.R and install required R packages (use a user library path like $R_LIBS_USER).
-- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

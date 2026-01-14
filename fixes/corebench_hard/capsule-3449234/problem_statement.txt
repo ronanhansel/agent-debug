@@ -1,5 +1,0 @@
-If Jupyter/nbconvert/matplotlib are missing and cannot be installed (no network/permissions), avoid trying to execute notebooks. Instead:
-- Explain the missing toolchain (jupyter, nbconvert, matplotlib).
-- Note any path duplication issues (e.g., environment/code/environment/code/...) and suggest using absolute/normalized paths.
-- Provide local commands to run: `jupyter nbconvert --to notebook --execute ...` and `--to html`.
-- Write any outputs only under $HAL_OUTPUT_DIR (default ./results). Use MPLBACKEND=Agg.

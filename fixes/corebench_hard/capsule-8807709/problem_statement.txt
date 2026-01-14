@@ -1,4 +1,0 @@
-If required Python dependencies are missing or incompatible (e.g., networkx, network_diffusion lacking required classes like MultiSpreading/PropagationModel), do not attempt network installs in a restricted environment. Instead:
-- Explain the version/API mismatch and that the installed network_diffusion package does not expose the expected classes.
-- Provide best-effort guidance: which dependency versions are needed (or recommend pinning to the repo/README specified versions) and how to verify by `python -c "import network_diffusion; dir(network_diffusion)"`.
-- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

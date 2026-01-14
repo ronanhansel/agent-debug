@@ -1,4 +1,0 @@
-If R/Rscript/pandoc are missing and cannot be installed in this environment, do not attempt apt-get. Instead:
-- Detect missing executables and explain the limitation.
-- Provide best-effort instructions to render ResultReproducibilityNotebook.Rmd locally (system deps + R packages).
-- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

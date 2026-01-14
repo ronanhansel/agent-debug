@@ -1,5 +1,0 @@
-If required system tools or orchestrator scripts are missing (e.g., Rscript or run.sh), and you cannot install/restore them (no permissions/network), do not attempt apt-get downloads. Instead:
-- Explain which tools/files are missing (Rscript, ../agent/environment/code/run.sh).
-- Provide best-effort guidance on expected repository layout and how to run all .R scripts under ../code locally.
-- Use $R_LIBS_USER (writable) if R is present but packages are missing.
-- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

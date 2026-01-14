@@ -1,4 +1,0 @@
-If required Python dependencies are missing and cannot be installed (no network), avoid failing imports. Instead:
-- Detect missing libraries (e.g., sklearn) and explain the limitation.
-- Provide best-effort guidance to run the notebook locally with the needed dependencies.
-- Write any outputs only under the directory specified by $HAL_OUTPUT_DIR (default ./results).

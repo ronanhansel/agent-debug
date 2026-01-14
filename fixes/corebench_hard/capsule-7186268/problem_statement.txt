@@ -1,4 +1,0 @@
-If system tools for rendering Rmd are missing (R/Rscript/pandoc) and cannot be installed (no permissions/network), do not attempt apt-get. Instead:
-- Explain missing dependencies.
-- Provide local steps to render SampleCode.Rmd.
-- Write any outputs only under $HAL_OUTPUT_DIR (default ./results), not ../results.

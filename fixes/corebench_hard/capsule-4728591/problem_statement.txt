@@ -1,4 +1,0 @@
-If Rscript is missing and cannot be installed (no permissions), do not attempt apt-get. Instead:
-- Explain the missing Rscript limitation.
-- Provide best-effort local instructions to run tests/replicate.R to regenerate Table 2.1 (including required R packages).
-- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

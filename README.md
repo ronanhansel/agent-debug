@@ -6,12 +6,15 @@ Setting up environment
 CONDA_PLUGINS_AUTO_ACCEPT_TOS=yes conda create -n hal python=3.12 -y
 conda activate hal
 ```
+Install all requirements (this will automatically install packages from submodules `docent` and `hal-harness`)
+```bash
+pip install -r requirements.txt
+```
 
 Build docker env for hal harness
 
 ```bash
 cd hal-harness
-pip install -e .
 docker build -t hal-agent -f hal/utils/docker/Dockerfile .
 ```
 
@@ -70,19 +73,14 @@ for task in flagged:
     print(task)
 ```
 
-Generate fixing instruction (inspector) 
+## Generate fixing instruction (inspector) 
 
 ```bash
 ./scripts/fixing_pipeline.sh \
-    --trace-dir traces \
-    --rubrics-dir rubrics \
-    --rubrics-output-dir rubrics_output \
-    --agent-dir hal-harness/agents/hal_generalist_agent \
-    --agent-args agent_args.azure.json \
     --benchmark-name corebench_hard \
-    --rubric-model o3-mini \
     --inspector-model azure/o3-mini \
     --skip-runner \
+    --skip-codex \
     --skip-rubric-eval
 ```
 
@@ -119,4 +117,32 @@ python scripts/run_corebench_fixes.py \
          --task-id capsule-0851068 \
          --task-id capsule-0921079 \
          --task-id ...
+```
+downloading COREBench test set
+```bash
+gpg --output hal-harness/hal/benchmarks/corebench/core_test.json \
+      --decrypt hal-harness/hal/benchmarks/corebench/core_test.json.gpg
+```
+When prompted for the passphrase, use: `reproducibility` (this is also hardcoded as the hint in hal-harness/hal/
+benchmarks/corebench.py).
+
+
+Rerun only the failed baselines from the mapping file using the fixed code withou
+```bash
+python scripts/master_rerun_corebench_fixes.py \
+    --mapping-file model_to_baseline.json \
+    --rubric-model openai/o3-mini \
+    --wandb-mode online
+```
+
+```bash
+python scripts/run_corebench_fixes.py \
+    --fixes-root fixes/corebench_hard \
+    --agent-dir hal-harness/agents/hal_generalist_agent \
+    --agent-args agent_args.azure.json \
+    --rubric-model openai/o3-mini \
+    --benchmark corebench_hard \
+    --task-id capsule-1394704 \
+    --wandb-mode online \
+    --keep-temp
 ```

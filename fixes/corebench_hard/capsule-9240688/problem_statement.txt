@@ -1,5 +1,0 @@
-If the expected entrypoint script (run.sh) is missing from the packaged repository, or the sandbox blocks essential operations (imports like csv or file I/O), do not attempt to bypass restrictions. Instead:
-- Explain that run.sh is missing and list the expected location/name.
-- Explain the sandbox limitations (blocked imports / open()).
-- Provide best-effort guidance on how the task should be executed in a proper environment.
-- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).

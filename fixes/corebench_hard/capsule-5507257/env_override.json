@@ -1,5 +1,0 @@
-{
-  "HAL_OUTPUT_DIR": "./results",
-  "HAL_DATA_DIR": "./data",
-  "TF_CPP_MIN_LOG_LEVEL": "2"
-}

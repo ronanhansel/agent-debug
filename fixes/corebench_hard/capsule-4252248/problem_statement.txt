@@ -1,5 +1,0 @@
-If R/Rscript is missing and cannot be installed (no permissions/network), do not attempt apt-get/conda installs. Instead:
-- Detect missing Rscript and explain the limitation.
-- Use $R_LIBS_USER (writable) if R is present but packages are missing.
-- Provide best-effort local instructions to run main-ctrpv.R, main-nci.R, and main-network-generation.R.
-- Write any outputs only under $HAL_OUTPUT_DIR (default ./results).
