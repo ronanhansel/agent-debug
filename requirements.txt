@@ -15,7 +15,6 @@ annotated-doc==0.0.4
 annotated-types==0.7.0
 anthropic==0.75.0
 anyio==4.12.1
-appworld @ git+https://github.com/StonyBrookNLP/appworld@8e7c06397df0c6e6c851588e63e3e15545366aa1
 argon2-cffi==25.1.0
 argon2-cffi-bindings==25.1.0
 arq==0.26.3
