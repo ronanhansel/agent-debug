@@ -20,15 +20,34 @@ Build docker env for hal harness
 
 ```bash
 cd hal-harness
-docker build -t hal-agent -f hal/utils/docker/Dockerfile .
+docker build -t hal-agent-runner:latest -f hal/utils/docker/Dockerfile .
 ```
 
-Make sure to place environment variables in place `hal-harness/` directory
+Make sure to place environment variables in repo root (same directory you run the scripts from)
 
 ```bash
-cp hal-harness/.env.example .env
+cp .env.example .env
 # edit .env to add your variables
 ```
+
+If you run from a different working directory, set `HAL_DOTENV_PATH=/path/to/.env`.
+
+If Docker runs can upload W&B/Weave projects but fail calling the model with `Connection refused`, check:
+
+- If you use a host-local OpenAI/LiteLLM proxy (e.g. `OPENAI_BASE_URL=http://localhost:4000`), Docker will see `localhost` as the container. Use either:
+  - `HAL_DOCKER_NETWORK_MODE=host` (Linux) (alias: `HAL_DOCKER_NETWORK=host`), or
+  - `OPENAI_BASE_URL=http://host.docker.internal:4000` (requires host gateway mapping; enabled by default in our runner).
+- Enable a quick connectivity printout with `HAL_DOCKER_PREFLIGHT_NETWORK=1`.
+
+Weave project naming in Docker:
+
+- Docker runs upload traces to a single Weave/W&B project named `<prefix>_<benchmark>` (inferred from `run_id` + benchmark), and each task is recorded under an op named by `task_id` with attributes including `trace_file=<run_id>_UPLOAD.json`.
+
+Reducing environment-barrier failures in Docker:
+
+- The Docker image now preinstalls a baseline toolchain in conda `base`: `r-base`, `pandoc`, `rmarkdown/knitr`, `texlive-core`. This prevents common `Rscript: not found` / PDF-render failures that otherwise dominate CoreBench debugging.
+- Agents should avoid `apt-get` inside tasks (CoreBench blocks it); use conda or task-provided environments instead.
+- CoreBench capsule contents are staged under `/workspace/environment` inside the container (mirroring `/root/environment` in the original harness). The runner `chdir`s there before executing the agent so task-relative paths resolve correctly.
 
 ## To Grade Rubrics
 
@@ -141,9 +160,9 @@ python scripts/master_rerun_corebench_fixes.py \
     --mapping-file model_to_baseline.json \
     --max-parallel 5 \
     --max-parallel-capsules 5 \
-    --prefix ss \
+    --prefix lime \
     --wandb-mode online \
-    --stream-logs \
+    --docker \
     --skip-rubrics
 ```
 

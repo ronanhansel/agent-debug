@@ -673,10 +673,10 @@ def run_one_capsule(
         hal_env.setdefault("HAL_PRICING_MODEL_NAME", str(agent_args.get("model_name", "")))
         hal_env.setdefault("WANDB_SILENT", "true")
         if prefix_value:
-            base_project = hal_env.get("WANDB_PROJECT") or "hal"
             prefix_slug = _slugify(prefix_value, "run")
-            if not base_project.startswith(f"{prefix_slug}_"):
-                hal_env["WANDB_PROJECT"] = f"{prefix_slug}_{base_project}"
+            # Force a stable, single W&B project name per benchmark to avoid
+            # accidental fan-out when upstream (e.g. docker runner) sets WANDB_PROJECT.
+            hal_env["WANDB_PROJECT"] = f"{prefix_slug}_{benchmark}"
             hal_env.setdefault("WANDB_RUN_GROUP", prefix_slug)
         if wandb_mode == "disabled":
             hal_env["WANDB_MODE"] = "disabled"
