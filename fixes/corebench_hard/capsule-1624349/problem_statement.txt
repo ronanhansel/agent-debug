@@ -1,8 +1,25 @@
 Environment prerequisites and filesystem constraints:
 
+CRITICAL HARNESS REQUIREMENTS:
+1. The evaluation harness requires output in a SINGLE code block wrapped in ```python and ```.
+2. Tool-call limits are enforced - minimize the number of tool invocations.
+3. README.md files may fail to process (UnsupportedFormatException) - avoid inspecting .md files.
+
+INSTRUCTIONS:
 - Do not write to `../results` (parent directory is not writable). Use `./results` (or `HAL_OUTPUT_DIR`) instead.
-- Ensure the Python environment has notebook execution/export tooling.
+- Ensure the Python environment has notebook execution/export tooling:
   - `nbconvert`, `jupyter`, `jupyter_core`, and `ipykernel` must be importable.
 - Ensure `scikit-learn` is installed (the notebook imports `sklearn`).
+
+OUTPUT FORMAT REQUIREMENT:
+When providing code solutions, always output a SINGLE code block like:
+```python
+# Your complete solution code here
+```
+
+Do NOT:
+- Include multiple code blocks
+- Use excessive tool calls (stay under quota limits)
+- Try to read/inspect .md files (will cause UnsupportedFormatException)
 
 After dependencies are present, re-run the notebook export/execution, writing the generated HTML (and any artifacts) into `./results`.

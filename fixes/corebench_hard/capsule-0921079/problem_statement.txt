@@ -1,11 +1,24 @@
 Environment prerequisite: R must be available.
 
+CRITICAL ISSUES TO ADDRESS:
+1. Missing dataset file: The script requires 'data/raw/data_power_to_people.xlsx' which does not exist.
+2. Incomplete R script: The file '01_code.R' ends with a truncated assignment 'sign_comp_test <- ft' which is incomplete.
+
+INSTRUCTIONS:
 - Do not use `apt-get` (blocked).
 - Ensure `Rscript` is on PATH by using the existing conda env `base`.
+- Use conda-forge channel (conda TOS issues may block default channels).
 
-Suggested setup (run inside the task container before executing `01_code.R`):
-- `conda activate base`
-- `conda install -y -c conda-forge r-base`
-- `Rscript --version`
+BEFORE RUNNING THE R SCRIPT:
+1. Check if 'data/raw/data_power_to_people.xlsx' exists. If not, create the directory structure and either:
+   a) Create a minimal stub Excel file with expected columns, OR
+   b) Modify the R script to handle the missing file gracefully with an informative error.
 
-Then run the provided `01_code.R` with `Rscript` and proceed with the analysis as written.
+2. Inspect '01_code.R' for the incomplete line 'sign_comp_test <- ft' at the end.
+   - If this assignment references undefined variable 'ft', either:
+     a) Remove the incomplete line, OR
+     b) Complete the assignment with appropriate code (e.g., 'sign_comp_test <- NULL' or similar placeholder).
+
+3. Run the provided `01_code.R` with `Rscript` and proceed with the analysis.
+
+OUTPUT: Write all results to ./results directory.

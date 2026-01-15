@@ -1,10 +1,46 @@
-This task failed due to missing notebook tooling and an unwritable output path.
-
 Environment constraints:
-- `jupyter` is not installed by default.
-- The parent directory is not writable, so creating `../results` fails.
 
-Guidance:
-- Install `jupyter` + `nbconvert` (and `ipykernel`) inside conda env `base`.
-- Write outputs to `./results` instead of `../results`.
-- Keep required nbconvert flags (e.g., allow errors, disable timeout) as specified by the task.
+CRITICAL ISSUES:
+1. Jupyter/nbconvert tooling is not installed
+2. Parent directory is NOT writable - cannot create '../results'
+3. Restricted imports (e.g., 'json') prevent some programmatic operations
+4. Base64 encoded outputs in notebook cannot be easily processed
+
+INSTRUCTIONS:
+- Do NOT use `apt-get` (blocked).
+- Do NOT write to '../results' - the parent directory is read-only.
+- Use `./results` as the output directory instead.
+- Use conda (env `base`) with conda-forge channel.
+
+OUTPUT DIRECTORY FIX:
+The task may reference '../results' which will FAIL. Always use:
+- `./results` (relative to workspace root)
+- Or `$HAL_OUTPUT_DIR` if set in environment
+
+Before running:
+```
+mkdir -p ./results
+```
+
+NOTEBOOK EXECUTION:
+Install tooling first:
+```
+pip install jupyter nbconvert ipykernel
+```
+
+Then execute notebook with explicit kernel and allow-errors:
+```
+jupyter nbconvert --to html --execute \
+    --ExecutePreprocessor.kernel_name=python3 \
+    --ExecutePreprocessor.timeout=-1 \
+    --allow-errors \
+    --output-dir=./results \
+    your_notebook.ipynb
+```
+
+RESTRICTED IMPORTS:
+- Do NOT use `import json` in agent code if blocked by sandbox.
+- If you need to parse JSON-like data, try yaml or ast.literal_eval as alternatives.
+
+BASE64 OUTPUTS:
+Notebook outputs may be base64 encoded. If you cannot decode them due to import restrictions, note this limitation and focus on executing the notebook to produce HTML output.

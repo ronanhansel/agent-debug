@@ -1,13 +1,13 @@
-This task fails due to environment restrictions:
-- Importing `os` is disallowed.
-- `torch==1.7.1` is incompatible with Python 3.12.
-- A required checkpoint file is missing at `./data/cache/variable/bert/resume`.
+This task failed because:
+- The file-inspection tool raised UnsupportedFormatException when trying to process Markdown README files.
+- Error: 'Could not convert "code/README.md" to Markdown. The formats ['.md'] are not supported.'
+- PureError: 'Not a regular file' when attempting to inspect root README.
 
 Guidance:
-- Do not pin torch to 1.7.1; install a Python-3.12-compatible `torch`.
-- Update the code to avoid importing `os` (or guard the import and use allowed alternatives).
-- Handle the missing checkpoint gracefully:
-  - If the checkpoint is optional, skip loading when absent and run with random/initialized weights.
-  - If it is required, include a placeholder file at the expected path via the fix package overlay.
+- Do NOT use the file-inspection tool to read .md (Markdown) files. It does not support Markdown format conversion.
+- Instead, read README files as plain text using alternative file-reading methods (e.g., `cat`, direct file read, or harness tools that support plain text).
+- If you need to extract installation instructions from README.md, read it as raw text and parse manually.
+- Do not pin torch to old versions; use a Python-3.12-compatible `torch`.
+- Keep all paths relative to the workspace.
 
-Keep all paths relative to the workspace.
+Key workaround: Treat .md files as plain text, not as files requiring format conversion.

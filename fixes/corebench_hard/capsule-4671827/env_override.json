@@ -1,6 +1,8 @@
 {
   "HAL_FORCE_CONDA_ENV": "base",
-  "HAL_PIP_PACKAGES": "jupyter nbconvert jupyter_core ipykernel",
+  "HAL_CONDA_CHANNELS": "conda-forge",
+  "HAL_PIP_PACKAGES": "jupyter nbconvert jupyter_core ipykernel matplotlib pandas numpy scipy",
   "HAL_OUTPUT_DIR": "./results",
-  "MPLBACKEND": "Agg"
+  "MPLBACKEND": "Agg",
+  "CONDA_ALWAYS_YES": "true"
 }

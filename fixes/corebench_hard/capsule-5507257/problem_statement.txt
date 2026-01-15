@@ -1,12 +1,40 @@
-This task fails due to two environment constraints:
-1) The code hardcodes `/data` (not writable/does not exist here).
-2) TensorFlow/Keras is not available for Python 3.13.
+Environment constraints:
 
-Guidance:
-- Do not create or write to `/data`; use a writable relative directory like `./data`.
-- Modify the code to read the data/model path from an environment variable (e.g., `DATA_DIR`) with a default of `./data`.
-- Do not require TensorFlow. If the analysis only needs model outputs, provide a fallback path:
-  - Skip model loading when TensorFlow is unavailable and instead load precomputed predictions if present, or
-  - Replace the TensorFlow load with a lightweight alternative only if the repository already supports it.
+CRITICAL ISSUES:
+1. Code hardcodes '/data' path which is NOT writable or does not exist in this environment.
+2. TensorFlow/Keras is NOT available for Python 3.13 - do NOT attempt to install or import them.
+3. h5py module may be missing (required for loading model files).
+4. Sandbox restrictions may block certain numpy imports.
 
-Ensure all file paths are relative to the workspace and that the run completes without importing TensorFlow.
+INSTRUCTIONS:
+- Do NOT use `apt-get` (blocked).
+- Do NOT install TensorFlow or Keras - they will fail on Python 3.13.
+- Use conda (env `base`) with conda-forge channel.
+
+PATH FIX (CRITICAL):
+The code uses hardcoded '/data' which will FAIL. You must:
+1. Use relative paths: `./data` instead of `/data`
+2. Or read from DATA_DIR environment variable: `os.environ.get('DATA_DIR', './data')`
+3. Create the data directory: `mkdir -p ./data`
+
+TENSORFLOW WORKAROUND:
+Since TensorFlow is unavailable:
+1. Check if precomputed predictions/outputs exist in the data directory.
+2. If the task requires model inference, check for saved model outputs (.h5, .pkl, .npy files).
+3. If only model loading fails, modify the code to:
+   - Skip model loading when TensorFlow ImportError occurs
+   - Use precomputed results if available
+   - Report that TensorFlow inference was skipped
+
+H5PY INSTALLATION:
+If h5py is needed for reading model files (without TensorFlow):
+```
+pip install h5py
+```
+
+SETUP:
+1. Create data directory: `mkdir -p ./data`
+2. Create results directory: `mkdir -p ./results`
+3. Ensure all file paths in code use relative paths or DATA_DIR
+
+OUTPUT: Write all results to `./results` directory.

@@ -1,10 +1,14 @@
 This task failed because:
 - The repository entrypoint `run.sh` is missing.
-- The sandbox forbids direct file I/O (e.g., using `open()`) and importing modules like `csv`.
+- The sandbox forbids direct file I/O and raises UnsupportedFormatException for README files and .R scripts.
+- The sandbox does not support CSV preview or certain file format conversions.
 
 Guidance:
-- Do not attempt to use disallowed Python file I/O or `csv`.
-- If output values must be extracted from existing files, use allowed harness tools (e.g., file search/content tools) rather than `open()`.
-- If an entrypoint is required, add a minimal `run.sh` stub via the fix package overlay that calls the real underlying command(s) (Python/R) without relying on forbidden operations.
+- Do NOT use the file-inspection tool to read .md or .R files directly. Read them as plain text using allowed methods.
+- Do NOT use disallowed Python file I/O (e.g., `open()`) or modules like `csv`.
+- Use allowed harness tools (e.g., inspect_file_as_text, Bash `cat`) to read file contents.
+- If an entrypoint `run.sh` is required, create it via the fix package overlay at `agent/run.sh`.
+- Use conda-forge to install R (`r-base`) if R scripts must be executed.
+- Set `R_LIBS_USER` to a writable directory for R package installations.
 
-If the environment still blocks required file access, treat it as an infrastructure limitation and ensure the final answer is derived from tool-visible outputs.
+Workaround for file access: Use plain text reading for all file types that cause UnsupportedFormatException.

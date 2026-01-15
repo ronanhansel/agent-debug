@@ -1,16 +1,25 @@
-This task failed because PDF rendering requires external tooling that is missing (Rscript, pandoc, LaTeX tools) and required R/Bioconductor packages were not available.
+This task failed because:
+- Conda installation was blocked by CondaToSNonInteractiveError (Terms of Service not accepted for default channels).
+- Compilation of OncoBird R package failed due to missing `pkg-config` system tool.
+- The vignette failed when calling `library(OncoBird)` because the package was not installed correctly.
 
 Guidance:
-- Do not use `apt-get`.
-- Use conda env `base` to provide:
-  - `r-base` (4.x),
-  - `pandoc`,
-  - a TeX toolchain (e.g., `texlive-core`),
-  - and core R packages (`Matrix`, `MASS`, plus `rmarkdown`, `knitr`).
-- If additional Bioconductor packages are required (e.g., ComplexHeatmap), install via conda-forge/bioconda when available, or use `BiocManager::install()` into `R_LIBS_USER=./.R/library`.
+- Do NOT use `apt-get` or default conda channels.
+- Use conda-forge and bioconda channels exclusively (bypasses ToS gates).
+- Install via conda-forge:
+  - `r-base` (4.x)
+  - `pandoc`
+  - `texlive-core` (TeX toolchain)
+  - `r-rmarkdown`, `r-knitr`, `r-matrix`, `r-mass`
+  - `pkg-config` (critical for building OncoBird)
+- Set `R_LIBS_USER=./.R/library` for R package installations.
+- For Bioconductor packages (e.g., ComplexHeatmap), use `BiocManager::install()` into the R_LIBS_USER directory.
 
-Rendering:
-- Ensure the output directory is writable (use `./results`, not `../results`).
-- Render with a direct command (bypassing `.Rmd` inspection tools), e.g.:
-  - `Rscript -e "rmarkdown::render('OncoBird/vignettes/OncoBird.Rmd', output_format='pdf_document', output_dir='./results', clean=TRUE)"`
-- If `pdflatex/latexmk` are still missing, use `tinytex::install_tinytex()` from within R as a fallback.
+To build and render:
+1. Ensure pkg-config is available: `which pkg-config`
+2. Install OncoBird: `R CMD INSTALL OncoBird`
+3. Render vignette:
+   `Rscript -e "rmarkdown::render('OncoBird/vignettes/OncoBird.Rmd', output_format='pdf_document', output_dir='./results', clean=TRUE)"`
+4. If pdflatex is missing, use: `Rscript -e "tinytex::install_tinytex()"`
+
+The output directory should be `./results` (not `../results`).

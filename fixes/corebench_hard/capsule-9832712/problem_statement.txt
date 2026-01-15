@@ -1,14 +1,20 @@
-This task failed because `Rscript` is missing and system installs via `apt-get` are blocked.
+This task failed because:
+- Conda installation of r-base/pandoc was blocked by CondaToSNonInteractiveError (Terms of Service not accepted).
+- Missing system header ft2build.h caused systemfonts compilation to fail.
+- Binary incompatibility: undefined symbol 'R_getVarEx' in magrittr.so when loading tidyverse.
 
 Guidance:
-- Do not use `apt-get`.
-- Provide `Rscript` via conda in env `base` (install `r-base` from `conda-forge`).
-- Use a writable R library path (`R_LIBS_USER=./.R/library`) if packages need to be installed.
+- Do NOT use `apt-get` or default conda channels.
+- Use conda-forge channel exclusively (bypasses ToS gates and provides precompiled binaries).
+- Install `r-base`, `r-tidyverse`, `r-magrittr`, `r-systemfonts`, `freetype`, `fontconfig`, and `pandoc` via conda-forge.
+- All packages should be precompiled to avoid system header requirements.
+- Set `R_LIBS_USER=./.R/library` for any additional R package installations.
 
 Before running `master_script.R`:
 - Ensure required output subdirectories exist and are writable:
   - `01_scopus-selection/`
   - `02_coding/`
   - `03_analyses/`
+- Verify `Rscript --version` succeeds before running the pipeline.
 
-Then run the pipeline using the conda-provided `Rscript`, and proceed to extract the required output values from the generated cleaned results.
+The key is using conda-forge precompiled packages to avoid both ToS issues and compilation requirements.

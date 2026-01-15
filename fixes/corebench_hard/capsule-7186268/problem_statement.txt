@@ -1,7 +1,40 @@
-This task failed due to missing `Rscript` and `pandoc`, plus an unwritable `../results` directory.
+Environment constraints:
 
-Guidance:
-- Do not use `apt-get`.
-- Provide `Rscript` + `pandoc` via conda env `base` (`r-base`, `pandoc`, and R packages like `rmarkdown/knitr` if needed).
-- Write outputs to `./results` (not `../results`).
-- Render `SampleCode.Rmd` using `Rscript` (e.g., `rmarkdown::render(..., clean=TRUE)`) with the output directory set to `./results`.
+CRITICAL ISSUES:
+1. Conda TOS blocks default Anaconda channels: CondaToSNonInteractiveError
+2. Rscript and pandoc are not available
+3. Output directory '../results' is not writable - use './results' instead
+
+INSTRUCTIONS:
+- Do NOT use `apt-get` (blocked).
+- Use conda (env `base`) with conda-forge channel EXCLUSIVELY.
+- The default Anaconda channels require TOS acceptance - avoid them.
+
+CONDA TOS FIX:
+Use conda-forge channel only to bypass TOS issues:
+```
+conda install -c conda-forge r-base pandoc r-rmarkdown r-knitr
+```
+
+SETUP:
+1. Create writable R library: `mkdir -p ./.R/library && export R_LIBS_USER=./.R/library`
+2. Create results directory: `mkdir -p ./results`
+3. Verify tools are available:
+   ```
+   Rscript --version
+   pandoc --version
+   ```
+
+OUTPUT DIRECTORY FIX:
+Do NOT write to '../results' - the parent directory is read-only.
+Use './results' instead. When rendering Rmd files:
+```
+Rscript -e "rmarkdown::render('SampleCode.Rmd', output_dir='./results', clean=TRUE)"
+```
+
+EXECUTION:
+1. Install R packages via conda or CRAN
+2. Render the Rmd file to the ./results directory
+3. Verify the output HTML was created
+
+OUTPUT: Write all results to `./results` directory.

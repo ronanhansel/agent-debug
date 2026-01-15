@@ -1,7 +1,8 @@
 {
   "HAL_FORCE_CONDA_ENV": "base",
   "HAL_CONDA_CHANNELS": "conda-forge",
-  "HAL_CONDA_PACKAGES": "r-base=4.* r-rmarkdown r-knitr r-ggplot2 pandoc",
+  "HAL_CONDA_PACKAGES": "r-base=4.* r-rmarkdown r-knitr r-ggplot2 r-dplyr r-tidyr r-lubridate r-scales r-devtools pandoc texlive-core",
   "R_LIBS_USER": "./.R/library",
-  "HAL_OUTPUT_DIR": "./results"
+  "HAL_OUTPUT_DIR": "./results",
+  "CONDA_ALWAYS_YES": "true"
 }

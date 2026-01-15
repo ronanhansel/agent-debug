@@ -1,10 +1,27 @@
 Environment constraints:
+
+CRITICAL ISSUES:
+1. Missing file: 'preregSR_manuscript.Rmd' is not found in the workspace.
+2. R package 'meta' cannot be loaded (library(meta) fails).
+3. Conda TOS blocks default Anaconda channels - use conda-forge.
+
+INSTRUCTIONS:
 - Do not use `apt-get` (blocked).
-- Provide R + pandoc + LaTeX via conda in env `base`.
+- Provide R + pandoc + LaTeX via conda in env `base` using conda-forge channel.
 - Do not write to parent directories; write outputs to a writable directory like `./results`.
 
-If `preregSR_manuscript.Rmd` is missing from the workspace, the rendering step cannot run. In that case:
-- Fail fast with a clear message that the repository content is missing.
-- Do not attempt OS-level cloning or system installs.
+HANDLING MISSING RMD FILE:
+If `preregSR_manuscript.Rmd` is missing from the workspace:
+1. First, search for any .Rmd files that may exist in the workspace.
+2. If the file is genuinely missing (not in any subdirectory), produce a clear error message:
+   "ERROR: preregSR_manuscript.Rmd not found in workspace. Cannot proceed with rendering."
+3. Do not attempt OS-level cloning or system installs to obtain it.
 
-If the file exists, render it using conda-provided `Rscript`/`pandoc`/TeX into `./results`.
+HANDLING META PACKAGE:
+The 'meta' R package is required. Try installing via:
+- conda: `conda install -c conda-forge r-meta` (preferred)
+- If conda fails, try: `install.packages("meta", repos="https://cloud.r-project.org")`
+- The 'metafor' package may be an alternative if 'meta' is unavailable.
+
+EXECUTION:
+If the Rmd file exists and dependencies are resolved, render it using conda-provided `Rscript`/`pandoc`/TeX into `./results`.

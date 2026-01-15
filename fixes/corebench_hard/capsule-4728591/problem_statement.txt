@@ -1,12 +1,48 @@
-This task failed because `Rscript` and required R packages (notably `bookdown`) are missing.
-
 Environment constraints:
-- Do not use `apt-get`.
-- Provide R + packages via conda in env `base`.
-- The output directory referenced by the reproducibility script must exist and be writable.
 
-Guidance:
-- Install `r-base` and required packages (e.g., `r-bookdown`, `r-rmarkdown`, `r-knitr`) via `conda-forge`.
-- Set `R_LIBS_USER=./.R/library` so any additional `install.packages()` calls succeed.
-- Ensure outputs go to a writable directory (e.g., `./results`) and create needed subdirs before running.
-- Then run `Rscript tests/replicate.R`.
+CRITICAL ISSUES:
+1. Conda TOS blocks default Anaconda channels: CondaToSNonInteractiveError
+2. Rscript is not available (Exit Code 127)
+3. R package 'stringr' is missing
+4. R package 'bookdown' is required for the replication script
+
+INSTRUCTIONS:
+- Do NOT use `apt-get` (blocked).
+- Use conda (env `base`) with conda-forge channel EXCLUSIVELY.
+- The default Anaconda channels (pkgs/main, pkgs/r) require TOS acceptance - avoid them.
+
+CONDA CHANNEL FIX:
+The TOS error occurs with default Anaconda channels. Use conda-forge only:
+```
+conda install -c conda-forge r-base r-stringr r-bookdown r-rmarkdown r-knitr pandoc
+```
+
+SETUP:
+1. Create writable R library directory:
+   ```
+   mkdir -p ./.R/library
+   export R_LIBS_USER=./.R/library
+   ```
+
+2. Create results directory:
+   ```
+   mkdir -p ./results
+   ```
+
+3. Verify Rscript is available:
+   ```
+   Rscript --version
+   ```
+
+4. Verify stringr is loadable:
+   ```
+   Rscript -e "library(stringr); print('stringr OK')"
+   ```
+
+EXECUTION:
+After setup, run the replication script:
+```
+Rscript tests/replicate.R
+```
+
+OUTPUT: Write all results to `./results` directory.

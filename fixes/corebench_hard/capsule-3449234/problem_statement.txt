@@ -1,10 +1,48 @@
-This task failed due to missing notebook tooling (`jupyter`/`nbconvert`) and missing `matplotlib`, plus a path error that duplicated `environment/code`.
+Environment constraints:
 
-Guidance:
-- Install `jupyter`, `nbconvert`, `ipykernel`, and `matplotlib` in the `base` environment.
-- Use headless plotting: `MPLBACKEND=Agg`.
-- Run nbconvert from the correct working directory to avoid duplicated paths.
-  - Example: `cd environment/code` then reference `visualize_results.ipynb` by filename (not `environment/code/...`).
-- Write outputs to a writable directory (e.g., `./results`).
+CRITICAL ISSUES:
+1. nbconvert fails with kernel error: 'No such kernel named pycharm-876e27c6'
+2. Execution exceeded platform's computation/memory limits
+3. File-reading tool rejects Markdown (.md) files - do NOT attempt to read README.md
+4. Restricted imports (e.g., 'json') may block some programmatic parsing
 
-Keep nbconvert flags required by the task, including `--allow-errors` and `--ExecutePreprocessor.timeout=-1`.
+INSTRUCTIONS:
+- Do NOT use `apt-get` (blocked).
+- Do NOT attempt to read or process .md files - they will cause UnsupportedFormatException.
+- Use conda (env `base`) with conda-forge channel.
+- Install dependencies: jupyter, nbconvert, ipykernel, matplotlib.
+
+KERNEL FIX:
+The notebook may reference a non-existent kernel. Use the 'python3' kernel explicitly:
+```
+jupyter nbconvert --to html --execute \
+    --ExecutePreprocessor.kernel_name=python3 \
+    --ExecutePreprocessor.timeout=-1 \
+    --allow-errors \
+    notebook.ipynb
+```
+
+MEMORY/COMPUTATION LIMITS:
+- Disable cell execution timeout: `--ExecutePreprocessor.timeout=-1`
+- Allow errors to continue: `--allow-errors`
+- Use headless plotting: `MPLBACKEND=Agg`
+
+AVOIDING RESTRICTED IMPORTS:
+- Do NOT use `import json` if it's blocked in the sandbox.
+- If you need to parse JSON, check if yaml or ast.literal_eval can be used as alternatives.
+
+EXECUTION:
+1. Navigate to the correct working directory (avoid duplicated paths like `environment/code/environment/code/`).
+2. Reference the notebook by filename only when in its directory.
+3. Write outputs to `./results` directory.
+
+Example:
+```
+cd environment/code
+jupyter nbconvert --to html --execute \
+    --ExecutePreprocessor.kernel_name=python3 \
+    --ExecutePreprocessor.timeout=-1 \
+    --allow-errors \
+    --output-dir=../../results \
+    visualize_results.ipynb
+```

@@ -1,7 +1,8 @@
 {
   "HAL_FORCE_CONDA_ENV": "base",
-  "HAL_CONDA_PACKAGES": "r-base=4.*",
+  "HAL_CONDA_PACKAGES": "r-base=4.* scikit-learn pandas numpy",
   "HAL_CONDA_CHANNELS": "conda-forge",
-  "HAL_PIP_PACKAGES": "nbconvert jupyter jupyter_core ipykernel",
-  "HAL_OUTPUT_DIR": "./results"
+  "HAL_PIP_PACKAGES": "nbconvert jupyter jupyter_core ipykernel scikit-learn",
+  "HAL_OUTPUT_DIR": "./results",
+  "CONDA_ALWAYS_YES": "true"
 }

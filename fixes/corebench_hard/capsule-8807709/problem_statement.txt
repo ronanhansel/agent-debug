@@ -1,11 +1,56 @@
-This task failed due to missing/incompatible dependencies:
-- `networkx` was missing.
-- The installed `network_diffusion` package does not provide required classes (`MultiSpreading`, `PropagationModel`).
+Environment constraints:
 
-Guidance:
-- Install `networkx`.
-- If `network_diffusion` still lacks the required API, do not attempt web search. Instead:
-  - Vendor a minimal local implementation (or compatibility shim) that provides the missing classes used by `epidemic.py`, OR
-  - Adjust the code to avoid importing those classes if they are not actually needed for producing the required plots/outputs.
+CRITICAL ISSUES:
+1. Sandbox BLOCKS imports: 'Import of os is not allowed', 'Import of pandas is not allowed'
+2. ModuleNotFoundError for 'network_diffusion' - PYTHONPATH issue
+3. Missing dependencies: networkx and dynetx are not installed
+4. Local vendored module 'network_diffusion' is not found due to path issues
 
-Use headless plotting (`MPLBACKEND=Agg`). If the task requires reporting plot metadata (titles/line colors), add a small code path that prints/saves those details in plain text.
+INSTRUCTIONS:
+- Do NOT use `apt-get` (blocked).
+- Use conda (env `base`) with conda-forge channel.
+- Do NOT use 'import os' or 'import pandas' in agent debugging code - they are blocked by sandbox.
+
+SANDBOX IMPORT RESTRICTIONS:
+The sandbox blocks certain imports. If you see errors like:
+- "Import of os is not allowed"
+- "Import of pandas is not allowed"
+
+These are sandbox restrictions, NOT missing packages. Do NOT try to install os/pandas.
+The main script (epidemic.py) may be allowed to use these - the restriction applies to agent code.
+
+PYTHONPATH FIX (CRITICAL):
+The 'network_diffusion' module is vendored locally but not found.
+Set PYTHONPATH to include the vendored directory:
+```
+export PYTHONPATH="./network_diffusion:$PYTHONPATH"
+```
+
+Or if running epidemic.py:
+```
+PYTHONPATH=./network_diffusion python epidemic.py
+```
+
+DEPENDENCY INSTALLATION:
+```
+pip install networkx dynetx matplotlib
+```
+
+VERIFICATION:
+After setting PYTHONPATH, verify imports work:
+```
+PYTHONPATH=./network_diffusion python -c "import network_diffusion; print('OK')"
+```
+
+HEADLESS PLOTTING:
+Use headless backend for matplotlib:
+```
+export MPLBACKEND=Agg
+```
+
+EXECUTION:
+```
+PYTHONPATH=./network_diffusion MPLBACKEND=Agg python epidemic.py
+```
+
+OUTPUT: Write all results to `./results` directory.

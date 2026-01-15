@@ -1,11 +1,44 @@
-This task requires rendering an RMarkdown manuscript to PDF, but the environment lacks R/pandoc/pdflatex and cannot write to `../results`.
+Environment constraints:
 
-Guidance:
-- Do not use `apt-get`.
-- Use conda env `base` to provide:
-  - A modern R (`r-base` 4.x),
-  - `pandoc`,
-  - a TeX engine (`texlive-core`),
-  - and required R packages (e.g., `scales`, `rmarkdown`, `knitr`).
-- Write outputs to a writable directory `./results`.
-- Bypass `.Rmd` file-inspection limitations and render directly via `Rscript -e "rmarkdown::render('manuscript.Rmd', output_format='pdf_document', output_dir='./results', clean=TRUE)"`.
+CRITICAL ISSUES:
+1. Conda TOS blocks default channels: CondaToSNonInteractiveError
+2. R script expects '/data/fMRInf_regulation.csv' which does NOT exist
+3. Output directory '../results' is NOT writable
+4. Missing R/pandoc/pdflatex for rendering manuscript.Rmd
+
+INSTRUCTIONS:
+- Do NOT use `apt-get` (blocked).
+- Use conda (env `base`) with conda-forge channel EXCLUSIVELY.
+
+FILE PATH FIX (CRITICAL):
+The code references '/data/fMRInf_regulation.csv' - an ABSOLUTE path that doesn't exist.
+You must:
+1. Use RELATIVE path: './data/fMRInf_regulation.csv'
+2. Verify the data file exists: `ls -la ./data/`
+3. If in manuscript.Rmd, modify the read.csv() call to use relative path
+
+OUTPUT DIRECTORY FIX:
+Do NOT write to '../results' - parent directory is read-only.
+Use './results' instead:
+```
+mkdir -p ./results
+```
+
+SETUP:
+1. Create writable R library: `mkdir -p ./.R/library && export R_LIBS_USER=./.R/library`
+2. Create results directory: `mkdir -p ./results`
+3. Verify data file exists or copy to ./data/
+
+REQUIRED TOOLS:
+Install via conda-forge:
+```
+conda install -c conda-forge r-base pandoc texlive-core r-rmarkdown r-knitr r-scales
+```
+
+EXECUTION:
+Render the manuscript with relative output directory:
+```
+Rscript -e "rmarkdown::render('manuscript.Rmd', output_format='pdf_document', output_dir='./results', clean=TRUE)"
+```
+
+OUTPUT: Write all results to `./results` directory.

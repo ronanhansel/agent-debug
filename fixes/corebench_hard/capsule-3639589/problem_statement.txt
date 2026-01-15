@@ -1,8 +1,33 @@
-This task failed because `torch` (PyTorch) is missing.
+Environment constraints:
 
-Guidance:
-- Install PyTorch before running `demo.py`.
-- Prefer a CPU-only install (no GPU drivers assumed).
-- Do not use `apt-get`; install via pip/conda within the `base` environment.
+CRITICAL ISSUES:
+1. The repository's requirements.txt pins numpy==1.16.5 and torch==1.2.0, which are INCOMPATIBLE with Python 3.11.
+2. numpy==1.16.5 fails to build metadata under Python 3.11.
+3. torch==1.2.0 is not available from current wheel indexes.
+4. Sandbox restrictions block pickle and subprocess imports, limiting debugging.
 
-After installation, rerun `demo.py`.
+INSTRUCTIONS:
+- Do NOT use `apt-get` (blocked).
+- Do NOT install numpy==1.16.5 or torch==1.2.0 - they will fail.
+- Use modern versions compatible with Python 3.11.
+
+DEPENDENCY OVERRIDE:
+The pinned versions in requirements.txt must be overridden. Use:
+- numpy>=1.23 (supports Python 3.11)
+- torch>=2.0 (CPU-only is sufficient)
+
+INSTALLATION:
+1. Do NOT run `pip install -r requirements.txt` directly - it will fail.
+2. Instead, manually install compatible versions:
+   ```
+   pip install numpy>=1.23 torch>=2.0 --extra-index-url https://download.pytorch.org/whl/cpu
+   ```
+3. Then install any other dependencies that are compatible.
+
+WORKAROUND FOR RESTRICTED IMPORTS:
+- Do NOT use `import pickle` or `import subprocess` in debugging code - they are blocked.
+- If the main script uses these, it should be fine at runtime, but inserted debug code cannot.
+
+EXECUTION:
+After installing compatible dependencies, run the main script (e.g., `demo.py` or `main.py`).
+Write outputs to `./results` directory.

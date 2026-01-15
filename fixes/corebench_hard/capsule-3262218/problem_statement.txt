@@ -1,8 +1,32 @@
 Environment constraints:
-- Do not use `apt-get`.
-- Rendering `manuscript.Rmd` to PDF requires `Rscript`, `pandoc`, and a LaTeX distribution; use conda (env `base`).
-- The file-reading tool cannot parse `.Rmd` reliably here; do not attempt to convert/read it via special file-inspection tooling.
 
-Write outputs to a writable directory like `./results`.
-Render via a direct command like:
-- `Rscript -e "rmarkdown::render('manuscript.Rmd', output_format='pdf_document', output_dir='./results', clean=TRUE)"`
+CRITICAL ISSUES:
+1. tidyverse cannot load due to missing systemfonts package (requires FreeType headers ft2build.h)
+2. cmake is not found (required for building certain R packages)
+3. pdftotext is missing (from poppler package)
+4. Conda TOS blocks default channels - use conda-forge only
+
+INSTRUCTIONS:
+- Do NOT use `apt-get` (blocked in this environment).
+- Use conda (env `base`) with conda-forge channel exclusively.
+- Install system dependencies via conda: cmake, freetype, poppler (provides pdftotext).
+- Install R packages via conda: r-tidyverse, r-systemfonts, r-rmarkdown, r-knitr.
+
+DEPENDENCY INSTALLATION:
+Before attempting to render the Rmd file:
+1. Verify cmake is available: `which cmake`
+2. Verify pdftotext is available: `which pdftotext`
+3. Test tidyverse loads: `Rscript -e "library(tidyverse)"`
+
+If systemfonts still fails to load:
+- The freetype headers must be available. Check: `ls $CONDA_PREFIX/include/freetype2/`
+- Set PKG_CONFIG_PATH if needed: `export PKG_CONFIG_PATH=$CONDA_PREFIX/lib/pkgconfig`
+
+EXECUTION:
+Write outputs to `./results` directory.
+Render via:
+```
+Rscript -e "rmarkdown::render('manuscript.Rmd', output_format='pdf_document', output_dir='./results', clean=TRUE)"
+```
+
+NOTE: The file-reading tool cannot parse `.Rmd` reliably; do not attempt special file-inspection tooling on it.

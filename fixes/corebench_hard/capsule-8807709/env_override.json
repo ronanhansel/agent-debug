@@ -1,5 +1,9 @@
 {
   "HAL_FORCE_CONDA_ENV": "base",
-  "HAL_PIP_PACKAGES": "networkx",
-  "MPLBACKEND": "Agg"
+  "HAL_CONDA_CHANNELS": "conda-forge",
+  "HAL_PIP_PACKAGES": "networkx dynetx matplotlib pandas numpy scipy",
+  "PYTHONPATH": "./network_diffusion:.",
+  "MPLBACKEND": "Agg",
+  "HAL_OUTPUT_DIR": "./results",
+  "CONDA_ALWAYS_YES": "true"
 }
