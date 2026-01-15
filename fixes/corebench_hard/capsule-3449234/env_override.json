@@ -1,5 +1,5 @@
 {
-  "HAL_FORCE_CONDA_ENV": "base",
+  "HAL_FORCE_CONDA_ENV": "agent",
   "HAL_CONDA_CHANNELS": "conda-forge",
   "HAL_PIP_PACKAGES": "jupyter nbconvert jupyter_core ipykernel matplotlib pandas numpy scipy",
   "MPLBACKEND": "Agg",

@@ -135,6 +135,21 @@ def parse_args() -> argparse.Namespace:
         action="append",
         help="Only run the specified capsule ID(s). Can be repeated.",
     )
+    parser.add_argument(
+        "--isolated-env",
+        action="store_true",
+        help="Create a fresh isolated conda environment for this run (recommended for clean evaluations).",
+    )
+    parser.add_argument(
+        "--isolated-env-python",
+        default="3.12",
+        help="Python version to use for isolated conda environment (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--keep-isolated-env",
+        action="store_true",
+        help="Do not delete the isolated conda environment after the run (useful for debugging).",
+    )
     return parser.parse_args()
 
 

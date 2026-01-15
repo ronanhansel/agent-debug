@@ -253,6 +253,21 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Stream child process logs to stdout while running (default: disabled).",
     )
+    parser.add_argument(
+        "--isolated-env",
+        action="store_true",
+        help="Create a fresh isolated conda environment for each run (recommended for clean evaluations).",
+    )
+    parser.add_argument(
+        "--isolated-env-python",
+        default="3.12",
+        help="Python version to use for isolated conda environments (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--keep-isolated-env",
+        action="store_true",
+        help="Do not delete isolated conda environments after runs (useful for debugging).",
+    )
     return parser.parse_args()
 
 

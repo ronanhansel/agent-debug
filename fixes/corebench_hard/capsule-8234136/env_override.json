@@ -1,5 +1,5 @@
 {
-  "HAL_FORCE_CONDA_ENV": "base",
+  "HAL_FORCE_CONDA_ENV": "agent",
   "HAL_CONDA_CHANNELS": "conda-forge",
   "HAL_PIP_PACKAGES": "matplotlib joblib pandas numpy scipy",
   "MPLBACKEND": "Agg",

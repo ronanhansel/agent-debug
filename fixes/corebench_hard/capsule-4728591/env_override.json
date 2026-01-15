@@ -1,5 +1,5 @@
 {
-  "HAL_FORCE_CONDA_ENV": "base",
+  "HAL_FORCE_CONDA_ENV": "agent",
   "HAL_CONDA_CHANNELS": "conda-forge",
   "HAL_CONDA_PACKAGES": "r-base=4.* r-stringr r-bookdown r-rmarkdown r-knitr pandoc r-dplyr r-tidyr r-readr r-purrr",
   "R_LIBS_USER": "./.R/library",
