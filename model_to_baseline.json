@@ -1,21 +1,21 @@
 {
   "openai/o4-mini-2025-04-16": {
     "model_id": "openai/o4-mini_2025-04-16",
-    "baseline_trace": "corebench_hard_hal_generalist_agento4minihigh_1755580383_UPLOAD.json",
+    "baseline_trace": "roblox_openai_o4-mini_2025-04-16_high.json",
     "reasoning_effort": "high"
   },
   "o4-mini-2025-04-16": {
     "model_id": "openai/o4-mini_2025-04-16",
-    "baseline_trace": "corebench_hard_hal_generalist_agento4minilow_1755608756_UPLOAD.json",
+    "baseline_trace": "roblox_openai_o4-mini_2025-04-16_low.json",
     "reasoning_effort": "low"
   },
   "openai/o3-2025-04-16": {
     "model_id": "openai/o3_2025-04-16",
-    "baseline_trace": "corebench_hard_hal_generalist_agento3medium_1755626315_UPLOAD.json",
+    "baseline_trace": "roblox_openai_o3_2025-04-16_medium.json",
     "reasoning_effort": "medium"
   },
   "openai/gpt-4.1-2025-04-14": {
     "model_id": "openai/gpt-4.1_2025-04-14",
-    "baseline_trace": "corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json"
+    "baseline_trace": "roblox_openai_gpt-4_1.json"
   }
 }
