@@ -23,6 +23,15 @@ cd hal-harness
 docker build -t hal-agent-runner:latest -f hal/utils/docker/Dockerfile .
 ```
 
+If Docker works in your shell but the runner fails to connect, note that the Python Docker SDK does not honor Docker "contexts".
+Set `HAL_DOCKER_HOST` to the endpoint shown by `docker context inspect` (common values: `unix:///var/run/docker.sock` on Linux/macOS).
+
+Smoke test the image toolchain:
+
+```bash
+docker run --rm hal-agent-runner:latest bash -lc 'Rscript --version && pandoc --version | head -n 2 && (pdflatex --version | head -n 1 || true)'
+```
+
 Make sure to place environment variables in repo root (same directory you run the scripts from)
 
 ```bash
@@ -38,6 +47,7 @@ If Docker runs can upload W&B/Weave projects but fail calling the model with `Co
   - `HAL_DOCKER_NETWORK_MODE=host` (Linux) (alias: `HAL_DOCKER_NETWORK=host`), or
   - `OPENAI_BASE_URL=http://host.docker.internal:4000` (requires host gateway mapping; enabled by default in our runner).
 - Enable a quick connectivity printout with `HAL_DOCKER_PREFLIGHT_NETWORK=1`.
+- If the runner can’t connect to Docker but `docker ps` works in your shell, set `HAL_DOCKER_HOST` (docker-py ignores contexts).
 
 Weave project naming in Docker:
 
@@ -45,17 +55,22 @@ Weave project naming in Docker:
 
 Reducing environment-barrier failures in Docker:
 
-- The Docker image now preinstalls a baseline toolchain in conda `base`: `r-base`, `pandoc`, `rmarkdown/knitr`, `texlive-core`. This prevents common `Rscript: not found` / PDF-render failures that otherwise dominate CoreBench debugging.
+- The Docker image now preinstalls a baseline toolchain in conda `base`: `r-base`, `pandoc`, `rmarkdown/knitr`, `texlive-core`, plus `jupyter`/`nbconvert`. This prevents common `Rscript: not found` / PDF-render / notebook-export failures that otherwise dominate CoreBench debugging.
+- The Docker runner forces a stable container `PATH` that includes `/opt/conda/bin` and `/opt/conda/envs/agent_env/bin` to avoid PATH-related false negatives (e.g., conda adds `/opt/conda/condabin` but `Rscript` lives in `/opt/conda/bin`).
+- The runner does a quick in-container preflight for `Rscript`, `pandoc`, and `pdflatex` and fails fast with a rebuild hint if they’re missing.
+- The runner creates `/workspace/results` and symlinks `/workspace/environment/results -> /workspace/results` so both `./results` (from `/workspace/environment`) and `../results` resolve to a writable location.
 - Agents should avoid `apt-get` inside tasks (CoreBench blocks it); use conda or task-provided environments instead.
 - CoreBench capsule contents are staged under `/workspace/environment` inside the container (mirroring `/root/environment` in the original harness). The runner `chdir`s there before executing the agent so task-relative paths resolve correctly.
+- If you rebuilt `hal-agent-runner:latest` and still see missing tools, set `HAL_DOCKER_FORCE_REBUILD=1` once to force rebuilding the cached `hal-agent-runner:agent-env-*` prepared images.
+- If you hit dependency wheels that don’t support the container Python, set `HAL_AGENT_ENV_PYTHON_VERSION=3.11` (default) or another version before building prepared images.
 
 ## To Grade Rubrics
 
 Iterating through every `corebench_*_UPLOAD_*.json` pattern
 
 ```bash
-for trace in traces/corebench_*_UPLOAD*.json; do
-        /opt/homebrew/Caskroom/miniconda/base/envs/hal/bin/python \
+for trace in traces/roblox_*.json; do
+        python \
           main.py evaluate \
           --trace-file "$trace" \
           --rubrics-dir rubrics \
@@ -73,7 +88,7 @@ Merge generated rubrics
 ```bash
 python scripts/merge_rubric_csvs.py \
       --rubrics-root rubrics_output \
-      --output rubrics_output/merged_rubrics.csv --criteria environmental_barrier --criteria instruction_error --model-run-substring corebench_hard
+      --output rubrics_output/merged_rubrics.csv --criteria environmental_barrier --criteria instruction_error --model-run-substring roblox
 ```
 
 print items with rubric score = 1 & correct = 0
@@ -104,11 +119,11 @@ for task in flagged:
     --benchmark-name corebench_hard \
     --inspector-model azure/o3-mini \
     --skip-runner \
-    --skip-codex \
+    --skip-coding-agent \
     --skip-rubric-eval
 ```
 
-and sequentially fixing all of the rubric items using OpenAI `codex`, skipping rerun of the agent.
+and sequentially fixing all of the rubric items using OpenAI `codex` or Claude `claude`, skipping rerun of the agent.
 
 ```bash
 ./scripts/fixing_pipeline.sh \
@@ -118,7 +133,8 @@ and sequentially fixing all of the rubric items using OpenAI `codex`, skipping r
     --benchmark-name corebench_hard \
     --skip-runner \
     --skip-rubric-eval \
-    --skip-inspector
+    --skip-inspector \
+    --model claude
    #  --defer-rubric-eval \ # Run rubric eval after the rerun is completed
     --task-id capsule-2345790   # optional: repeat to limit to specific IDs, remove to fix all
 ```
@@ -160,10 +176,10 @@ python scripts/master_rerun_corebench_fixes.py \
     --mapping-file model_to_baseline.json \
     --max-parallel 5 \
     --max-parallel-capsules 5 \
-    --prefix lime \
     --wandb-mode online \
     --docker \
-    --skip-rubrics
+    --skip-rubrics \
+    --prefix roblox
 ```
 
 - `--max-parallel`: max number of parallel processes to run
@@ -181,6 +197,17 @@ python scripts/run_corebench_fixes.py \
     --task-id capsule-1394704 \
     --wandb-mode online \
     --keep-temp
+```
+
+Retrive traces from Weave/W&B
+
+```bash
+python scripts/extract_weave_traces.py \
+  --project <entity_id/project_id> \
+  --prefix roblox_openai_gpt-4_1 \
+  --prefix roblox_openai_o4-mini_2025-04-16_high \
+  --prefix roblox_openai_o3_2025-04-16_medium \
+  --prefix roblox_openai_o4-mini_2025-04-16_low # for aggregating traces
 ```
 
 ## Note

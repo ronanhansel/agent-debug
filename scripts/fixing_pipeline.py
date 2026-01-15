@@ -91,14 +91,30 @@ def parse_args() -> argparse.Namespace:
         help="Override the agent model used during runner replays (updates agent_args model_name).",
     )
     parser.add_argument(
+        "--model",
+        choices=["codex", "claude"],
+        default="codex",
+        help="LLM dispatch target for fix generation (default: codex).",
+    )
+    parser.add_argument(
         "--codex-bin",
         default="codex",
         help="Executable used to dispatch inspection reports to Codex (default: codex).",
     )
     parser.add_argument(
+        "--claude-bin",
+        default="claude",
+        help="Executable used to dispatch inspection reports to Claude (default: claude).",
+    )
+    parser.add_argument(
+        "--skip-coding-agent",
+        action="store_true",
+        help="Skip invoking the coding agent (useful for dry-runs when fixes already exist).",
+    )
+    parser.add_argument(
         "--skip-codex",
         action="store_true",
-        help="Skip invoking Codex (useful for dry-runs when fixes already exist).",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--skip-runner",
@@ -588,6 +604,14 @@ def _write_codex_prompt_file(*, prompt: str, logger: FixingPipelineLogger, batch
     return path
 
 
+def _claude_prompt_for_batch(prompt: str, batch_index: int) -> str:
+    if batch_index == 0:
+        injected = "injected message for execution of first batch"
+    else:
+        injected = "next portion of the fix (next batch)"
+    return f"{injected}\n\n{prompt}"
+
+
 def dispatch_codex_batches(task_ids: List[str], args: argparse.Namespace, logger: FixingPipelineLogger) -> None:
     if not task_ids:
         return
@@ -598,12 +622,19 @@ def dispatch_codex_batches(task_ids: List[str], args: argparse.Namespace, logger
             continue
 
         prompt_path = _write_codex_prompt_file(prompt=prompt, logger=logger, batch_index=index)
-        logger.log(f"Codex prompt written to {prompt_path}")
+        logger.log(f"Fix prompt written to {prompt_path}")
 
-        if index == 0:
-            cmd = [args.codex_bin, "exec", prompt]
+        if args.model == "claude":
+            claude_prompt = _claude_prompt_for_batch(prompt, index)
+            if index == 0:
+                cmd = [args.claude_bin, "-p", claude_prompt]
+            else:
+                cmd = [args.claude_bin, "--continue", "-p", claude_prompt]
         else:
-            cmd = [args.codex_bin, "exec", "resume", "--last", prompt]
+            if index == 0:
+                cmd = [args.codex_bin, "exec", prompt]
+            else:
+                cmd = [args.codex_bin, "exec", "resume", "--last", prompt]
 
         # Keep the actual argv unchanged (Codex expects the JSON string), but make logs readable.
         display_cmd = list(cmd)
@@ -838,16 +869,24 @@ def main() -> None:
         logger.log(f"Fixing pipeline finished. Logs available at {logger.root}")
         return
 
-    logger.log(f"Processing {len(tasks_with_reports)} task(s) through codex + runner.")
+    logger.log(f"Processing {len(tasks_with_reports)} task(s) through {args.model} + runner.")
 
-    if not args.skip_codex:
+    skip_coding_agent = args.skip_coding_agent or getattr(args, "skip_codex", False)
+    if not skip_coding_agent:
         try:
             dispatch_codex_batches(tasks_with_reports, args, logger)
         except FileNotFoundError:
-            logger.log(f"Codex binary '{args.codex_bin}' not found. Rerun with --codex-bin or --skip-codex.")
+            if args.model == "claude":
+                logger.log(
+                    f"Claude binary '{args.claude_bin}' not found. Rerun with --claude-bin or --skip-coding-agent."
+                )
+            else:
+                logger.log(
+                    f"Codex binary '{args.codex_bin}' not found. Rerun with --codex-bin or --skip-coding-agent."
+                )
             return
         except subprocess.CalledProcessError as exc:
-            logger.log(f"Codex execution failed (exit={exc.returncode}).")
+            logger.log(f"{args.model} execution failed (exit={exc.returncode}).")
             return
 
     for task_id in tasks_with_reports:
