@@ -210,16 +210,126 @@ def stage_reasoning_effort(stage_value: str | None, default_value: str | None) -
     return stage_value or default_value
 
 
+def format_claude_stream_line(line: str) -> str | None:
+    """Parse a stream-json line from Claude and return a human-readable string."""
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        data = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+
+    event_type = data.get("type")
+
+    if event_type == "assistant":
+        message = data.get("message", {})
+        content = message.get("content", [])
+        parts = []
+        for item in content:
+            item_type = item.get("type")
+            if item_type == "thinking":
+                thinking_text = item.get("thinking", "")
+                if thinking_text:
+                    # Show first few lines of thinking
+                    lines = thinking_text.strip().split("\n")
+                    preview = lines[0][:100]
+                    if len(lines) > 1 or len(lines[0]) > 100:
+                        preview += "..."
+                    parts.append(f"  [Thinking] {preview}")
+            elif item_type == "text":
+                text = item.get("text", "")
+                if text:
+                    # Show text output
+                    preview = text[:200].replace("\n", " ")
+                    if len(text) > 200:
+                        preview += "..."
+                    parts.append(f"  [Output] {preview}")
+            elif item_type == "tool_use":
+                tool_name = item.get("name", "unknown")
+                tool_input = item.get("input", {})
+                tool_id = item.get("id", "")[:8]
+                if tool_name == "Read":
+                    file_path = tool_input.get("file_path", "")
+                    parts.append(f"  [Read] {file_path}")
+                elif tool_name == "Edit":
+                    file_path = tool_input.get("file_path", "")
+                    parts.append(f"  [Edit] {file_path}")
+                elif tool_name == "Write":
+                    file_path = tool_input.get("file_path", "")
+                    parts.append(f"  [Write] {file_path}")
+                elif tool_name == "Bash":
+                    cmd_str = tool_input.get("command", "")
+                    preview = cmd_str[:80].replace("\n", " ")
+                    if len(cmd_str) > 80:
+                        preview += "..."
+                    parts.append(f"  [Bash] {preview}")
+                elif tool_name == "Glob":
+                    pattern = tool_input.get("pattern", "")
+                    parts.append(f"  [Glob] {pattern}")
+                elif tool_name == "Grep":
+                    pattern = tool_input.get("pattern", "")
+                    parts.append(f"  [Grep] {pattern}")
+                elif tool_name == "TodoWrite":
+                    parts.append(f"  [Todo] Updating task list")
+                else:
+                    parts.append(f"  [{tool_name}]")
+        if parts:
+            return "\n".join(parts)
+
+    elif event_type == "user":
+        # Tool results come back as user messages
+        content = data.get("message", {}).get("content", [])
+        if isinstance(content, list):
+            for item in content:
+                if item.get("type") == "tool_result":
+                    is_error = item.get("is_error", False)
+                    status = "Error" if is_error else "OK"
+                    return f"    -> [{status}]"
+        return None
+
+    elif event_type == "result":
+        # Final result
+        return f"  [Done] Task completed"
+
+    return None
+
+
 def run_command(
     cmd: Sequence[str],
     logger: FixingPipelineLogger,
     env: Dict[str, str] | None = None,
     *,
     display_override: str | None = None,
+    stream: bool = False,
+    stdin_input: str | None = None,
 ) -> None:
     display = display_override or shlex.join(str(part) for part in cmd)
     logger.log(f"Executing: {display}")
-    subprocess.run(list(map(str, cmd)), check=True, cwd=REPO_ROOT, env=env)
+    if stream:
+        # Use Popen for real-time streaming output with formatting
+        process = subprocess.Popen(
+            list(map(str, cmd)),
+            cwd=REPO_ROOT,
+            env=env,
+            stdin=subprocess.PIPE if stdin_input else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        if stdin_input:
+            process.stdin.write(stdin_input)
+            process.stdin.close()
+        for line in process.stdout:
+            formatted = format_claude_stream_line(line)
+            if formatted:
+                print(formatted, flush=True)
+        process.wait()
+        if process.returncode != 0:
+            raise subprocess.CalledProcessError(process.returncode, cmd)
+    else:
+        subprocess.run(list(map(str, cmd)), check=True, cwd=REPO_ROOT, env=env, input=stdin_input, text=True if stdin_input else None)
 
 
 def discover_traces(trace_dir: Path) -> List[Path]:
@@ -626,20 +736,33 @@ def dispatch_codex_batches(task_ids: List[str], args: argparse.Namespace, logger
 
         if args.model == "claude":
             claude_prompt = _claude_prompt_for_batch(prompt, index)
+            # Pass prompt via stdin using -p - to avoid command line length limits
+            # --verbose is required when using --output-format stream-json with -p
             if index == 0:
-                cmd = [args.claude_bin, "-p", claude_prompt]
+                cmd = [args.claude_bin, "-p", "-", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"]
             else:
-                cmd = [args.claude_bin, "--continue", "-p", claude_prompt]
+                cmd = [args.claude_bin, "--continue", "-p", "-", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions"]
+            display_cmd = cmd + [f"< @{prompt_path}"]
+            run_command(
+                cmd,
+                logger,
+                display_override=shlex.join(str(part) for part in display_cmd),
+                stream=True,
+                stdin_input=claude_prompt,
+            )
         else:
             if index == 0:
                 cmd = [args.codex_bin, "exec", prompt]
             else:
                 cmd = [args.codex_bin, "exec", "resume", "--last", prompt]
-
-        # Keep the actual argv unchanged (Codex expects the JSON string), but make logs readable.
-        display_cmd = list(cmd)
-        display_cmd[-1] = f"@{prompt_path}"
-        run_command(cmd, logger, display_override=shlex.join(str(part) for part in display_cmd))
+            # Keep the actual argv unchanged (Codex expects the JSON string), but make logs readable.
+            display_cmd = list(cmd)
+            display_cmd[-1] = f"@{prompt_path}"
+            run_command(
+                cmd,
+                logger,
+                display_override=shlex.join(str(part) for part in display_cmd),
+            )
 
 
 def failing_rubrics_for_trace(
