@@ -25,12 +25,17 @@ import json
 import os
 import re
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from threading import Lock
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from openai import OpenAI
+
+# Thread-safe logging
+_log_lock = Lock()
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TRACES_DIR = REPO_ROOT / "traces"
@@ -38,9 +43,10 @@ RUBRICS_DIR = REPO_ROOT / "rubrics"
 
 
 def log(msg: str, prefix: str = "") -> None:
-    ts = datetime.now().strftime("%H:%M:%S")
-    tag = f"[{prefix}] " if prefix else ""
-    print(f"[{ts}] {tag}{msg}", flush=True)
+    with _log_lock:
+        ts = datetime.now().strftime("%H:%M:%S")
+        tag = f"[{prefix}] " if prefix else ""
+        print(f"[{ts}] {tag}{msg}", flush=True)
 
 
 @dataclass
@@ -449,6 +455,7 @@ def main():
     parser.add_argument("--api-key", default="dummy", help="OpenAI API key")
     parser.add_argument("--evaluate-model", help="Only evaluate failures from this model")
     parser.add_argument("--max-tasks", type=int, help="Limit number of tasks")
+    parser.add_argument("--parallel", type=int, default=5, help="Number of parallel workers (default: 5)")
     parser.add_argument("--failed-only", action="store_true", help="Only evaluate failed tasks")
     parser.add_argument("--summary-only", action="store_true", help="Only print cross-model summary")
     args = parser.parse_args()
@@ -528,8 +535,11 @@ def main():
                 return format_conversation(t.task_conversations[task_id], max_chars=8000)
         return None
 
+    # Prepare evaluation tasks
+    eval_tasks: List[Tuple[str, ModelTrace, TaskSummary, str, Optional[str]]] = []
+
     for trace in evaluate_traces:
-        log(f"\nEvaluating model: {trace.model_name}", prefix)
+        log(f"\nPreparing tasks for model: {trace.model_name}", prefix)
 
         # Get tasks to evaluate
         if args.failed_only:
@@ -540,13 +550,10 @@ def main():
         if args.max_tasks:
             task_ids = task_ids[:args.max_tasks]
 
-        for i, task_id in enumerate(task_ids):
-            log(f"  [{i+1}/{len(task_ids)}] {task_id}", prefix)
-
+        for task_id in task_ids:
             # Get cross-model summary
             summary = task_summaries.get(task_id)
             if not summary:
-                log(f"    No summary found, skipping", prefix)
                 continue
 
             # Get the evaluated model's conversation
@@ -555,30 +562,50 @@ def main():
                 conversation = format_conversation(trace.task_conversations[task_id])
 
             if not conversation:
-                log(f"    No conversation found, skipping", prefix)
                 continue
 
             # Get successful model's conversation for comparison (if any model succeeded)
             successful_conv = None
             if summary.any_succeeded and task_id in trace.failed_tasks:
                 successful_conv = get_successful_conversation(task_id)
-                if successful_conv:
-                    log(f"    Including successful model's approach for analysis", prefix)
 
-            # Always do full evaluation - no quick decisions
-            result = evaluate_with_cross_model_context(
-                client=client,
-                model=args.model,
-                rubric_text=rubric_text,
-                task_id=task_id,
-                task_summary=summary,
-                conversation=conversation,
-                evaluated_model=trace.model_name,
-                successful_conversation=successful_conv,
-            )
+            eval_tasks.append((task_id, trace, summary, conversation, successful_conv))
 
-            log(f"    Score: {result['score']}", prefix)
-            all_results.append(result)
+    log(f"\nEvaluating {len(eval_tasks)} tasks with {args.parallel} parallel workers", prefix)
+
+    # Worker function for parallel evaluation
+    def evaluate_task(task_tuple: Tuple[str, ModelTrace, TaskSummary, str, Optional[str]], idx: int) -> Dict[str, Any]:
+        task_id, trace, summary, conversation, successful_conv = task_tuple
+        log(f"  [{idx+1}/{len(eval_tasks)}] {task_id} ({trace.model_name})", prefix)
+
+        result = evaluate_with_cross_model_context(
+            client=client,
+            model=args.model,
+            rubric_text=rubric_text,
+            task_id=task_id,
+            task_summary=summary,
+            conversation=conversation,
+            evaluated_model=trace.model_name,
+            successful_conversation=successful_conv,
+        )
+
+        log(f"  [{idx+1}/{len(eval_tasks)}] {task_id} → Score: {result['score']}", prefix)
+        return result
+
+    # Run evaluations in parallel
+    with ThreadPoolExecutor(max_workers=args.parallel) as executor:
+        futures = {
+            executor.submit(evaluate_task, task, i): i
+            for i, task in enumerate(eval_tasks)
+        }
+
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                all_results.append(result)
+            except Exception as e:
+                idx = futures[future]
+                log(f"  [ERROR] Task {idx} failed: {e}", prefix)
 
     # Write results
     output_dir = Path(args.output_dir) / f"{rubric_name}_cross_model"

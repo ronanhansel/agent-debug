@@ -429,6 +429,19 @@ python scripts/cross_model_rubric.py \
   --failed-only
 ```
 
+### Parallel Evaluation
+
+By default, evaluates 5 tasks in parallel. Adjust with `--parallel`:
+
+```bash
+# Use 10 parallel workers for faster evaluation
+python scripts/cross_model_rubric.py \
+  --traces $GPT41 $O3 $O4MINI_HIGH $O4MINI_LOW \
+  --prefix iter1_ \
+  --failed-only \
+  --parallel 10
+```
+
 ## Models
 
 Recommended models for rubric evaluation:
