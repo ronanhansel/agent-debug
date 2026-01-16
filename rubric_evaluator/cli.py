@@ -137,6 +137,10 @@ def parse_args() -> argparse.Namespace:
 DOCENT_REPO_PATH = Path(__file__).parent / "docent"
 if DOCENT_REPO_PATH.exists():
     sys.path.insert(0, str(DOCENT_REPO_PATH))
+    # Also add nested docent/docent path for the docent package itself
+    nested_docent = DOCENT_REPO_PATH / "docent"
+    if nested_docent.exists():
+        sys.path.insert(0, str(nested_docent))
 
 DOCENT_IMPORT_ERROR: Exception | None = None
 try:  # pragma: no cover - optional dependency
@@ -283,6 +287,30 @@ def ensure_default_rubric_files(directory: Path) -> None:
     schema_path.write_text(json.dumps(DEFAULT_OUTPUT_SCHEMA, indent=2), encoding="utf-8")
 
 
+def load_single_rubric(file_path: Path) -> RubricDefinition | None:
+    """Load a single rubric definition from a .txt file."""
+    if not file_path.exists():
+        return None
+    rubric_text = file_path.read_text(encoding="utf-8").strip()
+    if not rubric_text:
+        return None
+    if GLOBAL_JSON_REQUIREMENTS not in rubric_text:
+        rubric_text = f"{rubric_text.rstrip()}\n\n{GLOBAL_JSON_REQUIREMENTS}"
+    schema_path = file_path.with_suffix(".schema.json")
+    output_schema = DEFAULT_OUTPUT_SCHEMA
+    if schema_path.exists():
+        try:
+            output_schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            print(f"⚠️  Failed to parse schema for {file_path.name}: {exc}. Using default schema.")
+    rubric_id = _slugify(file_path.stem.lower())
+    return RubricDefinition(
+        rubric_id=rubric_id,
+        rubric_text=rubric_text,
+        output_schema=output_schema,
+    )
+
+
 def load_rubric_definitions(directory: Path) -> list[RubricDefinition]:
     ensure_default_rubric_files(directory)
     definitions: list[RubricDefinition] = []
@@ -421,6 +449,25 @@ def entry_timestamp(entry: dict[str, Any]) -> str | None:
     return entry.get("created_timestamp") or entry.get("started_at") or entry.get("ended_at")
 
 
+def content_fingerprint(text: str) -> str:
+    """Normalize content for deduplication comparison."""
+    # Collapse all whitespace to single spaces and strip
+    normalized = " ".join(text.split()).strip()
+    # Use first 500 chars for fingerprint to handle slight trailing differences
+    return normalized[:500]
+
+
+def is_duplicate_message(existing: "TraceMessage", new: "TraceMessage") -> bool:
+    """Check if new message is a duplicate of existing (same role, similar content)."""
+    if existing.role != new.role:
+        return False
+    # Exact match
+    if existing.content == new.content:
+        return True
+    # Normalized match (handles whitespace differences)
+    return content_fingerprint(existing.content) == content_fingerprint(new.content)
+
+
 def sort_entries(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     """Sort entries chronologically using available timestamps."""
     return sorted(entries, key=lambda e: (entry_timestamp(e) or "", e.get("id", "")))
@@ -459,25 +506,30 @@ def build_assistant_message(entry: dict[str, Any]) -> TraceMessage | None:
 
 
 def extract_task_messages(task_id: str, entries: list[dict[str, Any]]) -> TaskConversation:
-    """Convert task-specific entries into an ordered conversation."""
+    """Convert task-specific entries into an ordered conversation with deduplication."""
     ordered_entries = sort_entries(entries)
     conversation: list[TraceMessage] = []
     previous_message_count = 0
+    # Track recent content fingerprints to catch duplicates even if not consecutive
+    seen_fingerprints: set[tuple[str, str]] = set()  # (role, fingerprint)
 
-    def append_assistant_output_if_new(entry: dict[str, Any]) -> None:
-        assistant_message = build_assistant_message(entry)
-        if not assistant_message:
+    def is_seen_or_duplicate(msg: TraceMessage) -> bool:
+        """Check if message is duplicate of any recent message."""
+        fp = (msg.role, content_fingerprint(msg.content))
+        if fp in seen_fingerprints:
+            return True
+        # Also check against last message for same-role consecutive duplicates
+        if conversation and is_duplicate_message(conversation[-1], msg):
+            return True
+        return False
+
+    def add_message(msg: TraceMessage) -> None:
+        """Add message if not duplicate."""
+        if is_seen_or_duplicate(msg):
             return
-
-        if conversation:
-            last_message = conversation[-1]
-            if (
-                last_message.role == assistant_message.role
-                and last_message.content == assistant_message.content
-            ):
-                return
-
-        conversation.append(assistant_message)
+        fp = (msg.role, content_fingerprint(msg.content))
+        seen_fingerprints.add(fp)
+        conversation.append(msg)
 
     for entry in ordered_entries:
         raw_messages = entry.get("inputs", {}).get("messages") or []
@@ -490,18 +542,14 @@ def extract_task_messages(task_id: str, entries: list[dict[str, Any]]) -> TaskCo
             for raw in new_messages:
                 normalized = build_trace_message(raw, entry)
                 if normalized:
-                    if conversation:
-                        last_message = conversation[-1]
-                        if (
-                            last_message.role == normalized.role
-                            and last_message.content == normalized.content
-                        ):
-                            continue
-                    conversation.append(normalized)
+                    add_message(normalized)
 
         previous_message_count = len(raw_messages)
 
-        append_assistant_output_if_new(entry)
+        # Add assistant output from entry
+        assistant_message = build_assistant_message(entry)
+        if assistant_message:
+            add_message(assistant_message)
 
     return TaskConversation(task_id=task_id, entries=ordered_entries, messages=conversation)
 
@@ -883,11 +931,22 @@ def run(args: argparse.Namespace) -> None:
         print("❌ JSON mode is only supported for OpenAI or Azure OpenAI providers.")
         return
 
-    rubrics_dir = Path(args.rubrics_dir).expanduser()
-    rubric_definitions = load_rubric_definitions(rubrics_dir)
-    if not rubric_definitions:
-        print(f"❌ No rubric definitions found in {rubrics_dir}. Add *.txt files and retry.")
-        return
+    # Load rubric(s) - either single file or directory
+    if hasattr(args, 'rubric') and args.rubric:
+        rubric_path = Path(args.rubric).expanduser()
+        if not rubric_path.is_absolute():
+            rubric_path = Path.cwd() / rubric_path
+        rubric_def = load_single_rubric(rubric_path)
+        if not rubric_def:
+            print(f"❌ Could not load rubric from {rubric_path}")
+            return
+        rubric_definitions = [rubric_def]
+    else:
+        rubrics_dir = Path(args.rubrics_dir).expanduser()
+        rubric_definitions = load_rubric_definitions(rubrics_dir)
+        if not rubric_definitions:
+            print(f"❌ No rubric definitions found in {rubrics_dir}. Add *.txt files and retry.")
+            return
 
     batch_size = DEFAULT_RUBRIC_BATCH_SIZE
     env_batch = os.getenv("DOCENT_RUBRIC_BATCH_SIZE")

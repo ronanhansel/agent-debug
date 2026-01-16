@@ -21,9 +21,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import re
+import sys
+import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -32,14 +35,120 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+# Add rubric_evaluator to path
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
+# Try to use docent via rubric_evaluator (preferred)
+USE_DOCENT = False
+try:
+    from rubric_evaluator.cli import (
+        _ensure_llm_cache_path,
+        build_docent_agent_runs,
+        evaluate_environmental_barrier,
+        build_rubric_from_definition,
+        resolve_rubric_model_option,
+        RubricDefinition,
+        TaskConversation,
+        TraceMessage,
+        extract_task_messages,
+        group_entries_by_task,
+    )
+    _ensure_llm_cache_path()
+    USE_DOCENT = True
+except ImportError as e:
+    print(f"Note: Docent integration not available ({e}). Using OpenAI client directly.")
+
 from openai import OpenAI
+
+try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
+    def tqdm(iterable, **kwargs):
+        return iterable
 
 # Thread-safe logging
 _log_lock = Lock()
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
 TRACES_DIR = REPO_ROOT / "traces"
 RUBRICS_DIR = REPO_ROOT / "rubrics"
+RUBRIC_TEMPLATES_DIR = REPO_ROOT / "rubric_templates"
+CACHE_DIR = REPO_ROOT / "rubrics_cache"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Retry with backoff (from docent pattern)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def retry_with_backoff(func, max_retries: int = 3, base_delay: float = 2.0, *args, **kwargs):
+    """Retry a function with exponential backoff on connection/timeout errors."""
+    last_exception = None
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except (ConnectionError, Timeout, HTTPError, Exception) as e:
+            last_exception = e
+            # Check if it's a retryable error
+            error_str = str(e).lower()
+            is_retryable = any(x in error_str for x in [
+                'connection', 'timeout', 'rate limit', '429', '500', '502', '503', '504',
+                'overloaded', 'capacity', 'busy', 'unavailable'
+            ])
+            if not is_retryable:
+                raise
+            if attempt == max_retries - 1:
+                raise
+            delay = base_delay * (2 ** attempt)
+            with _log_lock:
+                print(f"⚠️  API error (attempt {attempt + 1}/{max_retries}): {e}")
+                print(f"   Retrying in {delay:.1f}s...")
+            time.sleep(delay)
+    raise last_exception
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Result caching
+# ──────────────────────────────────────────────────────────────────────────────
+
+class EvalCache:
+    """Cache evaluation results to avoid re-running on restart."""
+
+    def __init__(self, cache_dir: Path, prefix: str, rubric_name: str):
+        self.cache_dir = cache_dir / f"{prefix}{rubric_name}"
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._lock = Lock()
+
+    def _cache_key(self, task_id: str, model: str) -> str:
+        """Generate cache filename for a task/model combo."""
+        key = f"{task_id}_{model}".replace("/", "_").replace(" ", "_")
+        return hashlib.md5(key.encode()).hexdigest()[:16] + ".json"
+
+    def get(self, task_id: str, model: str) -> Optional[Dict[str, Any]]:
+        """Get cached result if exists."""
+        cache_file = self.cache_dir / self._cache_key(task_id, model)
+        if cache_file.exists():
+            try:
+                with cache_file.open() as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError):
+                return None
+        return None
+
+    def set(self, task_id: str, model: str, result: Dict[str, Any]) -> None:
+        """Cache a result."""
+        cache_file = self.cache_dir / self._cache_key(task_id, model)
+        with self._lock:
+            try:
+                with cache_file.open("w") as f:
+                    json.dump(result, f, indent=2)
+            except IOError:
+                pass
+
+    def get_cached_count(self) -> int:
+        """Return number of cached results."""
+        return len(list(self.cache_dir.glob("*.json")))
 
 
 def log(msg: str, prefix: str = "") -> None:
@@ -275,14 +384,58 @@ def build_task_summaries(model_traces: List[ModelTrace]) -> Dict[str, TaskSummar
     return summaries
 
 
-def format_conversation(entries: List[Dict], max_chars: int = 50000) -> str:
-    """Format conversation entries for rubric evaluation."""
-    lines = []
-    total_chars = 0
+def format_conversation(entries: List[Dict], max_chars: int = 500000) -> str:
+    """Format conversation entries for rubric evaluation.
 
-    for entry in entries[:50]:
+    Args:
+        entries: List of conversation entries from trace
+        max_chars: Maximum total characters (default 500K, ~125K tokens)
+
+    Strategy: Always include full task prompt, then prioritize HIGH-SIGNAL content
+    (errors, exceptions, final attempts) over low-signal content.
+    """
+    # High-signal patterns that indicate important debugging info
+    HIGH_SIGNAL_PATTERNS = [
+        r'error', r'exception', r'traceback', r'failed', r'failure',
+        r'nameerror', r'syntaxerror', r'typeerror', r'valueerror', r'keyerror',
+        r'importerror', r'modulenotfounderror', r'attributeerror', r'indexerror',
+        r'permission denied', r'not found', r'not defined', r'cannot', r'unable',
+        r'exit code', r'returned non-zero', r'timed out', r'timeout',
+        r'assert', r'mismatch', r'unexpected', r'invalid', r'malformed',
+        r'convergence', r'bracket', r'overflow', r'underflow', r'nan', r'inf',
+        r'shape', r'dimension', r'broadcast', r'dtype',
+    ]
+    high_signal_re = re.compile('|'.join(HIGH_SIGNAL_PATTERNS), re.IGNORECASE)
+
+    lines = []
+    task_prompt = None
+
+    # First pass: extract full task prompt (first user message with substantial content)
+    for entry in entries[:1]:
         messages = entry.get("inputs", {}).get("messages", [])
-        for msg in messages[-5:]:
+        for msg in messages:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                content = " ".join(
+                    b.get("text", "") if isinstance(b, dict) else str(b)
+                    for b in content
+                )
+            if role == "user" and content and len(content) > 500:
+                task_prompt = f"[TASK PROMPT]: {content}"
+                break
+
+    if task_prompt:
+        lines.append(task_prompt)
+
+    # Second pass: collect all conversation turns with signal scoring
+    conversation_turns = []  # List of (content, is_high_signal, turn_index)
+    turn_idx = 0
+
+    for entry in entries:
+        messages = entry.get("inputs", {}).get("messages", [])
+
+        for msg in messages:
             role = msg.get("role", "unknown")
             content = msg.get("content", "")
             if isinstance(content, list):
@@ -291,11 +444,13 @@ def format_conversation(entries: List[Dict], max_chars: int = 50000) -> str:
                     for b in content
                 )
             if content:
-                line = f"[{role}]: {content[:1500]}"
-                if total_chars + len(line) > max_chars:
-                    break
-                lines.append(line)
-                total_chars += len(line)
+                # Skip the task prompt we already captured
+                if task_prompt and content in task_prompt:
+                    continue
+                formatted = f"[{role}]: {content}"
+                is_high_signal = bool(high_signal_re.search(content))
+                conversation_turns.append((formatted, is_high_signal, turn_idx))
+                turn_idx += 1
 
         output = entry.get("output", {})
         choices = output.get("choices", [])
@@ -308,16 +463,71 @@ def format_conversation(entries: List[Dict], max_chars: int = 50000) -> str:
                     for b in content
                 )
             if content:
-                line = f"[assistant]: {content[:1500]}"
-                if total_chars + len(line) > max_chars:
-                    break
-                lines.append(line)
-                total_chars += len(line)
+                formatted = f"[assistant]: {content}"
+                is_high_signal = bool(high_signal_re.search(content))
+                conversation_turns.append((formatted, is_high_signal, turn_idx))
+                turn_idx += 1
 
-        if total_chars > max_chars:
-            break
+    # Calculate remaining budget after task prompt
+    task_prompt_len = len(task_prompt) if task_prompt else 0
+    remaining_budget = max_chars - task_prompt_len - 100
 
-    return "\n\n".join(lines[-100:])
+    # Check if everything fits
+    total_len = sum(len(t[0]) for t in conversation_turns)
+
+    if total_len <= remaining_budget:
+        # Everything fits - include all
+        lines.extend([t[0] for t in conversation_turns])
+    else:
+        # Need to be selective - prioritize:
+        # 1. First 3 turns (initial approach)
+        # 2. Last 5 turns (final state)
+        # 3. All high-signal turns (errors, exceptions)
+        # 4. Fill remaining budget with other turns
+
+        n = len(conversation_turns)
+        must_include = set()
+
+        # Always include first 3 and last 5
+        for i in range(min(3, n)):
+            must_include.add(i)
+        for i in range(max(0, n - 5), n):
+            must_include.add(i)
+
+        # Always include high-signal turns
+        for i, (content, is_high_signal, _) in enumerate(conversation_turns):
+            if is_high_signal:
+                must_include.add(i)
+
+        # Build result with must-include turns
+        selected_indices = sorted(must_include)
+        selected = []
+        current_len = 0
+        last_included = -1
+
+        for i in selected_indices:
+            content = conversation_turns[i][0]
+
+            # Add gap marker if we skipped turns
+            if last_included >= 0 and i > last_included + 1:
+                gap = i - last_included - 1
+                gap_marker = f"\n[... {gap} turns omitted ...]\n"
+                selected.append(gap_marker)
+                current_len += len(gap_marker)
+
+            # Check if we have budget
+            if current_len + len(content) <= remaining_budget:
+                selected.append(content)
+                current_len += len(content)
+                last_included = i
+            else:
+                # Budget exhausted - add truncation marker and stop
+                selected.append("\n[... TRUNCATED due to length ...]\n")
+                break
+
+        lines.extend(selected)
+
+    return "\n\n".join(lines)
 
 
 def evaluate_with_cross_model_context(
@@ -405,13 +615,17 @@ Provide your response as a JSON object with:
 
 Respond with ONLY the JSON object, no other text."""
 
-    try:
-        response = client.chat.completions.create(
+    def _make_api_call():
+        return client.chat.completions.create(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
             max_tokens=15000,
         )
+
+    try:
+        # Use retry with backoff for resilience
+        response = retry_with_backoff(_make_api_call, max_retries=3, base_delay=2.0)
         result_text = response.choices[0].message.content.strip()
 
         # Parse JSON
@@ -449,27 +663,49 @@ def main():
     parser.add_argument("--traces", nargs="+", required=True, help="Trace files to analyze")
     parser.add_argument("--prefix", default="", help="Output prefix")
     parser.add_argument("--model", default="gpt-5.2", help="Model for rubric evaluation")
-    parser.add_argument("--rubrics-dir", default=str(RUBRICS_DIR), help="Rubrics directory")
+    parser.add_argument("--rubric", help="Path to rubric template file (e.g., rubric_templates/scicode.txt)")
+    parser.add_argument("--rubrics-dir", default=str(RUBRICS_DIR), help="Rubrics directory (legacy, use --rubric instead)")
     parser.add_argument("--output-dir", default=str(REPO_ROOT / "rubrics_output"), help="Output directory")
     parser.add_argument("--base-url", help="OpenAI API base URL")
     parser.add_argument("--api-key", default="dummy", help="OpenAI API key")
     parser.add_argument("--evaluate-model", help="Only evaluate failures from this model")
     parser.add_argument("--max-tasks", type=int, help="Limit number of tasks")
     parser.add_argument("--parallel", type=int, default=5, help="Number of parallel workers (default: 5)")
+    parser.add_argument("--max-context", type=int, default=500000, help="Max characters per conversation (default: 500000, ~125K tokens)")
     parser.add_argument("--failed-only", action="store_true", help="Only evaluate failed tasks")
     parser.add_argument("--summary-only", action="store_true", help="Only print cross-model summary")
+    parser.add_argument("--no-cache", action="store_true", help="Disable caching (re-evaluate all tasks)")
+    parser.add_argument("--clear-cache", action="store_true", help="Clear cache before running")
     args = parser.parse_args()
 
     prefix = args.prefix
 
-    # Load rubric
-    rubric_files = list(Path(args.rubrics_dir).glob("*.txt"))
-    if not rubric_files:
-        log(f"No rubric files found in {args.rubrics_dir}", prefix)
-        return 1
-    rubric_text = rubric_files[0].read_text()
-    rubric_name = rubric_files[0].stem
-    log(f"Loaded rubric: {rubric_name}", prefix)
+    # Load rubric - prefer --rubric argument, fall back to --rubrics-dir
+    if args.rubric:
+        rubric_path = Path(args.rubric)
+        if not rubric_path.exists():
+            # Try relative to repo root
+            rubric_path = REPO_ROOT / args.rubric
+        if not rubric_path.exists():
+            log(f"Rubric file not found: {args.rubric}", prefix)
+            return 1
+        rubric_text = rubric_path.read_text()
+        rubric_name = rubric_path.stem
+        log(f"Loaded rubric: {rubric_name} (from {rubric_path})", prefix)
+    else:
+        # Legacy: search in rubrics directory
+        rubric_files = list(Path(args.rubrics_dir).glob("*.txt"))
+        if not rubric_files:
+            log(f"No rubric files found in {args.rubrics_dir}", prefix)
+            log(f"Tip: Use --rubric to specify a rubric template, e.g.:", prefix)
+            log(f"  --rubric rubric_templates/corebench.txt", prefix)
+            log(f"  --rubric rubric_templates/scicode.txt", prefix)
+            return 1
+        rubric_text = rubric_files[0].read_text()
+        rubric_name = rubric_files[0].stem
+        log(f"Loaded rubric: {rubric_name}", prefix)
+
+    log(f"Max context per task: {args.max_context:,} chars (~{args.max_context // 4:,} tokens)", prefix)
 
     # Load all model traces
     log(f"Loading {len(args.traces)} model traces...", prefix)
@@ -532,7 +768,7 @@ def main():
         # Find a trace that succeeded
         for t in model_traces:
             if task_id in t.successful_tasks and task_id in t.task_conversations:
-                return format_conversation(t.task_conversations[task_id], max_chars=8000)
+                return format_conversation(t.task_conversations[task_id], max_chars=args.max_context)
         return None
 
     # Prepare evaluation tasks
@@ -559,7 +795,7 @@ def main():
             # Get the evaluated model's conversation
             conversation = ""
             if task_id in trace.task_conversations:
-                conversation = format_conversation(trace.task_conversations[task_id])
+                conversation = format_conversation(trace.task_conversations[task_id], max_chars=args.max_context)
 
             if not conversation:
                 continue
@@ -590,6 +826,21 @@ def main():
         )
 
         log(f"  [{idx+1}/{len(eval_tasks)}] {task_id} → Score: {result['score']}", prefix)
+
+        # Verbose output: print grade and reasoning
+        if args.failed_only:
+            log(f"\n{'='*80}", prefix)
+            log(f"TASK: {task_id} | MODEL: {trace.model_name}", prefix)
+            log(f"GRADE: {result['score']}", prefix)
+            log(f"ANY MODEL SUCCEEDED: {result.get('any_model_succeeded', False)}", prefix)
+            if result.get('models_succeeded'):
+                log(f"MODELS SUCCEEDED: {', '.join(result.get('models_succeeded', []))}", prefix)
+            log(f"\nEXPLANATION:\n{result.get('explanation', 'N/A')}", prefix)
+            log(f"\nCROSS-MODEL REASONING:\n{result.get('cross_model_reasoning', 'N/A')}", prefix)
+            if result.get('error'):
+                log(f"\nERROR: {result.get('error')}", prefix)
+            log(f"{'='*80}\n", prefix)
+
         return result
 
     # Run evaluations in parallel

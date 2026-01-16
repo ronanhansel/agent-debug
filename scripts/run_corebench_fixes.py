@@ -238,10 +238,20 @@ def load_model_config(path: Path) -> Dict[str, Dict[str, Any]]:
 
 
 def load_rubric_task_models(csv_path: Path) -> List[Tuple[str, str]]:
-    """Load rubric CSV and return list of (task_id, model) pairs for all failed models."""
+    """Load rubric CSV and return list of (task_id, model) pairs for all failed models.
+
+    Note: o4-mini-04-16 is expanded to both 'openai/o4-mini-2025-04-16' (high) and
+    'o4-mini-2025-04-16' (low) since the rubric collapses them.
+    """
     import csv
     task_model_pairs: List[Tuple[str, str]] = []
     seen: set = set()
+
+    # Expansion map: models that should be expanded to multiple variants
+    expand_models = {
+        "o4-mini-04-16": ["openai/o4-mini-2025-04-16", "o4-mini-2025-04-16"],  # high and low
+    }
+
     if not csv_path.exists():
         return task_model_pairs
     with csv_path.open("r", encoding="utf-8") as f:
@@ -253,9 +263,14 @@ def load_rubric_task_models(csv_path: Path) -> List[Tuple[str, str]]:
             if task_id and models_failed:
                 for model in models_failed.split(";"):
                     model = model.strip()
-                    if model and (task_id, model) not in seen:
-                        task_model_pairs.append((task_id, model))
-                        seen.add((task_id, model))
+                    if not model:
+                        continue
+                    # Expand if needed (e.g., o4-mini-04-16 -> high and low variants)
+                    models_to_add = expand_models.get(model, [model])
+                    for m in models_to_add:
+                        if (task_id, m) not in seen:
+                            task_model_pairs.append((task_id, m))
+                            seen.add((task_id, m))
     return task_model_pairs
 
 
@@ -1270,18 +1285,49 @@ def main() -> None:
                         raise
 
         if generated_traces:
-            generated_traces = sorted(generated_traces, key=lambda p: p.name)
-            merged_trace = merge_trace_files(
-                generated_traces,
-                benchmark=args.benchmark,
-                agent_dir=agent_dir,
-                output_path=Path(args.merged_trace_output).resolve() if args.merged_trace_output else None,
-                merged_run_id=args.merged_run_id,
-            )
-            print(f"[merge] Saved merged trace -> {merged_trace}")
+            # Group traces by model (extract model from filename)
+            # Filename format: iter1_openai_gpt-4_1_2025-04-14_capsule-XXX_...
+            # or: iter1_openai_o4-mini_2025-04-16_high_capsule-XXX_...
+            traces_by_model: Dict[str, List[Path]] = {}
+            for trace_path in generated_traces:
+                # Extract model identifier from filename
+                name = trace_path.name
+                # Pattern: prefix_MODEL_capsule-XXX_benchmark_timestamp_UPLOAD.json
+                # Find the part between prefix and capsule-
+                parts = name.split("_capsule-")
+                if len(parts) >= 2:
+                    model_part = parts[0]  # e.g., "iter1_openai_gpt-4_1_2025-04-14" or "iter1_openai_o4-mini_2025-04-16_high"
+                    # Remove the prefix (iter1_)
+                    if model_part.startswith(args.prefix):
+                        model_part = model_part[len(args.prefix):]
+                    traces_by_model.setdefault(model_part, []).append(trace_path)
+                else:
+                    # Fallback: put in "unknown" group
+                    traces_by_model.setdefault("unknown", []).append(trace_path)
+
+            print(f"\n[merge] Grouping {len(generated_traces)} traces into {len(traces_by_model)} model groups:")
+            for model_key, traces in traces_by_model.items():
+                print(f"  - {model_key}: {len(traces)} traces")
+
+            # Merge each model group separately
+            merged_traces: List[Path] = []
+            for model_key, traces in sorted(traces_by_model.items()):
+                traces = sorted(traces, key=lambda p: p.name)
+                merged_trace = merge_trace_files(
+                    traces,
+                    benchmark=args.benchmark,
+                    agent_dir=agent_dir,
+                    output_path=None,  # Auto-generate per model
+                    merged_run_id=f"{args.benchmark}_{model_key}_FIXED" if model_key != "unknown" else None,
+                )
+                merged_traces.append(merged_trace)
+                print(f"[merge] Saved merged trace for {model_key} -> {merged_trace}")
+
+            # Run rubrics on each merged trace
             if not args.skip_rubrics:
-                evaluate_trace(merged_trace, args.rubric_model, rubric_output_dir)
-                print(f"[merge] Completed rubric evaluation for {merged_trace}")
+                for merged_trace in merged_traces:
+                    evaluate_trace(merged_trace, args.rubric_model, rubric_output_dir)
+                    print(f"[merge] Completed rubric evaluation for {merged_trace}")
 
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)

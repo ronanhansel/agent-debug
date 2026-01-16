@@ -1,62 +1,140 @@
 # HAL Agent Debug Pipeline
 
-This document describes the full pipeline for debugging and improving HAL agent performance on CoreBench.
+This document describes the full pipeline for debugging and improving HAL agent performance across benchmarks.
 
 ## Overview
 
 The pipeline consists of these stages:
 1. **Traces** - Agent run results from HAL evaluation
-2. **Rubric Evaluation** - Classify failures as environmental barriers vs capability issues
+2. **Rubric Evaluation** - Classify failures using benchmark-specific rubrics
 3. **Inspection** - Analyze failures and generate fix recommendations
 4. **Fix Application** - Apply fixes and re-run evaluation
 5. **Weave Extraction** - Pull conversation logs from W&B
 6. **Merge** - Combine individual traces into a single trace
 
-## Baseline Traces
-
-The initial evaluation traces (no prefix) are in `traces/`:
-
-```bash
-# GPT-4.1
-traces/corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json
-
-# O3-medium
-traces/corebench_hard_hal_generalist_agento3medium_1755626315_UPLOAD.json
-
-# O4-mini-high
-traces/corebench_hard_hal_generalist_agento4minihigh_1755580383_UPLOAD.json
-
-# O4-mini-low
-traces/corebench_hard_hal_generalist_agento4minilow_1755608756_UPLOAD.json
-```
-
 ## Quick Start
 
 ```bash
-# 1. Run cross-model rubric evaluation (recommended)
+# Set up environment variables
+export OPENAI_API_KEY="sk-1234"
+export OPENAI_BASE_URL="http://localhost:4000/v1"
+
+# Evaluate SciCode trace with SciCode rubric
+python scripts/eval_rubric.py \
+    --trace-file traces/scicode_*.json \
+    --rubric rubric_templates/scicode.txt \
+    --rubric-model openai:gpt-4o \
+    --failed-only \
+    -y
+
+# Evaluate CoreBench trace with CoreBench rubric
+python scripts/eval_rubric.py \
+    --trace-file traces/corebench_*.json \
+    --rubric rubric_templates/corebench.txt \
+    --rubric-model openai:gpt-4o \
+    --failed-only \
+    -y
+```
+
+## Benchmark-Specific Rubrics
+
+Each benchmark has its own rubric template in `rubric_templates/`:
+
+| Benchmark | Rubric File | Focus |
+|-----------|-------------|-------|
+| SciCode | `scicode.txt` | Intrinsic Formation Errors (syntactic corruption, contextual discontinuity, mathematical ambiguity, environmental contradiction) |
+| CoreBench | `corebench.txt` | Environmental Barriers vs Capability Issues |
+
+### Output Structure
+
+Rubric evaluation outputs go to `rubrics_output/<rubric_name>/`:
+```
+rubrics_output/
+├── scicode/                    # SciCode rubric results
+│   └── <trace_name>.csv
+├── corebench/                  # CoreBench rubric results
+│   └── <trace_name>.csv
+└── environmentalbarrier/       # Legacy rubric results
+    └── <trace_name>.csv
+```
+
+## Rubric Evaluation (Docent-based)
+
+The primary rubric evaluation uses **Docent** for:
+- SQLite LLM response caching (no repeat API calls)
+- Batch processing with retry logic
+- Proper message parsing from HAL traces
+- Turn-by-turn conversation deduplication
+
+### Single Rubric Evaluation
+
+```bash
+# Evaluate with a specific rubric
+python scripts/eval_rubric.py \
+    --trace-file traces/scicode_hal_generalist_agent_gpt4120250414_1745597325_UPLOAD.json \
+    --rubric rubric_templates/scicode.txt \
+    --rubric-model openai:gpt-4o \
+    --output-mode stdout \
+    --max-tasks 5 \
+    -y
+```
+
+### Batch Evaluation
+
+```bash
+# Evaluate all rubrics in a directory
+python scripts/eval_rubric.py \
+    --trace-file traces/corebench_*.json \
+    --rubrics-dir rubric_templates \
+    --rubric-model openai:gpt-4o \
+    --failed-only \
+    -y
+```
+
+### Available Options
+
+| Option | Description |
+|--------|-------------|
+| `--trace-file` | Path to trace JSON file |
+| `--rubric` | Single rubric .txt file (overrides --rubrics-dir) |
+| `--rubrics-dir` | Directory of rubric .txt files |
+| `--rubric-model` | Model as provider:model (e.g., `openai:gpt-4o`) |
+| `--output-mode` | `csv` (default) or `stdout` |
+| `--max-tasks` | Limit number of tasks to evaluate |
+| `--failed-only` | Only evaluate failed tasks |
+| `-y` | Skip confirmation prompt |
+
+## Cross-Model Rubric Evaluation
+
+For comparing failures across models (especially useful for CoreBench):
+
+```bash
 python scripts/cross_model_rubric.py \
-  --traces \
-    traces/corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json \
-    traces/corebench_hard_hal_generalist_agento3medium_1755626315_UPLOAD.json \
-    traces/corebench_hard_hal_generalist_agento4minihigh_1755580383_UPLOAD.json \
-    traces/corebench_hard_hal_generalist_agento4minilow_1755608756_UPLOAD.json \
-  --prefix iter1_ \
-  --failed-only
+    --traces \
+        traces/corebench_hard_hal_generalist_agentgpt41_*.json \
+        traces/corebench_hard_hal_generalist_agento3medium_*.json \
+        traces/corebench_hard_hal_generalist_agento4minihigh_*.json \
+    --rubric rubric_templates/corebench.txt \
+    --prefix iter1_ \
+    --failed-only
+```
 
-# 2. Or run single-model rubric evaluation
-python scripts/pipeline.py rubric \
-  --prefix iter1_ \
-  --trace-file traces/corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json \
-  --failed-only
+## Trace Files
 
-# 3. Check current status
-python scripts/pipeline.py status --prefix iter1_
+### SciCode Traces
+```bash
+traces/scicode_hal_generalist_agent_gpt4120250414_*.json     # GPT-4.1
+traces/scicode_hal_generalist_agent_o4mini20250416_high_*.json  # O4-mini high
+traces/scicode_hal_generalist_agent_o4mini20250416_low_*.json   # O4-mini low
+traces/scicode_hal_generalist_agent_o320250416_*.json         # O3
+```
 
-# 4. Extract Weave traces (if trace lacks raw_logging_results)
-python scripts/pipeline.py extract --prefix iter1_ --project hal-agent-debug
-
-# 5. Merge individual traces
-python scripts/pipeline.py merge --prefix iter1_
+### CoreBench Traces
+```bash
+traces/corebench_hard_hal_generalist_agentgpt41_*.json      # GPT-4.1
+traces/corebench_hard_hal_generalist_agento3medium_*.json   # O3 medium
+traces/corebench_hard_hal_generalist_agento4minihigh_*.json # O4-mini high
+traces/corebench_hard_hal_generalist_agento4minilow_*.json  # O4-mini low
 ```
 
 ## Prerequisites
@@ -64,430 +142,170 @@ python scripts/pipeline.py merge --prefix iter1_
 ### Environment Setup
 
 ```bash
-# Activate conda base environment (contains docent, openai dependencies)
-conda activate base
+# Install docent (one-time setup)
+cd src/docent-python
+pip install -e docent/ -e .
+cd ../..
 
-# Ensure OpenAI proxy is running (for rubric evaluation)
-# Default: http://localhost:4000/v1
+# Set environment variables
+export OPENAI_API_KEY="sk-1234"
+export OPENAI_BASE_URL="http://localhost:4000/v1"  # Local proxy
 ```
 
 ### Required Environment Variables
 
-```bash
-export WANDB_API_KEY="your-wandb-api-key"  # For Weave extraction
-export OPENAI_BASE_URL="http://localhost:4000/v1"  # Optional, defaults to this
+| Variable | Purpose |
+|----------|---------|
+| `OPENAI_API_KEY` | API key for rubric evaluation |
+| `OPENAI_BASE_URL` | API endpoint (optional, for proxy) |
+| `WANDB_API_KEY` | For Weave extraction |
+
+## Creating Custom Rubrics
+
+Rubrics are plain text files in `rubric_templates/`. Example structure:
+
+```
+rubric_templates/
+├── scicode.txt      # SciCode-specific rubric
+├── corebench.txt    # CoreBench-specific rubric
+└── custom.txt       # Your custom rubric
 ```
 
-## Pipeline Stages
+### Rubric Format
 
-### Stage 1: Initial Traces
+```text
+You are evaluating an agent's performance on [BENCHMARK].
 
-Traces come from HAL evaluation runs. Original baseline traces are in `traces/`:
-- `corebench_hard_hal_generalist_agentgpt41_*.json` - GPT-4.1 baseline
-- `corebench_hard_hal_generalist_agento3medium_*.json` - O3 baseline
-- etc.
+## Evaluation Criteria
 
-**Important**: Traces from HAL evaluation may NOT contain `raw_logging_results` (conversation logs). These need to be extracted from Weave first.
+[Your criteria here]
 
-### Stage 2: Rubric Evaluation
+## Output Format
 
-Classify failures into:
-- **Environmental Barriers (score=1)**: Infrastructure issues no agent can overcome
-  - Missing R runtime with blocked apt installation
-  - Missing benchmark data files
-  - Permission denied on required paths
-  - Conda ToS blocking in non-interactive mode
-
-- **Capability Issues (score=0)**: Agent could have succeeded with better approach
-  - Package installed to wrong Python environment
-  - Config file misconfiguration
-  - Tool misuse when alternatives existed
-  - Path confusion
-
-```bash
-# Evaluate failed tasks only
-python scripts/pipeline.py rubric \
-  --prefix orange \
-  --trace-file traces/corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json \
-  --failed-only \
-  --model gpt-5.2
-
-# Output: rubrics_output/environmental_barrier/orange_<trace_name>.csv
+Respond with valid JSON:
+{
+    "score": <float 0.0-1.0>,
+    "explanation": "<reasoning>",
+    "category": "<category_name>"
+}
 ```
-
-**Note**: Rubric evaluation REQUIRES `raw_logging_results` in the trace. If missing, run `extract` first.
-
-### Stage 3: Weave Extraction
-
-Pull conversation logs from W&B Weave for traces that lack `raw_logging_results`.
-
-```bash
-python scripts/pipeline.py extract \
-  --prefix orange \
-  --project hal-agent-debug
-
-# This creates: traces/<prefix>*.json with raw_logging_results filled in
-```
-
-### Stage 4: Inspection (Fix Generation)
-
-Analyze failures and generate fix recommendations:
-
-```bash
-python scripts/pipeline.py inspect \
-  --trace-file traces/orange_MERGED_UPLOAD.json \
-  --benchmark corebench_hard \
-  --dry-run  # Preview only
-
-# Without --dry-run, creates fix packages in:
-# fixes/corebench_hard/<task_id>/env_override.json
-```
-
-Fix packages contain:
-- `env_override.json` - Environment variables and conda packages
-- `input_override.json` - Clarified task instructions (future)
-
-### Stage 5: Fix Application
-
-Apply fixes and re-run evaluation:
-
-```bash
-python scripts/pipeline.py fix \
-  --prefix orange \
-  --docker \
-  --task-id capsule-2345790 \
-  --task-id capsule-1394704
-
-# Or run all tasks with fixes:
-python scripts/pipeline.py fix --prefix orange --docker
-```
-
-### Stage 6: Merge Traces
-
-Combine individual task traces into a single merged trace:
-
-```bash
-python scripts/pipeline.py merge --prefix orange
-
-# Creates: traces/orange_MERGED_<timestamp>_UPLOAD.json
-```
-
-## Iteration Tracking with Prefixes
-
-Use `--prefix` to track different iterations:
-
-```bash
-# First iteration
-python scripts/pipeline.py full --prefix v1_ --trace-file traces/baseline.json
-
-# After applying fixes, second iteration
-python scripts/pipeline.py full --prefix v2_ --trace-file traces/v1_MERGED_UPLOAD.json
-
-# Compare results
-python scripts/pipeline.py status --prefix v1_
-python scripts/pipeline.py status --prefix v2_
-```
-
-Example prefixes:
-- `orange_` - First experiment batch
-- `mango_` - Second experiment batch
-- `v1_`, `v2_`, `v3_` - Sequential iterations
-- `gpt4_`, `o3_`, `gpt5_` - Model-specific runs
 
 ## Full Pipeline Example
 
-```bash
-# Baseline traces (copy-paste ready)
-GPT41="traces/corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json"
-O3="traces/corebench_hard_hal_generalist_agento3medium_1755626315_UPLOAD.json"
-O4MINI_HIGH="traces/corebench_hard_hal_generalist_agento4minihigh_1755580383_UPLOAD.json"
-O4MINI_LOW="traces/corebench_hard_hal_generalist_agento4minilow_1755608756_UPLOAD.json"
+### SciCode Pipeline
 
+```bash
+# 1. Evaluate failed tasks with SciCode rubric
+python scripts/eval_rubric.py \
+    --trace-file traces/scicode_hal_generalist_agent_gpt4120250414_*.json \
+    --rubric rubric_templates/scicode.txt \
+    --rubric-model openai:gpt-4o \
+    --failed-only \
+    -y
+
+# 2. View results
+cat rubrics_output/scicode/*.csv
+
+# 3. Analyze specific error categories
+grep "syntactic_corruption" rubrics_output/scicode/*.csv
+grep "mathematical_ambiguity" rubrics_output/scicode/*.csv
+```
+
+### CoreBench Pipeline
+
+```bash
 # 1. Run cross-model rubric evaluation
 python scripts/cross_model_rubric.py \
-  --traces $GPT41 $O3 $O4MINI_HIGH $O4MINI_LOW \
-  --prefix iter1_ \
-  --failed-only
+    --traces traces/corebench_hard_hal_generalist_agent*.json \
+    --rubric rubric_templates/corebench.txt \
+    --prefix iter1_ \
+    --failed-only
 
-# 2. Find the rubric CSV (output path printed at end of step 1)
-RUBRIC_CSV=$(ls -t rubrics_output/environmental_barrier_cross_model/iter1_*.csv | head -1)
-echo "Rubric CSV: $RUBRIC_CSV"
+# 2. Find environmental barriers (score=1)
+RUBRIC_CSV=$(ls -t rubrics_output/corebench/iter1_*.csv | head -1)
+grep ",1.0," $RUBRIC_CSV
 
-# 3. Use Claude Code CLI to diagnose and fix environmental barriers
-#    (This launches Claude Code with full context - it will analyze and create fixes)
+# 3. Generate fixes for environmental barriers
 python scripts/pipeline.py inspect \
-  --trace-files $GPT41 $O3 $O4MINI_HIGH $O4MINI_LOW \
-  --rubric-csv $RUBRIC_CSV \
-  --benchmark corebench_hard \
-  --env-barriers-only  # Only process tasks marked as env barriers
+    --trace-files traces/corebench_hard_hal_generalist_agent*.json \
+    --rubric-csv $RUBRIC_CSV \
+    --benchmark corebench_hard \
+    --env-barriers-only
 
-# 4. Apply fixes and re-run (creates new traces with prefix)
-python scripts/pipeline.py fix \
-  --prefix iter1_ \
-  --docker
-
-# 5. Extract conversation logs from Weave
-python scripts/pipeline.py extract \
-  --prefix iter1_ \
-  --project hal-agent-debug
-
-# 6. Merge new traces
-python scripts/pipeline.py merge --prefix iter1_
-
-# 7. Re-evaluate with cross-model rubrics
-python scripts/cross_model_rubric.py \
-  --traces traces/iter1_MERGED_*_UPLOAD.json \
-  --prefix iter1_round2_ \
-  --failed-only
-
-# 8. Compare iterations
-python scripts/pipeline.py status --prefix iter1_
+# 4. Apply fixes and re-run
+python scripts/pipeline.py fix --prefix iter1_ --docker
 ```
 
-### Pipeline Flow
+## Output CSV Format
 
-```
-cross_model_rubric.py          pipeline.py inspect              pipeline.py fix
-        │                              │                               │
-        ▼                              ▼                               ▼
-   Rubric CSV ──────────────► Claude Code CLI ──────────────► Re-run tasks
-   (score=0 vs 1)              analyzes & fixes                  with fixes
-                                       │
-                               ┌───────┴───────┐
-                               │ Claude Code   │
-                               │ - Reads task  │
-                               │ - Diagnoses   │
-                               │ - Creates fix │
-                               └───────────────┘
-```
+The rubric evaluation produces CSVs with these columns:
 
-### Claude Code Fixer
+| Column | Description |
+|--------|-------------|
+| `task_id` | Task identifier (e.g., `capsule-1234567`) |
+| `criteria` | Rubric name used |
+| `grade` | Score (0.0-1.0) |
+| `correct` | Whether task passed originally |
+| `explanation` | LLM's reasoning |
+| `model_run` | Model used for evaluation |
 
-The `inspect` command uses **Claude Code CLI** (`claude -p --dangerously-skip-permissions`) to:
+### Example CSV Row
 
-1. **Analyze** rubric results and model conversation logs
-2. **Diagnose** what environmental barrier exists
-3. **Create fixes** in `fixes/<benchmark>/<task_id>/`:
-   - `env_override.json` - Missing packages, environment setup
-   - `input_override.json` - Clarified instructions (if needed)
-   - `README.md` - Explanation of the fix
-
-**Critical constraint**: Fixes must NOT nerf the question or make it easier. Only fix true environmental barriers.
-
-```bash
-# Dry-run to preview the prompt (no Claude Code execution)
-python scripts/pipeline.py inspect \
-  --trace-files $GPT41 $O3 $O4MINI_HIGH $O4MINI_LOW \
-  --rubric-csv $RUBRIC_CSV \
-  --dry-run \
-  --task-id capsule-4933686
-
-# Fix only environmental barriers
-python scripts/pipeline.py inspect \
-  --trace-files $GPT41 $O3 $O4MINI_HIGH $O4MINI_LOW \
-  --rubric-csv $RUBRIC_CSV \
-  --env-barriers-only
-
-# Fix a specific task
-python scripts/pipeline.py inspect \
-  --trace-files $GPT41 $O3 $O4MINI_HIGH $O4MINI_LOW \
-  --rubric-csv $RUBRIC_CSV \
-  --task-id capsule-4933686
-```
-
-## Individual Scripts
-
-For more control, use individual scripts:
-
-### Rubric Evaluation (Lightweight)
-```bash
-python scripts/simple_rubric_eval.py \
-  --trace-file traces/baseline.json \
-  --rubrics-dir rubrics \
-  --output-dir rubrics_output \
-  --model gpt-5.2 \
-  --failed-only
-```
-
-### Trace Merging
-```bash
-python scripts/merge_traces.py \
-  --input 'traces/orange_*_UPLOAD.json' \
-  --output traces/orange_MERGED.json \
-  --force
-```
-
-### Weave Extraction
-```bash
-python scripts/extract_weave_traces.py \
-  --project hal-agent-debug \
-  --prefix orange \
-  --include-costs
-```
-
-### Fix Application (Advanced)
-```bash
-python scripts/run_corebench_fixes.py \
-  --fixes-root fixes/corebench_hard \
-  --agent-dir hal-harness/agents/hal_generalist_agent \
-  --agent-args agent_args.azure.json \
-  --benchmark corebench_hard \
-  --docker \
-  --prefix orange \
-  --task-id capsule-2345790
-```
-
-## Output Directories
-
-```
-agent-debug/
-├── traces/                          # All trace files
-│   ├── *_UPLOAD.json               # Individual task traces
-│   └── *_MERGED_*_UPLOAD.json      # Merged traces
-├── rubrics_output/                  # Rubric evaluation results
-│   └── environmental_barrier/       # By rubric type
-│       └── <prefix>_<trace>.csv    # Results CSV
-├── fixes/                           # Fix packages
-│   └── corebench_hard/
-│       └── capsule-*/
-│           └── env_override.json
-└── results/                         # Re-run results
+```csv
+task_id,criteria,grade,correct,explanation,model_run
+11,scicode,0.0,False,"The agent encountered a Unicode minus sign (U+2212) that caused SyntaxError...",gpt-4o
 ```
 
 ## Troubleshooting
 
+### "Unable to import Docent modules"
+
+```bash
+# Install docent properly
+cd src/docent-python
+pip install -e docent/ -e .
+```
+
+### "Connection error" with OpenAI
+
+```bash
+# Check if proxy is running
+curl http://localhost:4000/v1/models
+
+# Or use direct OpenAI (if accessible)
+unset OPENAI_BASE_URL
+```
+
 ### "No raw_logging_results in trace"
+
 Run Weave extraction first:
 ```bash
 python scripts/pipeline.py extract --prefix <prefix> --project hal-agent-debug
 ```
 
-### "Trace file not found"
-Check the traces directory:
-```bash
-ls -la traces/<prefix>*
-```
-
-### "OpenAI API error"
-Ensure proxy is running:
-```bash
-curl http://localhost:4000/v1/models
-```
-
-### Empty merged trace
-Individual traces likely lack `raw_logging_results`. Extract from Weave first.
-
 ## Key Files
 
 | File | Purpose |
 |------|---------|
+| `scripts/eval_rubric.py` | **Primary** Docent-based rubric evaluation |
+| `scripts/cross_model_rubric.py` | Cross-model comparison rubric evaluation |
 | `scripts/pipeline.py` | Unified CLI for all pipeline operations |
-| `scripts/cross_model_rubric.py` | Cross-model rubric evaluation (recommended) |
-| `scripts/claude_fixer.py` | Claude Code CLI-based intelligent fixer |
-| `scripts/simple_rubric_eval.py` | Single-model rubric evaluation |
-| `scripts/merge_traces.py` | Merge individual traces |
-| `scripts/extract_weave_traces.py` | Extract from W&B Weave |
-| `scripts/run_corebench_fixes.py` | Apply fixes and re-run |
-| `rubrics/environmental_barrier.txt` | Rubric definition |
-
-## Cross-Model Rubric Evaluation (Recommended)
-
-For the most accurate environmental barrier detection, use cross-model evaluation:
-
-```bash
-python scripts/cross_model_rubric.py \
-  --traces \
-    traces/corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json \
-    traces/corebench_hard_hal_generalist_agento3medium_1755626315_UPLOAD.json \
-    traces/corebench_hard_hal_generalist_agento4minihigh_1755580383_UPLOAD.json \
-    traces/corebench_hard_hal_generalist_agento4minilow_1755608756_UPLOAD.json \
-  --prefix iter1_ \
-  --failed-only
-```
-
-### How It Works
-
-**Nuanced evaluation**: The script uses cross-model context to make careful determinations.
-
-1. **Phase 1: Build Task Success Map**
-   - Scan all model traces
-   - Identify which tasks each model passed/failed
-   - Extract error patterns and approaches tried from each model
-
-2. **Phase 2: Nuanced Evaluation**
-   - **If another model succeeded**: Include successful model's conversation and analyze HOW it succeeded
-     - Was it a legitimate, reproducible approach? → score=0 (capability issue)
-     - Was it luck/circumvention/non-reproducible? → might still be env barrier
-   - **If ALL models failed**: Analyze if there are untried approaches
-     - Are there viable paths the models didn't try? → score=0 (capability issue)
-     - Is it truly mechanically impossible? → score=1 (env barrier)
-
-### Benefits
-
-- **More accurate**: Uses evidence from multiple models
-- **Nuanced**: Doesn't assume "success = not env barrier" or "all failed = env barrier"
-- **Better reasoning**: Includes successful model's approach for comparison analysis
-
-### Example Output
-
-```
-Task summary: 45 total tasks
-  - 23 tasks solved by at least one model
-  - 22 tasks failed by ALL models (potential env barriers)
-
-Evaluating capsule-3449234...
-  Score: 0.0
-  Cross-model reasoning: "All models failed, but the failure signatures are
-  consistent with missing matplotlib and path handling mistakes... does not
-  prove an environmental barrier"
-```
-
-### Summary Mode
-
-Preview the cross-model summary without running evaluation:
-
-```bash
-python scripts/cross_model_rubric.py \
-  --traces \
-    traces/corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json \
-    traces/corebench_hard_hal_generalist_agento3medium_1755626315_UPLOAD.json \
-    traces/corebench_hard_hal_generalist_agento4minihigh_1755580383_UPLOAD.json \
-    traces/corebench_hard_hal_generalist_agento4minilow_1755608756_UPLOAD.json \
-  --summary-only
-```
-
-### Evaluate Single Model's Failures
-
-To evaluate only one model's failures (with cross-model context):
-
-```bash
-python scripts/cross_model_rubric.py \
-  --traces \
-    traces/corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json \
-    traces/corebench_hard_hal_generalist_agento3medium_1755626315_UPLOAD.json \
-    traces/corebench_hard_hal_generalist_agento4minihigh_1755580383_UPLOAD.json \
-    traces/corebench_hard_hal_generalist_agento4minilow_1755608756_UPLOAD.json \
-  --prefix iter1_ \
-  --evaluate-model gpt-4.1 \
-  --failed-only
-```
-
-### Parallel Evaluation
-
-By default, evaluates 5 tasks in parallel. Adjust with `--parallel`:
-
-```bash
-# Use 10 parallel workers for faster evaluation
-python scripts/cross_model_rubric.py \
-  --traces $GPT41 $O3 $O4MINI_HIGH $O4MINI_LOW \
-  --prefix iter1_ \
-  --failed-only \
-  --parallel 10
-```
+| `rubric_templates/scicode.txt` | SciCode Intrinsic Formation Error rubric |
+| `rubric_templates/corebench.txt` | CoreBench Environmental Barrier rubric |
+| `rubric_evaluator/cli.py` | Core rubric evaluation logic with Docent |
 
 ## Models
 
 Recommended models for rubric evaluation:
-- `gpt-5.2` - Best accuracy (default)
-- `gpt-4o` - Good balance of speed/accuracy
-- `gpt-4o-mini` - Fast, lower accuracy
+- `openai:gpt-4o` - Best balance of speed/accuracy (recommended)
+- `openai:gpt-4o-mini` - Fast, good for iteration
+- `azure_openai:gpt-4o` - If using Azure
+
+```bash
+# Example with different models
+python scripts/eval_rubric.py \
+    --trace-file traces/scicode_*.json \
+    --rubric rubric_templates/scicode.txt \
+    --rubric-model openai:gpt-4o \
+    -y
+```

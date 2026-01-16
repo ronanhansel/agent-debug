@@ -1,0 +1,206 @@
+RUBRIC: Intrinsic Formation Error Detection (SciCode Benchmark)
+
+PURPOSE:
+Identify failures caused by INTRINSIC FORMATION ERRORS in the benchmark itself—defects in problem construction, definitions, or testing apparatus that render tasks unsolvable regardless of agent capability. These are fundamental flaws where a perfect agent following instructions precisely would still fail.
+
+CRITICAL DISTINCTION:
+- Intrinsic Formation Error (score=1): The benchmark problem is MALFORMED, making success mechanically impossible
+- Agent Capability Issue (score=0): The agent COULD have succeeded with better reasoning, implementation, or approach
+
+================================================================================
+CATEGORY 1: SYNTACTIC & ENCODING CORRUPTION ("The Invisible Wall")
+================================================================================
+
+This covers fatal errors caused by non-standard text encoding in problem descriptions or code templates.
+
+PRIMARY INDICATOR - Unicode Minus Trap:
+- Mathematical operators encoded as Unicode characters instead of ASCII
+- U+2212 (MINUS SIGN) or U+2013 (EN DASH) instead of U+002D (HYPHEN-MINUS)
+- Example: "1e−9" appears valid but triggers SyntaxError in Python
+- These characters are visually indistinguishable from standard operators
+- Agent cannot fix if embedded in "immutable" benchmark-provided context
+
+SCORE=1 IF:
+- Error traces show SyntaxError on what appears to be valid numeric literals
+- Agent correctly copies benchmark-provided code that contains hidden Unicode
+- Failure occurs in benchmark-provided templates, not agent-written code
+
+SCORE=0 IF:
+- Agent introduced the encoding error in their own code
+- Agent could have detected and fixed the encoding issue
+- Error is in agent-generated code, not benchmark-provided content
+
+================================================================================
+CATEGORY 2: CONTEXTUAL DISCONTINUITY ("The Amnesia Flaw")
+================================================================================
+
+Failures where the testing harness fails to persist necessary state between sub-tasks in multi-step problems.
+
+PRIMARY INDICATORS:
+- NameError for classes/functions that were correctly defined in previous steps
+- Example: Step 1 defines "class Block", Step 2 gets "NameError: 'Block' is not defined"
+- The agent's Step 1 code was CORRECT and would work in isolation
+- The harness fails to inject prior successful outputs into subsequent steps
+
+SCORE=1 IF:
+- Agent correctly implements Step N, but Step N+1 cannot access Step N's definitions
+- Error is "X is not defined" where X was correctly defined in a prior step
+- The benchmark structure requires sequential step dependencies
+- Harness demonstrably fails to maintain execution context
+
+SCORE=0 IF:
+- Agent failed to correctly implement the prior step
+- Agent's code has actual bugs or errors
+- Agent could have worked around by re-defining needed components
+- The "missing" definition was never correctly created
+
+================================================================================
+CATEGORY 3: MATHEMATICAL AMBIGUITY & UNDERSPECIFICATION
+================================================================================
+
+Problems where prompts lack necessary mathematical constraints to reach the expected result.
+
+PRIMARY INDICATORS:
+
+A) "Guess the Bracket" Problem:
+- Root-finding required without specifying search interval [a, b]
+- Agent gets convergence errors or wrong roots
+- Multiple valid mathematical solutions exist, but only one is "correct"
+- Example: "Find root of f(x)" without bounds → brentq fails or finds wrong root
+
+B) Tensor/Shape Ambiguity:
+- Vector/matrix operations without defined input/output shapes
+- Broadcasting errors due to unspecified dimensions
+- Example: "Compute dot product" without specifying if inputs are row or column vectors
+
+C) Hidden Parameters:
+- Numerical methods require tolerances, iterations, or seeds not specified
+- "Correct" answer depends on arbitrary parameter choices by benchmark authors
+
+SCORE=1 IF:
+- Problem objectively lacks information needed to derive the expected answer
+- Multiple mathematically valid solutions exist but only one passes tests
+- Agent's solution is mathematically correct but fails due to hidden assumptions
+- No reasonable interpretation of the problem leads to the expected answer
+
+SCORE=0 IF:
+- The necessary constraints ARE specified (even if implicitly)
+- Agent misread or ignored provided specifications
+- Standard conventions would resolve the ambiguity
+- Agent could have inferred constraints from context or examples
+
+================================================================================
+CATEGORY 4: ENVIRONMENTAL CONTRADICTION ("The Double Bind")
+================================================================================
+
+Direct conflicts between explicit task instructions and execution environment constraints.
+
+PRIMARY INDICATORS:
+- Instructions say "use library X" but sandbox blocks library X
+- Required operations are explicitly forbidden by the execution environment
+- Example: "import scipy.integrate to solve ODE" but scipy is not allowed
+- Agent fails if they disobey (wrong approach) AND fails if they obey (permission error)
+
+SCORE=1 IF:
+- Task explicitly instructs use of a blocked resource
+- No alternative approach can satisfy BOTH the instructions AND environment
+- The instruction-environment conflict is unresolvable
+
+SCORE=0 IF:
+- Alternative approaches exist that satisfy both constraints
+- The "blocked" resource has permitted alternatives
+- Agent could have found a workaround (different library, manual implementation)
+- The instruction is a suggestion, not a requirement
+
+================================================================================
+EVALUATION PROCESS
+================================================================================
+
+1. IDENTIFY the specific failure point in the transcript
+2. CLASSIFY which category (if any) the failure matches
+3. VERIFY the failure is in benchmark construction, NOT agent implementation
+4. CHECK if any agent could have succeeded with a different approach
+5. APPLY the scoring criteria for the specific category
+
+KEY QUESTION: "Is this a flaw in the PROBLEM or a flaw in the SOLUTION?"
+- Problem flaw (malformed benchmark) → score=1
+- Solution flaw (agent mistake) → score=0
+
+================================================================================
+COMMON MISCLASSIFICATIONS TO AVOID
+================================================================================
+
+FALSE POSITIVES (incorrectly scoring 1):
+- Agent writes buggy code and blames the benchmark
+- Agent misreads clear instructions
+- Agent doesn't try obvious alternatives
+- Error messages are confusing but problem is solvable
+
+FALSE NEGATIVES (incorrectly scoring 0):
+- Unicode errors in benchmark-provided code snippets
+- Harness genuinely loses state between steps
+- Problem genuinely lacks required mathematical constraints
+- Instructions genuinely conflict with environment restrictions
+
+================================================================================
+EXAMPLES
+================================================================================
+
+Example 1 (score=1 - Syntactic Corruption):
+Benchmark provides: "tolerance = 1e−9"  (with Unicode minus U+2212)
+Agent copies exactly as provided
+Error: SyntaxError: invalid syntax
+Agent cannot fix benchmark-provided code → FORMATION ERROR → score=1
+
+Example 2 (score=0 - Agent Error):
+Agent writes: tolerance = 1e-9 (correct ASCII)
+Agent makes logic error in algorithm
+Test fails due to wrong result
+Agent's implementation error → CAPABILITY ISSUE → score=0
+
+Example 3 (score=1 - Contextual Discontinuity):
+Step 1: Agent correctly defines "class Lattice" with all methods
+Step 2: Harness runs test, gets "NameError: 'Lattice' is not defined"
+Agent's code was correct, harness failed to persist → FORMATION ERROR → score=1
+
+Example 4 (score=0 - Agent's Prior Step Failed):
+Step 1: Agent's "class Lattice" has syntax error, never executed
+Step 2: "NameError: 'Lattice' is not defined"
+Agent's Step 1 was buggy → CAPABILITY ISSUE → score=0
+
+Example 5 (score=1 - Mathematical Underspecification):
+Problem: "Find the root of f(x) = x^3 - 2x + 1"
+Agent uses brentq with reasonable bracket, finds root at x ≈ 0.618
+Test expects root at x ≈ -1.618 (different valid root)
+No bracket specified in problem → FORMATION ERROR → score=1
+
+Example 6 (score=0 - Agent Ignored Constraints):
+Problem: "Find the positive root of f(x) = x^2 - 4"
+Agent finds x = -2
+Problem specified "positive" → CAPABILITY ISSUE → score=0
+
+Example 7 (score=1 - Environmental Contradiction):
+Instruction: "Use scipy.optimize.minimize to find the minimum"
+Agent: from scipy.optimize import minimize
+Error: "Import of scipy is not allowed in this environment"
+No alternative can satisfy explicit instruction → FORMATION ERROR → score=1
+
+Example 8 (score=0 - Alternative Exists):
+Instruction: "You may use scipy for optimization"
+Agent tries scipy, gets blocked
+Agent could use numpy or manual gradient descent instead
+Alternative approaches exist → CAPABILITY ISSUE → score=0
+
+================================================================================
+JSON RESPONSE REQUIREMENTS
+================================================================================
+
+Respond with ONLY a JSON object containing:
+- "score": 0 or 1
+- "category": One of ["syntactic_corruption", "contextual_discontinuity", "mathematical_ambiguity", "environmental_contradiction", "none"]
+- "explanation": Detailed explanation citing specific transcript evidence
+- "cross_model_reasoning": How cross-model evidence informed the decision
+- "formation_error_evidence": Specific evidence of benchmark malformation (if score=1)
+- "agent_alternative": What the agent could have done differently (if score=0)
+
+Do not include any text outside the JSON object. Escape newlines as \n within strings.
