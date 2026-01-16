@@ -1,8 +1,11 @@
-IMPORTANT ENVIRONMENT INSTRUCTIONS:
+ENVIRONMENT SETUP (Pre-configured):
+- R packages are pre-installed via conda (tidyverse, dplyr, ggplot2, rmarkdown, knitr, lme4, etc.)
+- Bioconductor packages (GSVA) are available
+- Use: conda activate agent
+- R library path: ./.R/library
 
+---
 1. Conda installations are BLOCKED by Terms of Service requirements:
-   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/main
-   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/r
    DO NOT attempt conda install commands - they will fail.
 
 2. Missing R/Bioconductor packages:
@@ -10,14 +13,12 @@ IMPORTANT ENVIRONMENT INSTRUCTIONS:
    - netbiov
    - apcluster
    - rcdk
-   These cannot be installed due to ToS restrictions.
 
 3. Missing system dependencies:
    - pkg-config
    - libxml2
    - libcurl
    - openssl
-   These cannot be installed via conda.
 
 4. File inspection limitations:
    - .R files may not be readable by the inspection tool
@@ -31,7 +32,6 @@ IMPORTANT ENVIRONMENT INSTRUCTIONS:
    b) If PharmacoGx is not installed:
       - The AUC computation requires PharmacoGx
       - Report that the analysis cannot be completed due to missing
-        Bioconductor package that cannot be installed
 
    c) Look for pre-computed results:
       - Check if ../results or data/ directories contain cached outputs
@@ -50,6 +50,5 @@ IMPORTANT ENVIRONMENT INSTRUCTIONS:
 
 8. To extract AUC values, you need PharmacoGx. If unavailable:
    - Report this as an environmental limitation
-   - Provide explanation that the Bioconductor package cannot be installed
 
 Original task: Run R scripts to compute AUC values using PharmacoGx.

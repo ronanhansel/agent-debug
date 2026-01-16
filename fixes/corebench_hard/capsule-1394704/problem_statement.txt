@@ -1,6 +1,10 @@
-IMPORTANT ENVIRONMENT INSTRUCTIONS:
+ENVIRONMENT SETUP (Pre-configured):
+- R packages are pre-installed via conda (tidyverse, dplyr, ggplot2, rmarkdown, knitr, lme4, etc.)
+- Bioconductor packages (GSVA) are available
+- Use: conda activate agent
+- R library path: ./.R/library
 
-1. DO NOT attempt to install R packages via conda or CRAN. The conda Terms of Service
+---
    restrictions and missing system build tools (freetype, cmake, libudunits2, rust)
    prevent package installation.
 
@@ -11,10 +15,6 @@ IMPORTANT ENVIRONMENT INSTRUCTIONS:
    Rscript -e "rmarkdown::render('code/modular.Rmd', output_dir='../results')"
 
 4. Ensure all outputs are written to the HAL_OUTPUT_DIR (../results directory).
-
-5. If you encounter 'there is no package called X' errors, this is an environmental
-   limitation. Do not attempt to install packages interactively.
-
 6. Skip any package installation steps and proceed directly to rendering the Rmd file.
 
 Original task: Render the modular.Rmd file and produce the required outputs.

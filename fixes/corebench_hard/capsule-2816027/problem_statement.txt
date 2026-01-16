@@ -1,15 +1,10 @@
-IMPORTANT ENVIRONMENT INSTRUCTIONS:
+ENVIRONMENT SETUP (Pre-configured):
+- R packages are pre-installed via conda (tidyverse, dplyr, ggplot2, rmarkdown, knitr, lme4, etc.)
+- Bioconductor packages (GSVA) are available
+- Use: conda activate agent
+- R library path: ./.R/library
 
-1. DO NOT attempt to install R packages via conda. The conda Terms of Service
-   restrictions prevent package installation:
-   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/main
-   - CondaToSNonInteractiveError for /pkgs/r
-
-2. Conda environment issues:
-   - /opt/conda/envs/agent_env may not be valid (DirectoryNotACondaEnvironmentError)
-   - Use the 'hal' conda environment instead: conda activate hal
-   - R and its packages should be accessed from the hal environment
-
+---
 3. Required R data files may be missing:
    - ../data/Luminal_Basal_Gene_Sets.RData
    - Other .Rda files referenced in the R scripts
@@ -18,17 +13,9 @@ IMPORTANT ENVIRONMENT INSTRUCTIONS:
    - Check the actual data directory structure: ls -la ../data/ or ls -la data/
    - Look for alternative data file locations in the repository
    - Verify file paths in the R scripts match actual file locations
-   - If data truly doesn't exist, report this as an environmental constraint
-
-5. GSVA package considerations:
-   - If GSVA is not available in the environment, the analysis cannot proceed
-   - Do NOT attempt to install GSVA - it will fail due to ToS restrictions
-   - Report unavailable packages as environmental limitations
-
 6. R_DEFAULT_PACKAGES should include:
    datasets, utils, grDevices, graphics, stats, methods
 
-7. Alternative approaches if GSVA unavailable:
    - Check if required packages are pre-installed: installed.packages()
    - Look for cached results or pre-computed outputs in the repository
    - If the analysis requires GSVA and it's not available, document this

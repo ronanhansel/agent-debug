@@ -1,8 +1,11 @@
-IMPORTANT ENVIRONMENT INSTRUCTIONS:
+ENVIRONMENT SETUP (Pre-configured):
+- R packages are pre-installed via conda (tidyverse, dplyr, ggplot2, rmarkdown, knitr, lme4, etc.)
+- Bioconductor packages (GSVA) are available
+- Use: conda activate agent
+- R library path: ./.R/library
 
+---
 1. Conda installations are BLOCKED by Terms of Service:
-   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/main
-   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/r
    DO NOT attempt conda install commands - they will fail.
 
 2. Python 'open' function is FORBIDDEN:
@@ -13,7 +16,6 @@ IMPORTANT ENVIRONMENT INSTRUCTIONS:
 3. Missing R packages:
    - data.table, ggplot2, zoo may not be installed
    - 'lab' package required for Rmd rendering may be missing
-   - Cannot install via conda due to ToS restrictions
 
 4. Alternative approaches:
 

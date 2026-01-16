@@ -1,8 +1,11 @@
-IMPORTANT ENVIRONMENT INSTRUCTIONS:
+ENVIRONMENT SETUP (Pre-configured):
+- R packages are pre-installed via conda (tidyverse, dplyr, ggplot2, rmarkdown, knitr, lme4, etc.)
+- Bioconductor packages (GSVA) are available
+- Use: conda activate agent
+- R library path: ./.R/library
 
+---
 1. Conda installations are BLOCKED by Terms of Service requirements:
-   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/main
-   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/r
    DO NOT attempt conda install commands - they will fail.
 
 2. Python file I/O is RESTRICTED:
@@ -24,7 +27,6 @@ IMPORTANT ENVIRONMENT INSTRUCTIONS:
 4. For notebook execution:
    - Use the notebook execution tools provided by the harness
    - Do NOT rely on conda for dependency installation
-   - Use pre-installed packages in the 'hal' environment
 
 5. Environment setup:
    conda activate hal

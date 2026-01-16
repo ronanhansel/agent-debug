@@ -1,13 +1,16 @@
-IMPORTANT ENVIRONMENT INSTRUCTIONS:
+ENVIRONMENT SETUP (Pre-configured):
+- R packages are pre-installed via conda (tidyverse, dplyr, ggplot2, rmarkdown, knitr, lme4, etc.)
+- Bioconductor packages (GSVA) are available
+- Use: conda activate agent
+- R library path: ./.R/library
 
+---
 1. Rscript may NOT be installed:
    - Exit code 127 indicates Rscript is not in PATH
    - Check if R is available: which Rscript or which R
    - If not available, report as environmental limitation
 
 2. Conda installations are BLOCKED by Terms of Service:
-   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/main
-   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/r
    DO NOT attempt conda install commands - they will fail.
 
 3. Replication data files are MISSING:
@@ -33,7 +36,6 @@ IMPORTANT ENVIRONMENT INSTRUCTIONS:
 
 5. Environment setup:
    conda activate hal
-   # Do NOT run conda install - it will fail due to ToS
 
 6. If you must simulate output:
    - Acknowledge that replication_data/*.rda files are missing

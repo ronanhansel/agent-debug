@@ -1,9 +1,8 @@
 {
-  "HAL_SKIP_CONDA_INSTALL": "true",
-  "HAL_FORCE_CONDA_ENV": "hal",
-  "HAL_CONDA_CHANNELS": "conda-forge",
+  "HAL_FORCE_CONDA_ENV": "agent",
+  "HAL_CONDA_CHANNELS": "bioconda conda-forge",
+  "HAL_CONDA_PACKAGES": "r-base=4.* r-tidyverse r-dplyr r-tidyr r-readr r-ggplot2 r-stringr r-purrr r-lubridate r-rmarkdown r-knitr r-kableextra r-lme4 r-nlme r-nloptr r-car r-emmeans r-afex r-ez r-ggpubr r-scales r-readxl r-openxlsx r-data.table r-matrix r-mass r-devtools r-xml2 r-curl r-httr r-jsonlite r-yaml r-biocmanager bioconductor-gsva pandoc cmake texlive-core",
   "CONDA_ALWAYS_YES": "true",
-  "R_LIBS_USER": "/tmp/R_libs",
-  "HAL_OUTPUT_DIR": "../results",
-  "MPLBACKEND": "Agg"
+  "R_LIBS_USER": "./.R/library",
+  "HAL_OUTPUT_DIR": "./results"
 }

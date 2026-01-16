@@ -1,5 +1,10 @@
-IMPORTANT ENVIRONMENT INSTRUCTIONS:
+ENVIRONMENT SETUP (Pre-configured):
+- R packages are pre-installed via conda (tidyverse, dplyr, ggplot2, rmarkdown, knitr, lme4, etc.)
+- Bioconductor packages (GSVA) are available
+- Use: conda activate agent
+- R library path: ./.R/library
 
+---
 1. Python 'os' module import is BLOCKED:
    - Error: 'Import of os is not allowed'
    - DO NOT import os in Python code
@@ -11,8 +16,6 @@ IMPORTANT ENVIRONMENT INSTRUCTIONS:
    - Use bash 'cat' to read .Rmd content instead: cat path/to/file.Rmd
 
 3. Conda installations are BLOCKED:
-   - CondaToSNonInteractiveError for default channels
-   - PackagesNotFoundError for r-bchron (not in conda-forge)
    - DO NOT attempt conda install commands
 
 4. Alternative approaches:

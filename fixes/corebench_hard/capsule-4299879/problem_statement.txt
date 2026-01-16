@@ -1,8 +1,11 @@
-IMPORTANT ENVIRONMENT INSTRUCTIONS:
+ENVIRONMENT SETUP (Pre-configured):
+- R packages are pre-installed via conda (tidyverse, dplyr, ggplot2, rmarkdown, knitr, lme4, etc.)
+- Bioconductor packages (GSVA) are available
+- Use: conda activate agent
+- R library path: ./.R/library
 
+---
 1. Conda installations are BLOCKED by Terms of Service requirements:
-   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/main
-   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/r
    DO NOT attempt conda install commands - they will fail.
    Even resetting to conda-forge only does not resolve the ToS issue.
 
@@ -12,11 +15,9 @@ IMPORTANT ENVIRONMENT INSTRUCTIONS:
    - patchwork
    - estimatr
    - xtable
-   These cannot be installed due to ToS restrictions.
 
 3. Missing system tools:
    - pdftotext is NOT available (/bin/sh: 1: pdftotext: not found)
-   - poppler-utils cannot be installed via conda due to ToS
    DO NOT rely on pdftotext for PDF text extraction.
 
 4. Hardcoded relative paths cause errors:

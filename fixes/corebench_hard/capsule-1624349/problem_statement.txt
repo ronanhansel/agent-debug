@@ -1,3 +1,11 @@
+ENVIRONMENT SETUP (Pre-configured):
+- R packages are pre-installed via conda (tidyverse, dplyr, ggplot2, rmarkdown, knitr, lme4, etc.)
+- Bioconductor packages (GSVA) are available
+- Use: conda activate agent
+- R library path: ./.R/library
+
+---
+
 CRITICAL ENVIRONMENT INSTRUCTIONS:
 
 1. The sandbox environment RESTRICTS the following Python operations:

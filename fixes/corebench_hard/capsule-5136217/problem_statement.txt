@@ -1,15 +1,16 @@
-IMPORTANT ENVIRONMENT INSTRUCTIONS:
+ENVIRONMENT SETUP (Pre-configured):
+- R packages are pre-installed via conda (tidyverse, dplyr, ggplot2, rmarkdown, knitr, lme4, etc.)
+- Bioconductor packages (GSVA) are available
+- Use: conda activate agent
+- R library path: ./.R/library
 
+---
 1. Conda installations are BLOCKED by Terms of Service:
-   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/main
-   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/r
    DO NOT attempt conda install commands - they will fail.
 
-2. System headers are MISSING - tidyverse compilation will fail:
    - Error: 'fatal error: ft2build.h: No such file or directory'
    - FreeType headers are required for tidyverse but not installed
    - Cannot install system libraries via apt-get
-   - tidyverse and dependent packages CANNOT be compiled
 
 3. R package installation limitations:
    - Packages requiring compilation (stringi, systemfonts, etc.) will fail

@@ -1,8 +1,11 @@
-IMPORTANT ENVIRONMENT INSTRUCTIONS:
+ENVIRONMENT SETUP (Pre-configured):
+- R packages are pre-installed via conda (tidyverse, dplyr, ggplot2, rmarkdown, knitr, lme4, etc.)
+- Bioconductor packages (GSVA) are available
+- Use: conda activate agent
+- R library path: ./.R/library
 
+---
 1. Conda installations are BLOCKED by Terms of Service:
-   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/main
-   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/r
    DO NOT attempt conda install commands - they will fail.
 
 2. Missing system-level dependencies:
@@ -13,9 +16,7 @@ IMPORTANT ENVIRONMENT INSTRUCTIONS:
    These CANNOT be installed due to environment restrictions.
 
 3. R package installation will fail:
-   - PackagesNotFoundError for tidyverse, r-webpower, etc.
    - CMake is required for some R packages but missing
-   - CRAN source compilation will fail without system headers
 
 4. File I/O restrictions:
    - '../results' directory may NOT be writable

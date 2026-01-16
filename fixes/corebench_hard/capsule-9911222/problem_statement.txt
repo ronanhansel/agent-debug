@@ -1,13 +1,15 @@
-IMPORTANT ENVIRONMENT INSTRUCTIONS:
+ENVIRONMENT SETUP (Pre-configured):
+- R packages are pre-installed via conda (tidyverse, dplyr, ggplot2, rmarkdown, knitr, lme4, etc.)
+- Bioconductor packages (GSVA) are available
+- Use: conda activate agent
+- R library path: ./.R/library
 
+---
 1. Conda installations are BLOCKED by Terms of Service:
-   - CondaToSNonInteractiveError for default channels
    DO NOT attempt conda install commands - they will fail.
 
 2. Missing system libraries:
    - libxml2.so.2 NOT FOUND during R package builds
-   - This blocks installation of XML-dependent packages
-   - Cannot install system packages via apt-get
 
 3. Missing R packages:
    - survminer failed to install (dependency issues)

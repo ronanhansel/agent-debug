@@ -1,5 +1,10 @@
-IMPORTANT ENVIRONMENT INSTRUCTIONS:
+ENVIRONMENT SETUP (Pre-configured):
+- R packages are pre-installed via conda (tidyverse, dplyr, ggplot2, rmarkdown, knitr, lme4, etc.)
+- Bioconductor packages (GSVA) are available
+- Use: conda activate agent
+- R library path: ./.R/library
 
+---
 1. The 'file' command is NOT AVAILABLE:
    - Error: '/bin/sh: 1: file: not found'
    - Cannot use 'file' for file-type inspection

@@ -1,14 +1,16 @@
-IMPORTANT ENVIRONMENT INSTRUCTIONS:
+ENVIRONMENT SETUP (Pre-configured):
+- R packages are pre-installed via conda (tidyverse, dplyr, ggplot2, rmarkdown, knitr, lme4, etc.)
+- Bioconductor packages (GSVA) are available
+- Use: conda activate agent
+- R library path: ./.R/library
 
+---
 1. Conda installations are BLOCKED by Terms of Service:
-   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/main
-   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/r
    DO NOT attempt conda install commands - they will fail.
 
 2. CMake is MISSING from PATH:
    - Configuration log shows: 'checking for cmake... no'
    - CMake is required for building some R packages
-   - Cannot install CMake due to conda ToS restrictions
    - Report as environmental limitation if CMake is required
 
 3. Vision-language tool has INVALID model name:
