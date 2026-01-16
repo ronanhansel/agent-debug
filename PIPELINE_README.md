@@ -203,18 +203,20 @@ O3="traces/corebench_hard_hal_generalist_agento3medium_1755626315_UPLOAD.json"
 O4MINI_HIGH="traces/corebench_hard_hal_generalist_agento4minihigh_1755580383_UPLOAD.json"
 O4MINI_LOW="traces/corebench_hard_hal_generalist_agento4minilow_1755608756_UPLOAD.json"
 
-# 1. Run cross-model rubric evaluation (recommended)
+# 1. Run cross-model rubric evaluation
 python scripts/cross_model_rubric.py \
   --traces $GPT41 $O3 $O4MINI_HIGH $O4MINI_LOW \
   --prefix iter1_ \
   --failed-only
 
-# 2. Review rubric results
-cat rubrics_output/environmental_barrier_cross_model/iter1_*.csv
+# 2. Find the rubric CSV (output path printed at end of step 1)
+RUBRIC_CSV=$(ls -t rubrics_output/environmental_barrier_cross_model/iter1_*.csv | head -1)
+echo "Rubric CSV: $RUBRIC_CSV"
 
-# 3. Generate fixes for capability issues (score=0)
+# 3. Generate fixes for capability issues only (automatically filters by rubric score)
 python scripts/pipeline.py inspect \
   --trace-file $GPT41 \
+  --rubric-csv $RUBRIC_CSV \
   --benchmark corebench_hard
 
 # 4. Apply fixes and re-run (creates new traces with prefix)
@@ -238,6 +240,16 @@ python scripts/cross_model_rubric.py \
 
 # 8. Compare iterations
 python scripts/pipeline.py status --prefix iter1_
+```
+
+### Pipeline Flow
+
+```
+cross_model_rubric.py          pipeline.py inspect         pipeline.py fix
+        │                              │                          │
+        ▼                              ▼                          ▼
+   Rubric CSV ──────────────► Filter to capability ──────► Re-run tasks
+   (score=0 vs 1)               issues (score=0)            with fixes
 ```
 
 ## Individual Scripts

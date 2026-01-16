@@ -427,6 +427,39 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     """Analyze failures and generate fix recommendations."""
     prefix = args.prefix or ""
 
+    # If rubric CSV provided, filter to capability issues only (score < 1)
+    task_ids = list(args.task_id) if args.task_id else []
+
+    if args.rubric_csv:
+        rubric_path = Path(args.rubric_csv)
+        if not rubric_path.exists():
+            log(f"Rubric CSV not found: {rubric_path}", prefix)
+            return 1
+
+        log(f"Reading rubric results from: {rubric_path}", prefix)
+        capability_issues = []
+        env_barriers = []
+
+        with rubric_path.open() as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                task_id = row.get("task_id", "")
+                score = float(row.get("grade", 0))
+                if score < 1:  # Capability issue
+                    capability_issues.append(task_id)
+                else:  # Environmental barrier
+                    env_barriers.append(task_id)
+
+        log(f"Found {len(capability_issues)} capability issues, {len(env_barriers)} env barriers", prefix)
+
+        if not capability_issues:
+            log("No capability issues found to fix. All failures are environmental barriers.", prefix)
+            return 0
+
+        # Use capability issues as task filter
+        task_ids = capability_issues
+        log(f"Will inspect {len(task_ids)} capability issues", prefix)
+
     cmd = [
         sys.executable, str(REPO_ROOT / "scripts" / "item_fixer.py"),
         "--trace-file", str(args.trace_file),
@@ -435,9 +468,8 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
     if args.dry_run:
         cmd.append("--dry-run")
-    if args.task_id:
-        for tid in args.task_id:
-            cmd.extend(["--task-id", tid])
+    for tid in task_ids:
+        cmd.extend(["--task-id", tid])
 
     log(f"Inspecting failures from trace", prefix)
     result = subprocess.run(cmd, cwd=REPO_ROOT)
@@ -715,6 +747,7 @@ Examples:
     p_inspect.add_argument("--benchmark", default=DEFAULT_BENCHMARK, help="Benchmark name")
     p_inspect.add_argument("--dry-run", action="store_true", help="Don't write fix files")
     p_inspect.add_argument("--task-id", action="append", help="Specific task IDs")
+    p_inspect.add_argument("--rubric-csv", help="Rubric CSV to filter to capability issues only (score < 1)")
 
     # Cross-model rubric (recommended)
     p_cross = subparsers.add_parser("cross-rubric", help="Cross-model rubric evaluation (recommended)")
