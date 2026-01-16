@@ -293,40 +293,146 @@ Remember: Your goal is to make the evaluation FAIR, not EASY.
     return prompt
 
 
+def format_stream_json(line: str, task_id: str) -> None:
+    """Format and print a JSON stream line nicely."""
+    try:
+        data = json.loads(line)
+        msg_type = data.get("type", "unknown")
+
+        # Color codes for terminal
+        CYAN = "\033[96m"
+        GREEN = "\033[92m"
+        YELLOW = "\033[93m"
+        RED = "\033[91m"
+        BLUE = "\033[94m"
+        RESET = "\033[0m"
+        BOLD = "\033[1m"
+        DIM = "\033[2m"
+
+        ts = datetime.now().strftime("%H:%M:%S")
+
+        if msg_type == "assistant":
+            # Assistant message
+            content = data.get("message", {}).get("content", "")
+            if isinstance(content, list):
+                for block in content:
+                    if block.get("type") == "text":
+                        text = block.get("text", "")[:500]
+                        print(f"{DIM}[{ts}]{RESET} {CYAN}[ASSISTANT]{RESET} {text}")
+                    elif block.get("type") == "tool_use":
+                        tool_name = block.get("name", "unknown")
+                        tool_input = block.get("input", {})
+                        # Format tool input nicely
+                        if tool_name == "Bash":
+                            cmd = tool_input.get("command", "")[:200]
+                            print(f"{DIM}[{ts}]{RESET} {YELLOW}[TOOL: {tool_name}]{RESET} {cmd}")
+                        elif tool_name in ("Read", "Glob", "Grep"):
+                            path = tool_input.get("file_path", tool_input.get("pattern", tool_input.get("path", "")))
+                            print(f"{DIM}[{ts}]{RESET} {YELLOW}[TOOL: {tool_name}]{RESET} {path}")
+                        elif tool_name in ("Edit", "Write"):
+                            path = tool_input.get("file_path", "")
+                            print(f"{DIM}[{ts}]{RESET} {YELLOW}[TOOL: {tool_name}]{RESET} {path}")
+                        else:
+                            print(f"{DIM}[{ts}]{RESET} {YELLOW}[TOOL: {tool_name}]{RESET} {json.dumps(tool_input)[:200]}")
+            elif isinstance(content, str) and content:
+                print(f"{DIM}[{ts}]{RESET} {CYAN}[ASSISTANT]{RESET} {content[:500]}")
+
+        elif msg_type == "user":
+            # User/tool result
+            content = data.get("message", {}).get("content", "")
+            if isinstance(content, list):
+                for block in content:
+                    if block.get("type") == "tool_result":
+                        tool_id = block.get("tool_use_id", "")[:8]
+                        result_content = block.get("content", "")
+                        if isinstance(result_content, str):
+                            preview = result_content[:300].replace("\n", " ")
+                            print(f"{DIM}[{ts}]{RESET} {GREEN}[RESULT {tool_id}]{RESET} {preview}...")
+
+        elif msg_type == "result":
+            # Final result
+            cost = data.get("cost_usd", 0)
+            duration = data.get("duration_ms", 0) / 1000
+            print(f"\n{BOLD}{GREEN}[COMPLETED]{RESET} Task: {task_id}")
+            print(f"  Cost: ${cost:.4f} | Duration: {duration:.1f}s")
+            if data.get("result"):
+                print(f"  Result: {str(data.get('result'))[:200]}")
+
+        elif msg_type == "error":
+            error = data.get("error", {})
+            print(f"{DIM}[{ts}]{RESET} {RED}[ERROR]{RESET} {error.get('message', str(error))}")
+
+        elif msg_type == "system":
+            # System messages
+            msg = data.get("message", "")
+            if msg:
+                print(f"{DIM}[{ts}]{RESET} {BLUE}[SYSTEM]{RESET} {msg}")
+
+    except json.JSONDecodeError:
+        # Not JSON, print as-is
+        if line.strip():
+            print(line.strip())
+
+
 def run_claude_code(
     prompt: str,
     task_id: str,
     working_dir: Path,
+    fix_dir: Path,
     resume_session: Optional[str] = None,
 ) -> int:
-    """Run Claude Code CLI with the given prompt."""
+    """Run Claude Code CLI with the given prompt, streaming output."""
 
-    # Build command
+    # Build command with verbose and stream-json output
+    base_cmd = [
+        "claude",
+        "--verbose",
+        "--output-format", "stream-json",
+        "--dangerously-skip-permissions",
+    ]
+
     if resume_session:
-        cmd = [
-            "claude",
-            "--resume", resume_session,
-            "-p", prompt,
-            "--dangerously-skip-permissions",
-        ]
-    else:
-        cmd = [
-            "claude",
-            "-p", prompt,
-            "--dangerously-skip-permissions",
-        ]
+        base_cmd.extend(["--resume", resume_session])
+
+    base_cmd.extend(["-p", prompt])
 
     log(f"Running Claude Code CLI for {task_id}...")
     log(f"Working directory: {working_dir}")
+    print(f"\n{'='*60}")
+    print(f"CLAUDE CODE SESSION: {task_id}")
+    print(f"{'='*60}\n")
 
-    # Run Claude Code
-    result = subprocess.run(
-        cmd,
+    # Prepare log file for raw JSON stream
+    log_path = fix_dir / "claude_session.jsonl"
+
+    # Run Claude Code with streaming output
+    process = subprocess.Popen(
+        base_cmd,
         cwd=working_dir,
         env={**os.environ, "CLAUDE_CODE_TASK_ID": task_id},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,  # Line buffered
     )
 
-    return result.returncode
+    # Stream, format, and save output
+    try:
+        with log_path.open("w") as log_file:
+            for line in process.stdout:
+                # Save raw JSON
+                log_file.write(line)
+                log_file.flush()
+                # Format and display
+                format_stream_json(line, task_id)
+    except KeyboardInterrupt:
+        process.terminate()
+        log(f"Interrupted by user")
+        return 130
+
+    process.wait()
+    log(f"Session log saved to: {log_path}")
+    return process.returncode
 
 
 def main():
@@ -449,6 +555,7 @@ def main():
             prompt=prompt,
             task_id=task_id,
             working_dir=REPO_ROOT,
+            fix_dir=fix_dir,
             resume_session=args.resume_session,
         )
 
