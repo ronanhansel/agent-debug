@@ -322,36 +322,80 @@ def evaluate_with_cross_model_context(
     task_summary: TaskSummary,
     conversation: str,
     evaluated_model: str,
+    successful_conversation: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Evaluate a single task with cross-model context."""
 
     # Build the prompt with cross-model context
     cross_model_context = task_summary.to_context_string()
 
-    prompt = f"""You are evaluating an agent transcript against the following rubric, WITH ADDITIONAL CROSS-MODEL CONTEXT.
+    # Add successful model's approach if available
+    success_context = ""
+    if successful_conversation and task_summary.any_succeeded:
+        success_context = f"""
+=== HOW A SUCCESSFUL MODEL APPROACHED THIS TASK ===
+One of the successful models ({task_summary.models_succeeded[0]}) used this approach:
+{successful_conversation[:8000]}
+
+IMPORTANT: Analyze whether this successful approach represents:
+A) A LEGITIMATE alternative path that any agent could use (suggests capability issue)
+B) A lucky workaround or circumvention that wouldn't reliably work (might still be env barrier)
+C) Random variation/non-deterministic success (inconclusive)
+"""
+
+    prompt = f"""You are evaluating an agent transcript against the following rubric, WITH CROSS-MODEL CONTEXT.
 
 RUBRIC:
 {rubric_text}
 
 {cross_model_context}
+{success_context}
 
 === TRANSCRIPT FOR {evaluated_model} ON TASK {task_id} ===
 {conversation}
 
-=== EVALUATION INSTRUCTIONS ===
+=== NUANCED EVALUATION INSTRUCTIONS ===
 
-Based on the rubric criteria AND the cross-model context, evaluate this transcript.
+You must make a CAREFUL determination about environmental barriers vs capability issues.
 
-CRITICAL RULE: If ANY model succeeded at this task (see cross-model summary above), then this task has NO environmental barrier. The failure MUST be scored as 0 (capability issue).
+**IF ANOTHER MODEL SUCCEEDED:**
+Do NOT automatically assume score=0. Instead, analyze:
+1. HOW did the successful model solve it? What specific approach/commands did it use?
+2. Is this approach GENERALLY AVAILABLE to other agents? (legitimate alternative path)
+3. Or was it LUCK/CIRCUMVENTION? (random success, timing, non-deterministic behavior)
+4. Could a well-designed agent reasonably discover and use this approach?
 
-Only score 1 (environmental barrier) if:
-1. ALL models failed at this task, AND
-2. The failures show evidence of an IMPASSABLE infrastructure defect that no agent could overcome
+If the success was through a legitimate, reproducible approach → score=0 (capability issue)
+If the success appears to be luck/circumvention/non-reproducible → still might be env barrier
+
+**IF ALL MODELS FAILED:**
+Do NOT automatically assume env barrier. Instead, analyze:
+1. What approaches did the models try?
+2. Are there UNTRIED approaches that could plausibly work?
+3. Is the failure due to a FUNDAMENTAL infrastructure limitation (no R installed, permissions blocked)?
+4. Or is it due to models not being clever enough to find a working approach?
+
+Only score=1 if there is truly NO viable path regardless of agent skill.
+
+**SCORING CRITERIA:**
+- score=1 (Environmental Barrier): Infrastructure makes task MECHANICALLY IMPOSSIBLE
+  - Missing runtime (R/Python) that cannot be installed
+  - Permission denied on required operations with no workaround
+  - Missing benchmark data that should have been provided
+  - Sandbox restrictions with no alternative path
+
+- score=0 (Capability Issue): Agent COULD succeed with better approach
+  - A working approach exists (even if models didn't find it)
+  - Package installation possible but agent used wrong method
+  - File exists but agent looked in wrong place
+  - Tool limitations have workarounds the agent didn't try
 
 Provide your response as a JSON object with:
 - "score": 0 or 1
-- "explanation": detailed explanation citing evidence
-- "cross_model_reasoning": how the cross-model context influenced your decision
+- "explanation": detailed explanation citing specific evidence
+- "cross_model_reasoning": how you weighed the cross-model evidence
+- "success_analysis": (if applicable) analysis of how/why another model succeeded
+- "alternative_paths": what approaches could potentially work but weren't tried
 
 Respond with ONLY the JSON object, no other text."""
 
@@ -471,6 +515,19 @@ def main():
     # Collect all results
     all_results = []
 
+    # Build a map to find successful model's conversation for a task
+    def get_successful_conversation(task_id: str) -> Optional[str]:
+        """Get conversation from a model that succeeded at this task."""
+        summary = task_summaries.get(task_id)
+        if not summary or not summary.any_succeeded:
+            return None
+
+        # Find a trace that succeeded
+        for t in model_traces:
+            if task_id in t.successful_tasks and task_id in t.task_conversations:
+                return format_conversation(t.task_conversations[task_id], max_chars=8000)
+        return None
+
     for trace in evaluate_traces:
         log(f"\nEvaluating model: {trace.model_name}", prefix)
 
@@ -492,24 +549,7 @@ def main():
                 log(f"    No summary found, skipping", prefix)
                 continue
 
-            # Quick decision: if any model succeeded, this is NOT an env barrier
-            if summary.any_succeeded and task_id in trace.failed_tasks:
-                log(f"    Quick decision: score=0 (other models succeeded)", prefix)
-                result = {
-                    "task_id": task_id,
-                    "model": trace.model_name,
-                    "score": 0,
-                    "explanation": f"Not an environmental barrier: {', '.join(summary.models_succeeded)} succeeded at this task.",
-                    "cross_model_reasoning": "Task solvable by other models, so failure is capability issue.",
-                    "any_model_succeeded": True,
-                    "models_succeeded": summary.models_succeeded,
-                    "models_failed": summary.models_failed,
-                    "quick_decision": True,
-                }
-                all_results.append(result)
-                continue
-
-            # Full evaluation needed (all models failed or checking successful task)
+            # Get the evaluated model's conversation
             conversation = ""
             if task_id in trace.task_conversations:
                 conversation = format_conversation(trace.task_conversations[task_id])
@@ -518,6 +558,14 @@ def main():
                 log(f"    No conversation found, skipping", prefix)
                 continue
 
+            # Get successful model's conversation for comparison (if any model succeeded)
+            successful_conv = None
+            if summary.any_succeeded and task_id in trace.failed_tasks:
+                successful_conv = get_successful_conversation(task_id)
+                if successful_conv:
+                    log(f"    Including successful model's approach for analysis", prefix)
+
+            # Always do full evaluation - no quick decisions
             result = evaluate_with_cross_model_context(
                 client=client,
                 model=args.model,
@@ -526,6 +574,7 @@ def main():
                 task_summary=summary,
                 conversation=conversation,
                 evaluated_model=trace.model_name,
+                successful_conversation=successful_conv,
             )
 
             log(f"    Score: {result['score']}", prefix)

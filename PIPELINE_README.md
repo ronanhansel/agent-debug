@@ -12,20 +12,51 @@ The pipeline consists of these stages:
 5. **Weave Extraction** - Pull conversation logs from W&B
 6. **Merge** - Combine individual traces into a single trace
 
+## Baseline Traces
+
+The initial evaluation traces (no prefix) are in `traces/`:
+
+```bash
+# GPT-4.1
+traces/corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json
+
+# O3-medium
+traces/corebench_hard_hal_generalist_agento3medium_1755626315_UPLOAD.json
+
+# O4-mini-high
+traces/corebench_hard_hal_generalist_agento4minihigh_1755580383_UPLOAD.json
+
+# O4-mini-low
+traces/corebench_hard_hal_generalist_agento4minilow_1755608756_UPLOAD.json
+```
+
 ## Quick Start
 
 ```bash
-# 1. Check current status
-python scripts/pipeline.py status --prefix orange
+# 1. Run cross-model rubric evaluation (recommended)
+python scripts/cross_model_rubric.py \
+  --traces \
+    traces/corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json \
+    traces/corebench_hard_hal_generalist_agento3medium_1755626315_UPLOAD.json \
+    traces/corebench_hard_hal_generalist_agento4minihigh_1755580383_UPLOAD.json \
+    traces/corebench_hard_hal_generalist_agento4minilow_1755608756_UPLOAD.json \
+  --prefix iter1_ \
+  --failed-only
 
-# 2. Run rubric evaluation on a trace with conversation logs
-python scripts/pipeline.py rubric --prefix orange --trace-file traces/baseline.json --failed-only
+# 2. Or run single-model rubric evaluation
+python scripts/pipeline.py rubric \
+  --prefix iter1_ \
+  --trace-file traces/corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json \
+  --failed-only
 
-# 3. Extract Weave traces (if trace lacks raw_logging_results)
-python scripts/pipeline.py extract --prefix orange --project hal-agent-debug
+# 3. Check current status
+python scripts/pipeline.py status --prefix iter1_
 
-# 4. Merge individual traces
-python scripts/pipeline.py merge --prefix orange
+# 4. Extract Weave traces (if trace lacks raw_logging_results)
+python scripts/pipeline.py extract --prefix iter1_ --project hal-agent-debug
+
+# 5. Merge individual traces
+python scripts/pipeline.py merge --prefix iter1_
 ```
 
 ## Prerequisites
@@ -166,43 +197,46 @@ Example prefixes:
 ## Full Pipeline Example
 
 ```bash
-# 1. Start with baseline trace (already has raw_logging_results)
-BASELINE="traces/corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json"
+# Baseline traces (copy-paste ready)
+GPT41="traces/corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json"
+O3="traces/corebench_hard_hal_generalist_agento3medium_1755626315_UPLOAD.json"
+O4MINI_HIGH="traces/corebench_hard_hal_generalist_agento4minihigh_1755580383_UPLOAD.json"
+O4MINI_LOW="traces/corebench_hard_hal_generalist_agento4minilow_1755608756_UPLOAD.json"
 
-# 2. Run rubric evaluation to identify failures
-python scripts/pipeline.py rubric \
+# 1. Run cross-model rubric evaluation (recommended)
+python scripts/cross_model_rubric.py \
+  --traces $GPT41 $O3 $O4MINI_HIGH $O4MINI_LOW \
   --prefix iter1_ \
-  --trace-file $BASELINE \
   --failed-only
 
-# 3. Review rubric results
-cat rubrics_output/environmental_barrier/iter1_*.csv
+# 2. Review rubric results
+cat rubrics_output/environmental_barrier_cross_model/iter1_*.csv
 
-# 4. Generate fixes for capability issues (score=0)
+# 3. Generate fixes for capability issues (score=0)
 python scripts/pipeline.py inspect \
-  --trace-file $BASELINE \
+  --trace-file $GPT41 \
   --benchmark corebench_hard
 
-# 5. Apply fixes and re-run (creates new traces with prefix)
+# 4. Apply fixes and re-run (creates new traces with prefix)
 python scripts/pipeline.py fix \
   --prefix iter1_ \
   --docker
 
-# 6. Extract conversation logs from Weave
+# 5. Extract conversation logs from Weave
 python scripts/pipeline.py extract \
   --prefix iter1_ \
   --project hal-agent-debug
 
-# 7. Merge new traces
+# 6. Merge new traces
 python scripts/pipeline.py merge --prefix iter1_
 
-# 8. Re-evaluate with rubrics
-python scripts/pipeline.py rubric \
+# 7. Re-evaluate with cross-model rubrics
+python scripts/cross_model_rubric.py \
+  --traces traces/iter1_MERGED_*_UPLOAD.json \
   --prefix iter1_round2_ \
-  --trace-file traces/iter1_MERGED_*_UPLOAD.json \
   --failed-only
 
-# 9. Compare iterations
+# 8. Compare iterations
 python scripts/pipeline.py status --prefix iter1_
 ```
 
@@ -293,7 +327,8 @@ Individual traces likely lack `raw_logging_results`. Extract from Weave first.
 | File | Purpose |
 |------|---------|
 | `scripts/pipeline.py` | Unified CLI for all pipeline operations |
-| `scripts/simple_rubric_eval.py` | Lightweight rubric evaluation |
+| `scripts/cross_model_rubric.py` | Cross-model rubric evaluation (recommended) |
+| `scripts/simple_rubric_eval.py` | Single-model rubric evaluation |
 | `scripts/merge_traces.py` | Merge individual traces |
 | `scripts/extract_weave_traces.py` | Extract from W&B Weave |
 | `scripts/item_fixer.py` | Analyze failures and generate fixes |
@@ -307,42 +342,49 @@ For the most accurate environmental barrier detection, use cross-model evaluatio
 ```bash
 python scripts/cross_model_rubric.py \
   --traces \
-    traces/baseline_gpt41.json \
-    traces/baseline_o3.json \
-    traces/baseline_o4mini_high.json \
-    traces/baseline_o4mini_low.json \
+    traces/corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json \
+    traces/corebench_hard_hal_generalist_agento3medium_1755626315_UPLOAD.json \
+    traces/corebench_hard_hal_generalist_agento4minihigh_1755580383_UPLOAD.json \
+    traces/corebench_hard_hal_generalist_agento4minilow_1755608756_UPLOAD.json \
   --prefix iter1_ \
   --failed-only
 ```
 
 ### How It Works
 
-**Key insight**: If ANY model succeeded at a task, that task has NO environmental barrier.
+**Nuanced evaluation**: The script uses cross-model context to make careful determinations.
 
 1. **Phase 1: Build Task Success Map**
    - Scan all model traces
    - Identify which tasks each model passed/failed
-   - Extract error patterns from each model
+   - Extract error patterns and approaches tried from each model
 
-2. **Phase 2: Context-Aware Evaluation**
-   - **Quick decisions**: If any model succeeded → score=0 (capability issue)
-   - **Deep analysis**: If ALL models failed → detailed rubric evaluation with cross-model context
+2. **Phase 2: Nuanced Evaluation**
+   - **If another model succeeded**: Include successful model's conversation and analyze HOW it succeeded
+     - Was it a legitimate, reproducible approach? → score=0 (capability issue)
+     - Was it luck/circumvention/non-reproducible? → might still be env barrier
+   - **If ALL models failed**: Analyze if there are untried approaches
+     - Are there viable paths the models didn't try? → score=0 (capability issue)
+     - Is it truly mechanically impossible? → score=1 (env barrier)
 
 ### Benefits
 
 - **More accurate**: Uses evidence from multiple models
-- **Faster**: Quick decisions for tasks where any model succeeded
-- **Better reasoning**: Rubric sees "Model A succeeded, so this is NOT an env barrier"
+- **Nuanced**: Doesn't assume "success = not env barrier" or "all failed = env barrier"
+- **Better reasoning**: Includes successful model's approach for comparison analysis
 
 ### Example Output
 
 ```
 Task summary: 45 total tasks
-  - 22 tasks solved by at least one model (NOT env barriers)
-  - 23 tasks failed by ALL models (potential env barriers)
+  - 23 tasks solved by at least one model
+  - 22 tasks failed by ALL models (potential env barriers)
 
-Quick decisions (other model succeeded): 22
-Full evaluations needed: 23
+Evaluating capsule-3449234...
+  Score: 0.0
+  Cross-model reasoning: "All models failed, but the failure signatures are
+  consistent with missing matplotlib and path handling mistakes... does not
+  prove an environmental barrier"
 ```
 
 ### Summary Mode
@@ -351,8 +393,28 @@ Preview the cross-model summary without running evaluation:
 
 ```bash
 python scripts/cross_model_rubric.py \
-  --traces traces/*.json \
+  --traces \
+    traces/corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json \
+    traces/corebench_hard_hal_generalist_agento3medium_1755626315_UPLOAD.json \
+    traces/corebench_hard_hal_generalist_agento4minihigh_1755580383_UPLOAD.json \
+    traces/corebench_hard_hal_generalist_agento4minilow_1755608756_UPLOAD.json \
   --summary-only
+```
+
+### Evaluate Single Model's Failures
+
+To evaluate only one model's failures (with cross-model context):
+
+```bash
+python scripts/cross_model_rubric.py \
+  --traces \
+    traces/corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json \
+    traces/corebench_hard_hal_generalist_agento3medium_1755626315_UPLOAD.json \
+    traces/corebench_hard_hal_generalist_agento4minihigh_1755580383_UPLOAD.json \
+    traces/corebench_hard_hal_generalist_agento4minilow_1755608756_UPLOAD.json \
+  --prefix iter1_ \
+  --evaluate-model gpt-4.1 \
+  --failed-only
 ```
 
 ## Models
