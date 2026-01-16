@@ -1,72 +1,29 @@
 {
-  "gpt-4.1": {
-    "model_name": "openai/gpt-4.1-2025-04-14",
-    "baseline_trace": "traces/corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json",
-    "agent_args": {
-      "model_name": "openai/gpt-4.1-2025-04-14",
-      "max_steps": 40
-    }
+  "openai/o4-mini-2025-04-16": {
+    "model_id": "openai/o4-mini_2025-04-16",
+    "short_name": "o4-mini-04-16",
+    "baseline_trace": "corebench_hard_hal_generalist_agento4minihigh_1755580383_UPLOAD.json",
+    "reasoning_effort": "high",
+    "max_steps": 40
   },
-  "gpt-4.1-04-14": {
-    "model_name": "openai/gpt-4.1-2025-04-14",
-    "baseline_trace": "traces/corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json",
-    "agent_args": {
-      "model_name": "openai/gpt-4.1-2025-04-14",
-      "max_steps": 40
-    }
+  "o4-mini-2025-04-16": {
+    "model_id": "openai/o4-mini_2025-04-16",
+    "short_name": "o4-mini-04-16",
+    "baseline_trace": "corebench_hard_hal_generalist_agento4minilow_1755608756_UPLOAD.json",
+    "reasoning_effort": "low",
+    "max_steps": 40
   },
-  "o3": {
-    "model_name": "o3-2025-04-16",
-    "baseline_trace": "traces/corebench_hard_hal_generalist_agento3medium_1755626315_UPLOAD.json",
-    "agent_args": {
-      "model_name": "o3-2025-04-16",
-      "reasoning_effort": "medium",
-      "max_steps": 40
-    }
+  "openai/o3-2025-04-16": {
+    "model_id": "openai/o3_2025-04-16",
+    "short_name": "o3-04-16",
+    "baseline_trace": "corebench_hard_hal_generalist_agento3medium_1755626315_UPLOAD.json",
+    "reasoning_effort": "medium",
+    "max_steps": 40
   },
-  "o3-04-16": {
-    "model_name": "o3-2025-04-16",
-    "baseline_trace": "traces/corebench_hard_hal_generalist_agento3medium_1755626315_UPLOAD.json",
-    "agent_args": {
-      "model_name": "o3-2025-04-16",
-      "reasoning_effort": "medium",
-      "max_steps": 40
-    }
-  },
-  "o4-mini-high": {
-    "model_name": "openai/o4-mini-2025-04-16",
-    "baseline_trace": "traces/corebench_hard_hal_generalist_agento4minihigh_1755580383_UPLOAD.json",
-    "agent_args": {
-      "model_name": "openai/o4-mini-2025-04-16",
-      "reasoning_effort": "high",
-      "max_steps": 40
-    }
-  },
-  "o4-mini-04-16": {
-    "model_name": "openai/o4-mini-2025-04-16",
-    "baseline_trace": "traces/corebench_hard_hal_generalist_agento4minihigh_1755580383_UPLOAD.json",
-    "agent_args": {
-      "model_name": "openai/o4-mini-2025-04-16",
-      "reasoning_effort": "high",
-      "max_steps": 40
-    }
-  },
-  "o4-mini-low": {
-    "model_name": "openai/o4-mini-2025-04-16",
-    "baseline_trace": "traces/corebench_hard_hal_generalist_agento4minilow_1755608756_UPLOAD.json",
-    "agent_args": {
-      "model_name": "openai/o4-mini-2025-04-16",
-      "reasoning_effort": "low",
-      "max_steps": 40
-    }
-  },
-  "gpt-5": {
-    "model_name": "gpt-5",
-    "baseline_trace": "traces/corebench_hard_hal_generalist_agentgpt5medium_1756137340_UPLOAD.json",
-    "agent_args": {
-      "model_name": "gpt-5",
-      "reasoning_effort": "medium",
-      "max_steps": 40
-    }
+  "openai/gpt-4.1-2025-04-14": {
+    "model_id": "openai/gpt-4.1_2025-04-14",
+    "short_name": "gpt-4.1-04-14",
+    "baseline_trace": "corebench_hard_hal_generalist_agentgpt41_1755644685_UPLOAD.json",
+    "max_steps": 40
   }
 }

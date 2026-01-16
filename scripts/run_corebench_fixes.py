@@ -27,7 +27,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -237,75 +237,69 @@ def load_model_config(path: Path) -> Dict[str, Dict[str, Any]]:
     return data
 
 
-def load_rubric_task_models(csv_path: Path) -> Dict[str, str]:
-    """Load rubric CSV and return mapping of task_id -> model name."""
+def load_rubric_task_models(csv_path: Path) -> List[Tuple[str, str]]:
+    """Load rubric CSV and return list of (task_id, model) pairs for all failed models."""
     import csv
-    task_models: Dict[str, str] = {}
+    task_model_pairs: List[Tuple[str, str]] = []
+    seen: set = set()
     if not csv_path.exists():
-        return task_models
+        return task_model_pairs
     with csv_path.open("r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
             task_id = row.get("task_id", "").strip()
-            model = row.get("model", "").strip()
-            if task_id and model:
-                # Only keep first occurrence (in case of duplicates)
-                if task_id not in task_models:
-                    task_models[task_id] = model
-    return task_models
+            # Get all models that failed from the models_failed column (semicolon-separated)
+            models_failed = row.get("models_failed", "").strip()
+            if task_id and models_failed:
+                for model in models_failed.split(";"):
+                    model = model.strip()
+                    if model and (task_id, model) not in seen:
+                        task_model_pairs.append((task_id, model))
+                        seen.add((task_id, model))
+    return task_model_pairs
 
 
-def get_agent_args_for_task(
-    task_id: str,
-    task_models: Dict[str, str],
+def get_agent_args_for_model(
+    model_key: str,
     model_config: Dict[str, Dict[str, Any]],
-    default_agent_args: Dict[str, object],
-    forced_model: str | None = None,
-) -> Dict[str, object]:
-    """Get the agent_args for a specific task based on which model failed.
+) -> Optional[Dict[str, object]]:
+    """Get the agent_args for a specific model.
 
     Args:
-        task_id: The capsule ID
-        task_models: Mapping of task_id -> model name from rubric CSV
+        model_key: The model name/key to look up
         model_config: The model_to_baseline.json config
-        default_agent_args: Fallback agent_args if no model match
-        forced_model: If set, use this model for all tasks
 
     Returns:
         Agent args dict with model_name, reasoning_effort, etc.
+        Returns None if model not found in config.
     """
-    # Determine which model to use
-    if forced_model:
-        model_key = forced_model
-    else:
-        model_key = task_models.get(task_id)
-
     if not model_key:
-        print(f"[model] No model found for {task_id}, using default agent_args")
-        return default_agent_args.copy()
+        return None
 
     # Look up model config
     model_entry = model_config.get(model_key)
     if not model_entry:
-        # Try partial match (e.g., "gpt-4.1-04-14" -> "gpt-4.1")
+        # Try matching by short_name
         for key, entry in model_config.items():
-            if key in model_key or model_key in key:
+            if entry.get("short_name") == model_key:
                 model_entry = entry
-                print(f"[model] Partial match: '{model_key}' -> '{key}'")
+                print(f"[model] Short name match: '{model_key}' -> '{key}'")
                 break
 
     if not model_entry:
-        print(f"[model] Model '{model_key}' not found in config, using default agent_args")
-        return default_agent_args.copy()
+        return None
 
-    # Build agent_args from model config
-    agent_args = model_entry.get("agent_args", {}).copy()
-    if not agent_args:
-        print(f"[model] No agent_args in model config for '{model_key}', using default")
-        return default_agent_args.copy()
+    # Build agent_args entirely from model config (no fallback)
+    if "model_id" not in model_entry:
+        return None
 
-    print(f"[model] Task {task_id} will use model: {agent_args.get('model_name')} "
-          f"(reasoning_effort={agent_args.get('reasoning_effort', 'N/A')})")
+    agent_args: Dict[str, object] = {
+        "model_name": model_entry["model_id"],
+    }
+    if "reasoning_effort" in model_entry:
+        agent_args["reasoning_effort"] = model_entry["reasoning_effort"]
+    if "max_steps" in model_entry:
+        agent_args["max_steps"] = model_entry["max_steps"]
     return agent_args
 
 
@@ -1095,33 +1089,31 @@ def main() -> None:
         raise SystemExit("--rubric-model is required unless --skip-rubrics is set.")
     fixes_root = Path(args.fixes_root)
     agent_dir = Path(args.agent_dir)
-    agent_args_path = Path(args.agent_args)
     dataset_source = resolve_corebench_dataset_path(args.corebench_dataset)
     rubric_output_dir = REPO_ROOT / "rubrics_output"
     rubric_output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load default agent_args (fallback if no model match)
-    default_agent_args = load_agent_args(agent_args_path)
-    default_agent_args["benchmark_name"] = args.benchmark
-
-    # Load model config for model-specific agent_args
+    # Load model config (required - all models must be defined here)
     model_config_path = Path(args.model_config)
     model_config = load_model_config(model_config_path)
     if model_config:
         print(f"[model] Loaded {len(model_config)} model configs from {model_config_path.name}")
+        print(f"[model] Available models: {list(model_config.keys())}")
     else:
-        print(f"[model] No model config found, will use default agent_args for all tasks")
+        print(f"[model] ERROR: No model config found at {model_config_path}")
+        print(f"[model] All models must be defined in model_to_baseline.json")
+        return
 
-    # Load task->model mapping from rubric CSV
-    task_models: Dict[str, str] = {}
+    # Load task->model pairs from rubric CSV (each task can have multiple models)
+    task_model_pairs: List[Tuple[str, str]] = []
     if args.rubric_csv:
         rubric_csv_path = Path(args.rubric_csv)
-        task_models = load_rubric_task_models(rubric_csv_path)
-        print(f"[model] Loaded {len(task_models)} task->model mappings from {rubric_csv_path.name}")
+        task_model_pairs = load_rubric_task_models(rubric_csv_path)
+        print(f"[model] Loaded {len(task_model_pairs)} (task, model) pairs from {rubric_csv_path.name}")
     elif args.model:
         print(f"[model] Using forced model '{args.model}' for all tasks")
     else:
-        print(f"[model] No --rubric-csv or --model specified, will use default agent_args")
+        print(f"[model] WARNING: No --rubric-csv or --model specified, tasks without model match will be skipped")
 
     if not args.skip_install:
         install_agent_requirements(agent_dir)
@@ -1130,36 +1122,67 @@ def main() -> None:
     tasks_data = load_corebench_dataset(dataset_source)
     capsule_map = {item["capsule_id"]: item for item in tasks_data}
 
+    # Build set of available fix capsule IDs
     fix_dirs = sorted([p for p in fixes_root.iterdir() if p.is_dir()])
+    available_fixes = {p.name for p in fix_dirs}
     if args.task_ids:
         requested = set(args.task_ids)
-        fix_dirs = [p for p in fix_dirs if p.name in requested]
-        missing = requested - {p.name for p in fix_dirs}
+        available_fixes = available_fixes & requested
+        missing = requested - available_fixes
         if missing:
             print(f"[WARN] Requested task(s) not found under {fixes_root}: {', '.join(sorted(missing))}")
-    if not fix_dirs:
+    if not available_fixes:
         print(f"No fix directories found in {fixes_root}")
         return
+    print(f"[fixes] Found {len(available_fixes)} fix directories")
 
     try:
         fixes_base = fixes_root.parent
-        # capsule_jobs now includes per-task agent_args: (capsule_id, payload, env_override, task_agent_args)
+        # capsule_jobs: (capsule_id, payload, env_override, task_agent_args)
         capsule_jobs: List[tuple[str, str, Dict[str, str] | None, Dict[str, object]]] = []
         conda_env = "hal"
-        for fix_dir in fix_dirs:
-            capsule_id = fix_dir.name
-            print(f"\n=== Queuing {capsule_id} ===")
+
+        # If forced model, expand to all fixes with that model
+        if args.model:
+            task_model_pairs = [(fix_id, args.model) for fix_id in available_fixes]
+            print(f"[model] Forced model '{args.model}' for all {len(task_model_pairs)} tasks")
+
+        # Cache loaded fixes to avoid reloading for same capsule with different models
+        fix_cache: Dict[str, Any] = {}
+
+        for capsule_id, model_key in task_model_pairs:
+            # Skip if no fix for this capsule
+            if capsule_id not in available_fixes:
+                continue
+
+            # Get agent_args for this model
+            task_agent_args = get_agent_args_for_model(model_key, model_config)
+            if task_agent_args is None:
+                print(f"[skip] Skipping {capsule_id} + {model_key} - model not in config")
+                continue
+
+            print(f"\n=== Queuing {capsule_id} + {model_key} ===")
+            print(f"[model] Will use: {task_agent_args.get('model_name')} "
+                  f"(reasoning_effort={task_agent_args.get('reasoning_effort', 'N/A')})")
+
             if capsule_id not in capsule_map:
-                print(
-                    f"[WARN] Capsule {capsule_id} not found in dataset {dataset_source}. "
-                    "Skipping this fix folder."
-                )
+                print(f"[WARN] Capsule {capsule_id} not found in dataset. Skipping.")
                 continue
-            try:
-                fix = load_fix_package(capsule_id, fixes_root=fixes_base, benchmark=args.benchmark)
-            except Exception as exc:
-                print(f"[WARN] Failed to load fix for {capsule_id}: {exc}. Skipping.")
+
+            # Load fix (cached)
+            if capsule_id not in fix_cache:
+                try:
+                    fix_cache[capsule_id] = load_fix_package(
+                        capsule_id, fixes_root=fixes_base, benchmark=args.benchmark
+                    )
+                except Exception as exc:
+                    print(f"[WARN] Failed to load fix for {capsule_id}: {exc}. Skipping.")
+                    fix_cache[capsule_id] = None
+
+            fix = fix_cache[capsule_id]
+            if fix is None:
                 continue
+
             input_override = fix.input_override if fix else None
             env_override = fix.env_override if fix else None
             if env_override:
@@ -1168,14 +1191,6 @@ def main() -> None:
                 original_tasks=capsule_map,
                 capsule_id=capsule_id,
                 input_override=input_override,
-            )
-            # Get model-specific agent_args for this task
-            task_agent_args = get_agent_args_for_task(
-                task_id=capsule_id,
-                task_models=task_models,
-                model_config=model_config,
-                default_agent_args=default_agent_args,
-                forced_model=args.model,
             )
             task_agent_args["benchmark_name"] = args.benchmark
             capsule_jobs.append((capsule_id, payload, env_override, task_agent_args))
