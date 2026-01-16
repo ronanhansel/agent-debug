@@ -206,7 +206,13 @@ def _split_packages(raw: str | None) -> List[str]:
 
 
 def _conda_executable() -> str | None:
-    return shutil.which("conda") or os.environ.get("CONDA_EXE")
+    # Prefer mamba over conda for faster dependency resolution
+    # Also check in current env's bin directory
+    env_bin = Path(sys.prefix) / "bin"
+    mamba_in_env = env_bin / "mamba"
+    if mamba_in_env.exists():
+        return str(mamba_in_env)
+    return shutil.which("mamba") or shutil.which("conda") or os.environ.get("CONDA_EXE")
 
 
 def _conda_spec_name(spec: str) -> str:
@@ -232,6 +238,15 @@ def _conda_available_package_names(conda: str, *, channels: List[str], names: Li
     except json.JSONDecodeError:
         return None
     available: set[str] = set()
+    # Handle mamba format: {"result": {"pkgs": [{"name": "...", ...}, ...]}}
+    if "result" in payload and isinstance(payload.get("result"), dict):
+        pkgs = payload["result"].get("pkgs", [])
+        if isinstance(pkgs, list):
+            for pkg in pkgs:
+                if isinstance(pkg, dict) and pkg.get("name") in unique:
+                    available.add(pkg["name"])
+        return available
+    # Handle conda format: {"package_name": [...], ...}
     for name in unique:
         entries = payload.get(name)
         if isinstance(entries, list) and entries:
@@ -257,10 +272,17 @@ def _install_conda_packages(
     packages: List[str],
 ) -> None:
     conda = _conda_executable()
+    conda_name = Path(conda).name if conda else "conda"
     if not conda:
         raise FileNotFoundError("conda executable not found (needed for HAL_CONDA_PACKAGES).")
     if not packages:
+        print(f"[setup][conda] No packages to install")
         return
+
+    print(f"[setup][conda] Using {conda_name} from: {conda}")
+    print(f"[setup][conda] Preparing to install {len(packages)} packages into env '{env_name}'")
+    print(f"[setup][conda] Channels: {', '.join(channels)}")
+    print(f"[setup][conda] Packages: {', '.join(packages[:10])}{'...' if len(packages) > 10 else ''}")
 
     lock_dir = REPO_ROOT / "log" / "conda_installs"
     lock_dir.mkdir(parents=True, exist_ok=True)
@@ -273,38 +295,58 @@ def _install_conda_packages(
     lock_path = lock_dir / f"{env_name}.lock"
 
     if sentinel.exists():
+        print(f"[setup][conda] Cache hit: packages already installed (sentinel: {sentinel.name})")
         return
+
+    print(f"[setup][conda] Cache miss: will install packages (cache_id: {cache_id})")
 
     # Best-effort filter: skip package specs whose names are not present in the configured channels.
     # Some environments mirror only a subset of conda-forge (e.g. no xorg packages).
+    print(f"[setup][conda] Checking package availability in channels...")
     names = [_conda_spec_name(spec) for spec in packages]
     available = _conda_available_package_names(conda, channels=channels, names=names)
     if available is not None:
+        print(f"[setup][conda] Found {len(available)}/{len(names)} packages available")
         filtered = [spec for spec in packages if _conda_spec_name(spec) in available]
         dropped = sorted({spec for spec in packages if spec not in filtered})
         if dropped:
             print(f"[setup][conda] Skipping unavailable package specs: {', '.join(dropped)}")
         packages = filtered
         if not packages:
+            print(f"[setup][conda] No packages available to install, creating sentinel")
             sentinel.write_text("ok (no available packages)\n", encoding="utf-8")
             return
+    else:
+        print(f"[setup][conda] Could not check availability, proceeding with all packages")
 
+    print(f"[setup][conda] Acquiring install lock...")
     lock_handle = lock_path.open("a", encoding="utf-8")
     try:
         try:
             import fcntl  # type: ignore
 
             # Serialize conda installs across concurrent specs without hanging forever on flock().
+            wait_count = 0
             while True:
                 try:
                     fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
                 except BlockingIOError:
+                    wait_count += 1
+                    if wait_count == 1:
+                        print(f"[setup][conda] Waiting for lock (another install in progress)...")
+                    elif wait_count % 20 == 0:  # Every 10 seconds
+                        print(f"[setup][conda] Still waiting for lock ({wait_count * 0.5:.0f}s elapsed)...")
                     time.sleep(0.5)
+            if wait_count > 0:
+                print(f"[setup][conda] Lock acquired after {wait_count * 0.5:.1f}s")
+            else:
+                print(f"[setup][conda] Lock acquired immediately")
         except Exception:
-            pass
+            print(f"[setup][conda] Lock not available on this platform, proceeding without lock")
 
         if sentinel.exists():
+            print(f"[setup][conda] Another process already installed packages, skipping")
             return
 
         def run_install(current: List[str]) -> subprocess.CompletedProcess[str]:
@@ -312,31 +354,45 @@ def _install_conda_packages(
             for channel in channels:
                 cmd += ["-c", channel]
             cmd += current
-            print(f"[setup][conda] {' '.join(map(str, cmd))}")
-            return subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+            print(f"[setup][conda] Running: {' '.join(map(str, cmd))}")
+            print(f"[setup][conda] Installing {len(current)} packages (this may take several minutes)...")
+            start_time = time.time()
+            result = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True)
+            elapsed = time.time() - start_time
+            print(f"[setup][conda] Install command finished in {elapsed:.1f}s (exit code: {result.returncode})")
+            return result
 
         remaining = list(packages)
-        for _attempt in range(2):
+        for attempt in range(2):
+            print(f"[setup][conda] Attempt {attempt + 1}/2: installing {len(remaining)} packages...")
             proc = run_install(remaining)
             if proc.returncode == 0:
+                print(f"[setup][conda] SUCCESS: All packages installed successfully")
+                print(f"[setup][conda] Creating sentinel file: {sentinel.name}")
                 sentinel.write_text("ok\n", encoding="utf-8")
                 return
             output = (proc.stdout or "") + "\n" + (proc.stderr or "")
             missing = _drop_missing_packages_from_conda_output(output)
             if not missing:
+                print(f"[setup][conda] FAILED: Install failed with no recoverable missing packages")
+                print(f"[setup][conda] stdout: {proc.stdout[:500] if proc.stdout else '(empty)'}...")
+                print(f"[setup][conda] stderr: {proc.stderr[:500] if proc.stderr else '(empty)'}...")
                 raise subprocess.CalledProcessError(proc.returncode, proc.args, output=proc.stdout, stderr=proc.stderr)
             missing_names = {_conda_spec_name(item) for item in missing if item}
             new_remaining = [
                 spec for spec in remaining if _conda_spec_name(spec) not in missing_names and spec not in missing
             ]
             if new_remaining == remaining:
+                print(f"[setup][conda] FAILED: Could not reduce package list, giving up")
                 raise subprocess.CalledProcessError(proc.returncode, proc.args, output=proc.stdout, stderr=proc.stderr)
-            print(f"[setup][conda] Dropping missing packages and retrying: {', '.join(sorted(missing_names))}")
+            print(f"[setup][conda] Dropping {len(missing_names)} missing packages and retrying: {', '.join(sorted(missing_names))}")
             remaining = new_remaining
             if not remaining:
+                print(f"[setup][conda] All packages were unavailable, creating sentinel")
                 sentinel.write_text("ok (all packages unavailable)\n", encoding="utf-8")
                 return
 
+        print(f"[setup][conda] FAILED: Exhausted all retry attempts")
         raise subprocess.CalledProcessError(proc.returncode, proc.args, output=proc.stdout, stderr=proc.stderr)
     finally:
         try:
@@ -497,7 +553,7 @@ def install_agent_requirements(agent_dir: Path) -> None:
     requirements = agent_dir / "requirements.txt"
     if not requirements.exists():
         raise FileNotFoundError(f"requirements.txt not found at {requirements}")
-    print(f"[setup] Installing requirements from {requirements}")
+    print(f"[setup][pip] Checking requirements from {requirements}")
     req_fingerprint = hashlib.sha256(
         (sys.executable + "\n" + requirements.read_text(encoding="utf-8")).encode("utf-8")
     ).hexdigest()[:16]
@@ -506,41 +562,51 @@ def install_agent_requirements(agent_dir: Path) -> None:
     sentinel.parent.mkdir(parents=True, exist_ok=True)
     lock_handle = lock_path.open("w", encoding="utf-8")
     try:
+        print(f"[setup][pip] Acquiring pip install lock...")
         try:
             import fcntl  # type: ignore
 
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            print(f"[setup][pip] Lock acquired")
         except Exception:
             # Best-effort: on platforms without fcntl, run without a lock.
-            pass
+            print(f"[setup][pip] Lock not available, proceeding without lock")
 
         if sentinel.exists():
-            print(f"[setup] Requirements already installed (sentinel: {sentinel.name}); skipping.")
+            print(f"[setup][pip] Cache hit: requirements already installed (sentinel: {sentinel.name})")
             return
 
+        print(f"[setup][pip] Cache miss: installing requirements (fingerprint: {req_fingerprint})")
         env = os.environ.copy()
         env.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
         env.setdefault("PIP_NO_INPUT", "1")
 
         try:
+            print(f"[setup][pip] Running: pip install -r {requirements}")
+            start_time = time.time()
             subprocess.run(
                 [sys.executable, "-m", "pip", "install", "-r", str(requirements)],
                 check=True,
                 env=env,
             )
+            elapsed = time.time() - start_time
+            print(f"[setup][pip] SUCCESS: Requirements installed in {elapsed:.1f}s")
         except subprocess.CalledProcessError as exc:
             # Common in parallel runs if the env is mid-mutation or already partially corrupted.
-            print(f"[WARN] pip install failed (attempting minimal repair): {exc}")
+            print(f"[setup][pip] WARN: pip install failed, attempting minimal repair: {exc}")
             subprocess.run(
                 [sys.executable, "-m", "pip", "install", "--ignore-installed", "rich"],
                 check=False,
                 env=env,
             )
+            print(f"[setup][pip] Retrying pip install after repair...")
             subprocess.run(
                 [sys.executable, "-m", "pip", "install", "-r", str(requirements)],
                 check=True,
                 env=env,
             )
+            print(f"[setup][pip] SUCCESS: Requirements installed after repair")
+        print(f"[setup][pip] Creating sentinel: {sentinel.name}")
         sentinel.write_text("ok\n", encoding="utf-8")
     finally:
         try:
