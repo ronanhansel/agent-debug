@@ -1,3 +1,0 @@
-{
-  "problem_statement_suffix": "\n\nCRITICAL ENVIRONMENT RESTRICTIONS:\n- DO NOT run conda install - ToS acceptance is blocked.\n- DO NOT use Python open() function - it is FORBIDDEN.\n- Use bash commands for file writing: echo, cat << EOF, etc.\n- Use approved file editing tools (edit_file, write_file) instead of open().\n- R packages (data.table, ggplot2, zoo, lab) may be missing.\n- Check installed packages: Rscript -e \"installed.packages()[,'Package']\"\n- Create directories before writing: mkdir -p ../results .R/library"
-}

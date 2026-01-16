@@ -1,3 +1,0 @@
-{
-  "problem_statement_suffix": "\n\nCRITICAL ENVIRONMENT RESTRICTIONS:\n- 'file' command is NOT available - use Python mimetypes or file extensions instead.\n- 'apply_patch' command is NOT available - use sed, edit_file tool, or Python difflib.\n- For file type detection: python -c \"import mimetypes; print(mimetypes.guess_type('file'))\"\n- For patching: use sed -i 's/old/new/g' file or manual edit operations.\n- These are OS-level missing utilities - cannot be installed.\n- Report as environmental limitation if no workaround is possible."
-}

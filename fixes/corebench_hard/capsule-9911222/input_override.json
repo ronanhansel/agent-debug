@@ -1,3 +1,0 @@
-{
-  "problem_statement_suffix": "\n\nCRITICAL ENVIRONMENT RESTRICTIONS:\n- DO NOT run conda install - ToS acceptance is blocked.\n- libxml2.so.2 is MISSING - packages requiring XML will fail to compile.\n- survminer and other packages may be unavailable.\n- For CRAN: Rscript -e \"install.packages('pkg', repos='https://cloud.r-project.org')\"\n- For PDF: try HTML output if TinyTeX unavailable.\n- Set: export R_LIBS_USER=/tmp/R_libs && mkdir -p /tmp/R_libs\n- Check installed: Rscript -e \"installed.packages()[,'Package']\"\n- Report missing libxml2-dependent packages as environmental limitation."
-}

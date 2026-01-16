@@ -1,3 +1,0 @@
-{
-  "problem_statement_suffix": "\n\nCRITICAL ENVIRONMENT RESTRICTIONS:\n- DO NOT run conda install - ToS acceptance is blocked even with conda-forge only.\n- pdftotext is NOT available - use R pdftools or Python pdfminer if available.\n- Missing R packages: sf, upstartr, patchwork, estimatr, xtable.\n- Create directories before writing: mkdir -p ../results ../data\n- Check installed packages: Rscript -e \"installed.packages()[,'Package']\"\n- Use create.dir = TRUE in R file writing functions.\n- Report missing packages as environmental limitations if they block the task."
-}

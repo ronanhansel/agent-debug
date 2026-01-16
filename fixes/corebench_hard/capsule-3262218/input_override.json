@@ -1,3 +1,0 @@
-{
-  "problem_statement_suffix": "\n\nIMPORTANT ENVIRONMENT NOTES:\n- The 'papaja' R package is NOT available in conda-forge and cannot be installed.\n- TeX Live is incomplete (missing mktexlsr.pl) - PDF rendering will fail.\n- Python csv module is restricted.\n- If the manuscript cannot be rendered, extract values by reading the .Rmd as text and running R code chunks directly.\n- Use bash commands for file operations, not Python open().\n- Report environmental limitations clearly if reproduction is blocked."
-}

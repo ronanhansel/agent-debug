@@ -1,3 +1,0 @@
-{
-  "problem_statement_suffix": "\n\nCRITICAL ENVIRONMENT RESTRICTIONS:\n- 'mamba' is NOT available - do not use mamba commands.\n- DO NOT run conda install - ToS acceptance is blocked.\n- Python 'csv' module import is BLOCKED - use pandas or bash instead.\n- For CSV parsing: use pandas.read_csv() or bash commands (cat, cut, awk).\n- Check installed packages: pip list\n- Use only pre-installed packages.\n- For file reading without csv: use pandas, json, or bash tools."
-}

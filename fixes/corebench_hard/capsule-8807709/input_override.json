@@ -1,3 +1,0 @@
-{
-  "problem_statement_suffix": "\n\nCRITICAL ENVIRONMENT RESTRICTIONS:\n- 'network_diffusion' package CANNOT be installed - pip install fails.\n- 'networkx' may also be unavailable (check first).\n- matplotlib import is BLOCKED - do not use for visualization.\n- Check installed packages: pip list | grep network\n- If network_diffusion is required but unavailable, report as environmental limitation.\n- Skip figure generation - use text/tabular output only.\n- Do NOT attempt pip install or conda install for missing packages."
-}
