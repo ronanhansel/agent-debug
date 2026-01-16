@@ -213,9 +213,9 @@ python scripts/cross_model_rubric.py \
 RUBRIC_CSV=$(ls -t rubrics_output/environmental_barrier_cross_model/iter1_*.csv | head -1)
 echo "Rubric CSV: $RUBRIC_CSV"
 
-# 3. Generate fixes for capability issues only (automatically filters by rubric score)
+# 3. Generate fixes for capability issues (uses ALL model traces for better analysis)
 python scripts/pipeline.py inspect \
-  --trace-file $GPT41 \
+  --trace-files $GPT41 $O3 $O4MINI_HIGH $O4MINI_LOW \
   --rubric-csv $RUBRIC_CSV \
   --benchmark corebench_hard
 
@@ -245,11 +245,17 @@ python scripts/pipeline.py status --prefix iter1_
 ### Pipeline Flow
 
 ```
-cross_model_rubric.py          pipeline.py inspect         pipeline.py fix
-        │                              │                          │
-        ▼                              ▼                          ▼
-   Rubric CSV ──────────────► Filter to capability ──────► Re-run tasks
-   (score=0 vs 1)               issues (score=0)            with fixes
+cross_model_rubric.py          pipeline.py inspect              pipeline.py fix
+        │                              │                               │
+        ▼                              ▼                               ▼
+   Rubric CSV ──────────────► Filter to capability ──────────► Re-run tasks
+   (score=0 vs 1)               issues (score=0)                 with fixes
+                                       │
+                               ┌───────┴───────┐
+                               │ ALL 4 TRACES  │
+                               │ combined for  │
+                               │ better fixes  │
+                               └───────────────┘
 ```
 
 ## Individual Scripts

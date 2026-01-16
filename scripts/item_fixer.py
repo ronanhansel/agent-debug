@@ -34,8 +34,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--trace-file",
-        required=True,
-        help="Path to the trace file (verbose log or JSON).",
+        action="append",
+        dest="trace_files",
+        help="Path to trace file(s). Can be specified multiple times for cross-model analysis.",
     )
     parser.add_argument(
         "--benchmark",
@@ -44,7 +45,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--task-id",
-        help="Task ID (auto-detected from trace file name if not provided).",
+        action="append",
+        dest="task_ids",
+        help="Task ID(s) to analyze. Can be specified multiple times.",
     )
     parser.add_argument(
         "--dry-run",
@@ -330,34 +333,132 @@ def create_fix_package(
         print(f"[CREATED] {notes_path}")
 
 
+def load_trace_conversations(trace_path: Path) -> Dict[str, str]:
+    """Load trace file and extract conversations by task_id."""
+    content = trace_path.read_text(encoding="utf-8", errors="replace")
+
+    # Try to parse as JSON (HAL trace format)
+    try:
+        data = json.loads(content)
+        raw_entries = data.get("raw_logging_results", [])
+
+        if raw_entries:
+            # Group by task_id
+            task_convos: Dict[str, List[str]] = {}
+            for entry in raw_entries:
+                task_id = (
+                    entry.get("attributes", {}).get("weave_task_id")
+                    or entry.get("weave_task_id")
+                    or "unknown"
+                )
+
+                # Extract message content
+                messages = entry.get("inputs", {}).get("messages", [])
+                for msg in messages:
+                    msg_content = msg.get("content", "")
+                    if isinstance(msg_content, list):
+                        msg_content = " ".join(
+                            b.get("text", "") if isinstance(b, dict) else str(b)
+                            for b in msg_content
+                        )
+                    if msg_content:
+                        task_convos.setdefault(task_id, []).append(msg_content)
+
+                # Extract assistant output
+                output = entry.get("output", {})
+                choices = output.get("choices", [])
+                for choice in choices:
+                    out_content = choice.get("message", {}).get("content", "")
+                    if isinstance(out_content, list):
+                        out_content = " ".join(
+                            b.get("text", "") if isinstance(b, dict) else str(b)
+                            for b in out_content
+                        )
+                    if out_content:
+                        task_convos.setdefault(task_id, []).append(out_content)
+
+            # Join conversations
+            return {tid: "\n".join(convos) for tid, convos in task_convos.items()}
+
+        # Fallback: treat whole file as single task content
+        return {"_raw_": content}
+
+    except json.JSONDecodeError:
+        # Not JSON, treat as raw text
+        return {"_raw_": content}
+
+
 def main() -> None:
     args = parse_args()
-    trace_path = Path(args.trace_file)
 
-    if not trace_path.exists():
-        print(f"Error: Trace file not found: {trace_path}")
+    if not args.trace_files:
+        print("Error: At least one --trace-file is required.")
         sys.exit(1)
 
-    # Determine task ID
-    task_id = args.task_id or extract_task_id_from_filename(trace_path)
-    if not task_id:
-        print("Error: Could not determine task ID. Use --task-id to specify.")
+    # Load all traces and combine conversations by task
+    print(f"Loading {len(args.trace_files)} trace file(s)...")
+    all_task_convos: Dict[str, List[str]] = {}
+    failed_tasks: set = set()
+
+    for trace_file in args.trace_files:
+        trace_path = Path(trace_file)
+        if not trace_path.exists():
+            print(f"Warning: Trace file not found: {trace_path}")
+            continue
+
+        # Get model name from filename
+        model_name = trace_path.stem[:40]
+        print(f"  Loading: {model_name}")
+
+        # Try to get failed tasks list
+        try:
+            data = json.loads(trace_path.read_text())
+            failed_tasks.update(data.get("results", {}).get("failed_tasks", []))
+        except:
+            pass
+
+        # Load conversations
+        task_convos = load_trace_conversations(trace_path)
+        for task_id, convo in task_convos.items():
+            all_task_convos.setdefault(task_id, []).append(f"=== Model: {model_name} ===\n{convo}")
+
+    # Determine which tasks to analyze
+    task_ids = args.task_ids
+    if not task_ids:
+        # Use all failed tasks found in traces
+        task_ids = list(failed_tasks)
+        if not task_ids:
+            # Fallback to all tasks with conversations
+            task_ids = [t for t in all_task_convos.keys() if t != "_raw_"]
+
+    if not task_ids:
+        print("Error: No tasks to analyze. Use --task-id to specify.")
         sys.exit(1)
 
-    # Read trace content
-    trace_content = trace_path.read_text(encoding="utf-8", errors="replace")
+    print(f"\nAnalyzing {len(task_ids)} task(s)...")
 
-    # Analyze
-    analyzer = TraceAnalyzer(trace_content, task_id)
-    analysis = analyzer.analyze()
+    # Analyze each task
+    for task_id in task_ids:
+        # Combine conversations from all models
+        if task_id in all_task_convos:
+            combined_convo = "\n\n".join(all_task_convos[task_id])
+        elif "_raw_" in all_task_convos:
+            combined_convo = all_task_convos["_raw_"]
+        else:
+            print(f"\nWarning: No conversation found for {task_id}, skipping.")
+            continue
 
-    # Create fixes
-    create_fix_package(
-        task_id=task_id,
-        benchmark=args.benchmark,
-        analysis=analysis,
-        dry_run=args.dry_run,
-    )
+        # Analyze
+        analyzer = TraceAnalyzer(combined_convo, task_id)
+        analysis = analyzer.analyze()
+
+        # Create fixes
+        create_fix_package(
+            task_id=task_id,
+            benchmark=args.benchmark,
+            analysis=analysis,
+            dry_run=args.dry_run,
+        )
 
 
 if __name__ == "__main__":

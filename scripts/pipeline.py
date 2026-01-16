@@ -427,6 +427,17 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     """Analyze failures and generate fix recommendations."""
     prefix = args.prefix or ""
 
+    # Collect trace files
+    trace_files = []
+    if args.trace_files:
+        trace_files.extend(args.trace_files)
+    if args.trace_file:  # Backwards compatibility
+        trace_files.append(args.trace_file)
+
+    if not trace_files:
+        log("Error: At least one trace file is required (--trace-file or --trace-files)", prefix)
+        return 1
+
     # If rubric CSV provided, filter to capability issues only (score < 1)
     task_ids = list(args.task_id) if args.task_id else []
 
@@ -462,16 +473,19 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
     cmd = [
         sys.executable, str(REPO_ROOT / "scripts" / "item_fixer.py"),
-        "--trace-file", str(args.trace_file),
         "--benchmark", args.benchmark or DEFAULT_BENCHMARK,
     ]
+
+    # Add all trace files
+    for tf in trace_files:
+        cmd.extend(["--trace-file", str(tf)])
 
     if args.dry_run:
         cmd.append("--dry-run")
     for tid in task_ids:
         cmd.extend(["--task-id", tid])
 
-    log(f"Inspecting failures from trace", prefix)
+    log(f"Inspecting failures from {len(trace_files)} trace file(s)", prefix)
     result = subprocess.run(cmd, cwd=REPO_ROOT)
     return result.returncode
 
@@ -743,7 +757,8 @@ Examples:
     # Inspect
     p_inspect = subparsers.add_parser("inspect", help="Analyze failures and generate fixes")
     add_common(p_inspect)
-    p_inspect.add_argument("--trace-file", required=True, help="Trace file to analyze")
+    p_inspect.add_argument("--trace-file", help="Single trace file (for backwards compatibility)")
+    p_inspect.add_argument("--trace-files", nargs="+", help="Multiple trace files for cross-model analysis")
     p_inspect.add_argument("--benchmark", default=DEFAULT_BENCHMARK, help="Benchmark name")
     p_inspect.add_argument("--dry-run", action="store_true", help="Don't write fix files")
     p_inspect.add_argument("--task-id", action="append", help="Specific task IDs")
