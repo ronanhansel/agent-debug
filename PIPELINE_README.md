@@ -213,11 +213,13 @@ python scripts/cross_model_rubric.py \
 RUBRIC_CSV=$(ls -t rubrics_output/environmental_barrier_cross_model/iter1_*.csv | head -1)
 echo "Rubric CSV: $RUBRIC_CSV"
 
-# 3. Generate fixes for capability issues (uses ALL model traces for better analysis)
+# 3. Use Claude Code CLI to diagnose and fix environmental barriers
+#    (This launches Claude Code with full context - it will analyze and create fixes)
 python scripts/pipeline.py inspect \
   --trace-files $GPT41 $O3 $O4MINI_HIGH $O4MINI_LOW \
   --rubric-csv $RUBRIC_CSV \
-  --benchmark corebench_hard
+  --benchmark corebench_hard \
+  --env-barriers-only  # Only process tasks marked as env barriers
 
 # 4. Apply fixes and re-run (creates new traces with prefix)
 python scripts/pipeline.py fix \
@@ -248,14 +250,49 @@ python scripts/pipeline.py status --prefix iter1_
 cross_model_rubric.py          pipeline.py inspect              pipeline.py fix
         │                              │                               │
         ▼                              ▼                               ▼
-   Rubric CSV ──────────────► Filter to capability ──────────► Re-run tasks
-   (score=0 vs 1)               issues (score=0)                 with fixes
+   Rubric CSV ──────────────► Claude Code CLI ──────────────► Re-run tasks
+   (score=0 vs 1)              analyzes & fixes                  with fixes
                                        │
                                ┌───────┴───────┐
-                               │ ALL 4 TRACES  │
-                               │ combined for  │
-                               │ better fixes  │
+                               │ Claude Code   │
+                               │ - Reads task  │
+                               │ - Diagnoses   │
+                               │ - Creates fix │
                                └───────────────┘
+```
+
+### Claude Code Fixer
+
+The `inspect` command uses **Claude Code CLI** (`claude -p --dangerously-skip-permissions`) to:
+
+1. **Analyze** rubric results and model conversation logs
+2. **Diagnose** what environmental barrier exists
+3. **Create fixes** in `fixes/<benchmark>/<task_id>/`:
+   - `env_override.json` - Missing packages, environment setup
+   - `input_override.json` - Clarified instructions (if needed)
+   - `README.md` - Explanation of the fix
+
+**Critical constraint**: Fixes must NOT nerf the question or make it easier. Only fix true environmental barriers.
+
+```bash
+# Dry-run to preview the prompt (no Claude Code execution)
+python scripts/pipeline.py inspect \
+  --trace-files $GPT41 $O3 $O4MINI_HIGH $O4MINI_LOW \
+  --rubric-csv $RUBRIC_CSV \
+  --dry-run \
+  --task-id capsule-4933686
+
+# Fix only environmental barriers
+python scripts/pipeline.py inspect \
+  --trace-files $GPT41 $O3 $O4MINI_HIGH $O4MINI_LOW \
+  --rubric-csv $RUBRIC_CSV \
+  --env-barriers-only
+
+# Fix a specific task
+python scripts/pipeline.py inspect \
+  --trace-files $GPT41 $O3 $O4MINI_HIGH $O4MINI_LOW \
+  --rubric-csv $RUBRIC_CSV \
+  --task-id capsule-4933686
 ```
 
 ## Individual Scripts
@@ -346,10 +383,10 @@ Individual traces likely lack `raw_logging_results`. Extract from Weave first.
 |------|---------|
 | `scripts/pipeline.py` | Unified CLI for all pipeline operations |
 | `scripts/cross_model_rubric.py` | Cross-model rubric evaluation (recommended) |
+| `scripts/claude_fixer.py` | Claude Code CLI-based intelligent fixer |
 | `scripts/simple_rubric_eval.py` | Single-model rubric evaluation |
 | `scripts/merge_traces.py` | Merge individual traces |
 | `scripts/extract_weave_traces.py` | Extract from W&B Weave |
-| `scripts/item_fixer.py` | Analyze failures and generate fixes |
 | `scripts/run_corebench_fixes.py` | Apply fixes and re-run |
 | `rubrics/environmental_barrier.txt` | Rubric definition |
 

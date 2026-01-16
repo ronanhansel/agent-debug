@@ -424,7 +424,7 @@ def cmd_fix(args: argparse.Namespace) -> int:
 # =============================================================================
 
 def cmd_inspect(args: argparse.Namespace) -> int:
-    """Analyze failures and generate fix recommendations."""
+    """Use Claude Code CLI to diagnose and fix environmental barriers."""
     prefix = args.prefix or ""
 
     # Collect trace files
@@ -438,54 +438,36 @@ def cmd_inspect(args: argparse.Namespace) -> int:
         log("Error: At least one trace file is required (--trace-file or --trace-files)", prefix)
         return 1
 
-    # If rubric CSV provided, filter to capability issues only (score < 1)
-    task_ids = list(args.task_id) if args.task_id else []
+    if not args.rubric_csv:
+        log("Error: --rubric-csv is required to identify which tasks to fix", prefix)
+        return 1
 
-    if args.rubric_csv:
-        rubric_path = Path(args.rubric_csv)
-        if not rubric_path.exists():
-            log(f"Rubric CSV not found: {rubric_path}", prefix)
-            return 1
-
-        log(f"Reading rubric results from: {rubric_path}", prefix)
-        capability_issues = []
-        env_barriers = []
-
-        with rubric_path.open() as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                task_id = row.get("task_id", "")
-                score = float(row.get("grade", 0))
-                if score < 1:  # Capability issue
-                    capability_issues.append(task_id)
-                else:  # Environmental barrier
-                    env_barriers.append(task_id)
-
-        log(f"Found {len(capability_issues)} capability issues, {len(env_barriers)} env barriers", prefix)
-
-        if not capability_issues:
-            log("No capability issues found to fix. All failures are environmental barriers.", prefix)
-            return 0
-
-        # Use capability issues as task filter
-        task_ids = capability_issues
-        log(f"Will inspect {len(task_ids)} capability issues", prefix)
-
+    # Build command for claude_fixer.py
     cmd = [
-        sys.executable, str(REPO_ROOT / "scripts" / "item_fixer.py"),
+        sys.executable, str(REPO_ROOT / "scripts" / "claude_fixer.py"),
+        "--rubric-csv", str(args.rubric_csv),
         "--benchmark", args.benchmark or DEFAULT_BENCHMARK,
+        "--prefix", prefix,
     ]
 
     # Add all trace files
-    for tf in trace_files:
-        cmd.extend(["--trace-file", str(tf)])
+    cmd.append("--trace-files")
+    cmd.extend(trace_files)
+
+    # Filter options
+    if args.env_barriers_only:
+        cmd.append("--env-barriers-only")
+    elif args.capability_issues_only:
+        cmd.append("--capability-issues-only")
 
     if args.dry_run:
         cmd.append("--dry-run")
-    for tid in task_ids:
-        cmd.extend(["--task-id", tid])
 
-    log(f"Inspecting failures from {len(trace_files)} trace file(s)", prefix)
+    if args.task_id:
+        for tid in args.task_id:
+            cmd.extend(["--task-id", tid])
+
+    log(f"Launching Claude Code fixer with {len(trace_files)} trace file(s)", prefix)
     result = subprocess.run(cmd, cwd=REPO_ROOT)
     return result.returncode
 
@@ -755,14 +737,16 @@ Examples:
     p_fix.add_argument("--skip-rubrics", action="store_true", help="Skip rubric evaluation")
 
     # Inspect
-    p_inspect = subparsers.add_parser("inspect", help="Analyze failures and generate fixes")
+    p_inspect = subparsers.add_parser("inspect", help="Use Claude Code CLI to diagnose and fix env barriers")
     add_common(p_inspect)
     p_inspect.add_argument("--trace-file", help="Single trace file (for backwards compatibility)")
     p_inspect.add_argument("--trace-files", nargs="+", help="Multiple trace files for cross-model analysis")
+    p_inspect.add_argument("--rubric-csv", required=True, help="Rubric CSV with evaluation results")
     p_inspect.add_argument("--benchmark", default=DEFAULT_BENCHMARK, help="Benchmark name")
-    p_inspect.add_argument("--dry-run", action="store_true", help="Don't write fix files")
-    p_inspect.add_argument("--task-id", action="append", help="Specific task IDs")
-    p_inspect.add_argument("--rubric-csv", help="Rubric CSV to filter to capability issues only (score < 1)")
+    p_inspect.add_argument("--dry-run", action="store_true", help="Print prompt without running Claude Code")
+    p_inspect.add_argument("--task-id", action="append", help="Specific task IDs to fix")
+    p_inspect.add_argument("--env-barriers-only", action="store_true", help="Only fix environmental barriers (score >= 1)")
+    p_inspect.add_argument("--capability-issues-only", action="store_true", help="Only fix capability issues (score < 1)")
 
     # Cross-model rubric (recommended)
     p_cross = subparsers.add_parser("cross-rubric", help="Cross-model rubric evaluation (recommended)")
