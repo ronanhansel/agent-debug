@@ -1,8 +1,0 @@
-{
-  "HAL_FORCE_CONDA_ENV": "agent",
-  "HAL_CONDA_CHANNELS": "conda-forge",
-  "HAL_CONDA_PACKAGES": "r-base=4.* r-tidyverse r-haven r-bsts r-ggplot2 r-dplyr r-tidyr r-readr r-purrr r-lubridate r-stringr",
-  "R_LIBS_USER": "./.R/library",
-  "HAL_OUTPUT_DIR": "./results",
-  "CONDA_ALWAYS_YES": "true"
-}

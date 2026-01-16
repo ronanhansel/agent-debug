@@ -1,8 +1,0 @@
-This task is running in a restricted Python interpreter that blocks imports like `os`, `subprocess`, and `typing`.
-
-Guidance:
-- Avoid any solution approach that relies on importing or calling OS/process modules.
-- Only use permitted standard library modules (per the environment error list).
-- Plotting must be headless: set/use `MPLBACKEND=Agg`.
-
-If the expected demo files (e.g., `demo_density_models.py`, `demo_time.py`, `demo_complexity_plot.py`, `README.md`) are missing from the mounted workspace, treat this as an environment/repo-mount issue and do not attempt OS-level workarounds; instead, proceed using only files that are present.

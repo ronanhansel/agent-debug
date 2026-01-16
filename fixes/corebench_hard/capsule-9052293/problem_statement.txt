@@ -1,9 +1,0 @@
-This task failed because `xlrd` no longer supports reading `.xlsx` files and downgrading `xlrd` causes further compatibility issues.
-
-Guidance:
-- Do not use `xlrd` for `.xlsx`.
-- Install `openpyxl`.
-- Update the Excel-loading code to use `pandas.read_excel(..., engine='openpyxl')` when the input file extension is `.xlsx`.
-- Avoid downgrading core libraries to old versions.
-
-After the change, the script should run to completion and generate `results/output_TCNS_ANP_TOPSIS.txt`.

@@ -1,9 +1,0 @@
-{
-  "HAL_FORCE_CONDA_ENV": "agent",
-  "HAL_CONDA_CHANNELS": "conda-forge bioconda",
-  "HAL_CONDA_PACKAGES": "r-base=4.* cmake xorg-libx11 xorg-libxext r-factominer r-ggplot2 r-dplyr r-tidyr r-rmarkdown r-knitr",
-  "R_LIBS_USER": "./.R/library",
-  "HAL_OUTPUT_DIR": "./results",
-  "CONDA_ALWAYS_YES": "true",
-  "DISPLAY": ":99"
-}

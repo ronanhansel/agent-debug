@@ -1,9 +1,0 @@
-{
-  "HAL_FORCE_CONDA_ENV": "agent",
-  "HAL_CONDA_CHANNELS": "conda-forge bioconda",
-  "HAL_CONDA_PACKAGES": "r-base=4.* pkg-config libxml2 libcurl openssl r-devtools r-xml2 r-curl r-biocmanager",
-  "R_LIBS_USER": "./.R/library",
-  "HAL_OUTPUT_DIR": "./results",
-  "CONDA_ALWAYS_YES": "true",
-  "PKG_CONFIG_PATH": "$CONDA_PREFIX/lib/pkgconfig"
-}

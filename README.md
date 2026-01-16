@@ -69,7 +69,7 @@ Reducing environment-barrier failures in Docker:
 Iterating through every `corebench_*_UPLOAD_*.json` pattern
 
 ```bash
-for trace in traces/roblox_*.json; do
+for trace in traces/earth_*.json; do
         python \
           main.py evaluate \
           --trace-file "$trace" \
@@ -88,7 +88,7 @@ Merge generated rubrics
 ```bash
 python scripts/merge_rubric_csvs.py \
       --rubrics-root rubrics_output \
-      --output rubrics_output/merged_rubrics.csv --criteria environmental_barrier --criteria instruction_error --model-run-substring roblox
+      --output rubrics_output/merged_rubrics.csv --criteria environmental_barrier --criteria instruction_error --model-run-substring earth
 ```
 
 print items with rubric score = 1 & correct = 0
@@ -179,7 +179,7 @@ python scripts/master_rerun_corebench_fixes.py \
     --wandb-mode online \
     --docker \
     --skip-rubrics \
-    --prefix roblox
+    --prefix moon
 ```
 
 - `--max-parallel`: max number of parallel processes to run
@@ -204,10 +204,14 @@ Retrive traces from Weave/W&B
 ```bash
 python scripts/extract_weave_traces.py \
   --project <entity_id/project_id> \
-  --prefix roblox_openai_gpt-4_1 \
-  --prefix roblox_openai_o4-mini_2025-04-16_high \
-  --prefix roblox_openai_o3_2025-04-16_medium \
-  --prefix roblox_openai_o4-mini_2025-04-16_low # for aggregating traces
+  --prefix earth_openai_gpt-4_1 \
+  --prefix earth_openai_o4-mini_2025-04-16_high \
+  --prefix earth_openai_o3_2025-04-16_medium \
+  --prefix earth_openai_o4-mini_2025-04-16_low \
+  --merge-input uploaded_traces/earth_openai_gpt-4_1_2025-04-14_MERGED_corebench_hard_20260115_193558_from_roblox_openai_gpt-4_1_FIXED_UPLOAD.json \
+  --merge-input uploaded_traces/earth_openai_o4-mini_2025-04-16_MERGED_corebench_hard_20260115_193558_from_roblox_openai_o4-mini_2025-04-16_high_FIXED_UPLOAD.json \
+  --merge-input uploaded_traces/earth_openai_o3_2025-04-16_MERGED_corebench_hard_20260115_193559_from_roblox_openai_o3_2025-04-16_medium_FIXED_UPLOAD.json \
+  --merge-input uploaded_traces/earth_openai_o4-mini_2025-04-16_MERGED_corebench_hard_20260115_193559_from_roblox_openai_o4-mini_2025-04-16_low_FIXED_UPLOAD.json
 ```
 
 ## Note

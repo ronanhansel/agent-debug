@@ -1,5 +1,0 @@
-{
-  "HAL_FORCE_CONDA_ENV": "agent",
-  "HAL_PIP_PACKAGES": "openpyxl",
-  "HAL_OUTPUT_DIR": "./results"
-}

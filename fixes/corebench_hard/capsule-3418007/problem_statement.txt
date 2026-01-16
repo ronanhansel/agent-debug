@@ -1,9 +1,0 @@
-This failure is due to dependency pin incompatibility with the current Python version (old pins like `numpy==1.19.5`, `pandas==1.2.5` cannot install).
-
-Guidance:
-- Do not attempt `apt-get` or other system installs.
-- Avoid installing the repository's legacy pinned `environment/requirements.txt` as-is.
-- Instead, install compatible modern versions of the needed scientific stack (at least `numpy`, `pandas`, `matplotlib`).
-- Use headless plotting: `MPLBACKEND=Agg`.
-
-After installing dependencies, rerun the script to produce the required F1 and ROC-AUC outputs.

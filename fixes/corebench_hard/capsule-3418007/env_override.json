@@ -1,5 +1,0 @@
-{
-  "HAL_FORCE_CONDA_ENV": "agent",
-  "HAL_PIP_PACKAGES": "numpy pandas matplotlib scikit-learn seaborn",
-  "MPLBACKEND": "Agg"
-}

@@ -1,8 +1,0 @@
-{
-  "HAL_FORCE_CONDA_ENV": "agent",
-  "HAL_CONDA_PACKAGES": "r-base=4.* r-dplyr r-readr r-tidyr r-stringr r-purrr r-lubridate r-data.table r-ggplot2",
-  "HAL_CONDA_CHANNELS": "conda-forge",
-  "R_LIBS_USER": "./.R/library",
-  "HAL_DATA_DIR": "./data",
-  "HAL_OUTPUT_DIR": "./results"
-}

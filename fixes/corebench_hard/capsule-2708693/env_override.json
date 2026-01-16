@@ -1,8 +1,0 @@
-{
-  "HAL_FORCE_CONDA_ENV": "agent",
-  "HAL_CONDA_CHANNELS": "conda-forge",
-  "HAL_CONDA_PACKAGES": "r-base=4.* pandoc texlive-core r-rmarkdown r-knitr r-meta r-metafor r-dplyr r-tidyr r-readr r-ggplot2 r-stringr",
-  "R_LIBS_USER": "./.R/library",
-  "HAL_OUTPUT_DIR": "./results",
-  "CONDA_ALWAYS_YES": "true"
-}
