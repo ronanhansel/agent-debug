@@ -21,19 +21,55 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from threading import Lock
+from typing import Any, Dict, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TRACES_DIR = REPO_ROOT / "traces"
 FIXES_DIR = REPO_ROOT / "fixes"
 
+# Thread-safe progress tracking
+_progress_lock = Lock()
+_completed_count = 0
+_total_count = 0
+
 
 def log(msg: str, prefix: str = "") -> None:
-    ts = datetime.now().strftime("%H:%M:%S")
-    tag = f"[{prefix}] " if prefix else ""
-    print(f"[{ts}] {tag}{msg}", flush=True)
+    with _progress_lock:
+        ts = datetime.now().strftime("%H:%M:%S")
+        tag = f"[{prefix}] " if prefix else ""
+        print(f"[{ts}] {tag}{msg}", flush=True)
+
+
+def log_progress(task_id: str, status: str, prefix: str = "") -> None:
+    """Thread-safe progress logging for parallel mode."""
+    global _completed_count
+    with _progress_lock:
+        ts = datetime.now().strftime("%H:%M:%S")
+        if status == "completed":
+            _completed_count += 1
+            print(f"[{ts}] ✓ {task_id} DONE ({_completed_count}/{_total_count})", flush=True)
+        elif status == "started":
+            print(f"[{ts}] → {task_id} STARTED ({_completed_count}/{_total_count} done)", flush=True)
+        elif status == "skipped":
+            _completed_count += 1
+            print(f"[{ts}] ⊘ {task_id} SKIPPED (already has fix) ({_completed_count}/{_total_count})", flush=True)
+        elif status == "failed":
+            _completed_count += 1
+            print(f"[{ts}] ✗ {task_id} FAILED ({_completed_count}/{_total_count})", flush=True)
+
+
+def has_existing_fix(benchmark: str, task_id: str) -> bool:
+    """Check if a task already has a fix."""
+    fix_dir = FIXES_DIR / benchmark / task_id
+    if not fix_dir.exists():
+        return False
+    # Check for actual fix files (not just the prompt)
+    fix_files = ["env_override.json", "input_override.json", "README.md"]
+    return any((fix_dir / f).exists() for f in fix_files)
 
 
 def load_rubric_results(rubric_csv: Path) -> Dict[str, Dict[str, Any]]:
@@ -380,62 +416,149 @@ def run_claude_code(
     working_dir: Path,
     fix_dir: Path,
     resume_session: Optional[str] = None,
+    quiet: bool = False,
 ) -> int:
-    """Run Claude Code CLI with the given prompt, streaming output."""
+    """Run Claude Code CLI with the given prompt.
 
-    # Build command with verbose and stream-json output
+    Args:
+        quiet: If True, minimal output (for parallel mode). If False, stream formatted JSON.
+    """
+
+    # Build command
     base_cmd = [
         "claude",
-        "--verbose",
-        "--output-format", "stream-json",
         "--dangerously-skip-permissions",
     ]
+
+    if not quiet:
+        # Verbose streaming mode
+        base_cmd.extend(["--verbose", "--output-format", "stream-json"])
+    else:
+        # Quiet mode - just JSON output at the end
+        base_cmd.extend(["--output-format", "json"])
 
     if resume_session:
         base_cmd.extend(["--resume", resume_session])
 
     base_cmd.extend(["-p", prompt])
 
-    log(f"Running Claude Code CLI for {task_id}...")
-    log(f"Working directory: {working_dir}")
-    print(f"\n{'='*60}")
-    print(f"CLAUDE CODE SESSION: {task_id}")
-    print(f"{'='*60}\n")
-
     # Prepare log file for raw JSON stream
     log_path = fix_dir / "claude_session.jsonl"
 
-    # Run Claude Code with streaming output
-    process = subprocess.Popen(
-        base_cmd,
-        cwd=working_dir,
-        env={**os.environ, "CLAUDE_CODE_TASK_ID": task_id},
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,  # Line buffered
-    )
+    if not quiet:
+        log(f"Running Claude Code CLI for {task_id}...")
+        log(f"Working directory: {working_dir}")
+        print(f"\n{'='*60}")
+        print(f"CLAUDE CODE SESSION: {task_id}")
+        print(f"{'='*60}\n")
 
-    # Stream, format, and save output
-    try:
+        # Run Claude Code with streaming output
+        process = subprocess.Popen(
+            base_cmd,
+            cwd=working_dir,
+            env={**os.environ, "CLAUDE_CODE_TASK_ID": task_id},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,  # Line buffered
+        )
+
+        # Stream, format, and save output
+        try:
+            with log_path.open("w") as log_file:
+                for line in process.stdout:
+                    # Save raw JSON
+                    log_file.write(line)
+                    log_file.flush()
+                    # Format and display
+                    format_stream_json(line, task_id)
+        except KeyboardInterrupt:
+            process.terminate()
+            log(f"Interrupted by user")
+            return 130
+
+        process.wait()
+        log(f"Session log saved to: {log_path}")
+        return process.returncode
+
+    else:
+        # Quiet mode - run without streaming, save output to file
+        result = subprocess.run(
+            base_cmd,
+            cwd=working_dir,
+            env={**os.environ, "CLAUDE_CODE_TASK_ID": task_id},
+            capture_output=True,
+            text=True,
+        )
+
+        # Save output to log file
         with log_path.open("w") as log_file:
-            for line in process.stdout:
-                # Save raw JSON
-                log_file.write(line)
-                log_file.flush()
-                # Format and display
-                format_stream_json(line, task_id)
-    except KeyboardInterrupt:
-        process.terminate()
-        log(f"Interrupted by user")
-        return 130
+            log_file.write(result.stdout)
+            if result.stderr:
+                log_file.write(f"\n--- STDERR ---\n{result.stderr}")
 
-    process.wait()
-    log(f"Session log saved to: {log_path}")
-    return process.returncode
+        return result.returncode
+
+
+def process_single_task(
+    task_id: str,
+    rubric_results: Dict[str, Dict[str, Any]],
+    trace_files: List[Path],
+    benchmark: str,
+    quiet: bool = False,
+    resume_session: Optional[str] = None,
+) -> Tuple[str, bool, str]:
+    """Process a single task. Returns (task_id, success, message)."""
+
+    try:
+        # Get rubric result
+        rubric_result = rubric_results.get(task_id, {})
+
+        # Load conversations
+        conversations = load_task_conversations(trace_files, task_id)
+
+        # Get task details
+        task_details = get_task_details(trace_files, task_id)
+
+        # Build prompt
+        prompt = build_claude_prompt(
+            task_id=task_id,
+            rubric_result=rubric_result,
+            conversations=conversations,
+            task_details=task_details,
+            benchmark=benchmark,
+        )
+
+        # Create fixes directory
+        fix_dir = FIXES_DIR / benchmark / task_id
+        fix_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save prompt for reference
+        prompt_path = fix_dir / "claude_prompt.txt"
+        prompt_path.write_text(prompt)
+
+        # Run Claude Code
+        rc = run_claude_code(
+            prompt=prompt,
+            task_id=task_id,
+            working_dir=REPO_ROOT,
+            fix_dir=fix_dir,
+            resume_session=resume_session,
+            quiet=quiet,
+        )
+
+        if rc == 0:
+            return (task_id, True, "completed")
+        else:
+            return (task_id, False, f"exit code {rc}")
+
+    except Exception as e:
+        return (task_id, False, str(e))
 
 
 def main():
+    global _total_count, _completed_count
+
     parser = argparse.ArgumentParser(
         description="Use Claude Code CLI to diagnose and fix environmental barriers"
     )
@@ -475,6 +598,14 @@ def main():
         "--prefix", default="",
         help="Prefix for logging"
     )
+    parser.add_argument(
+        "--parallel", type=int, default=1,
+        help="Number of parallel Claude sessions (default: 1 for sequential with full logging)"
+    )
+    parser.add_argument(
+        "--skip-existing", action="store_true",
+        help="Skip tasks that already have fixes in fixes/<benchmark>/<task_id>/"
+    )
     args = parser.parse_args()
 
     prefix = args.prefix
@@ -502,6 +633,19 @@ def main():
         task_ids = [t for t in task_ids if rubric_results.get(t, {}).get("score", 0) < 1]
         log(f"Filtered to {len(task_ids)} capability issues", prefix)
 
+    # Skip existing fixes if requested
+    skipped_tasks = []
+    if args.skip_existing:
+        original_count = len(task_ids)
+        task_ids_filtered = []
+        for tid in task_ids:
+            if has_existing_fix(args.benchmark, tid):
+                skipped_tasks.append(tid)
+            else:
+                task_ids_filtered.append(tid)
+        task_ids = task_ids_filtered
+        log(f"Skipping {len(skipped_tasks)} tasks with existing fixes, {len(task_ids)} remaining", prefix)
+
     if not task_ids:
         log("No tasks to process", prefix)
         return 0
@@ -510,59 +654,118 @@ def main():
     trace_files = [Path(f) for f in args.trace_files]
     log(f"Using {len(trace_files)} trace files for context", prefix)
 
-    # Process each task
-    for i, task_id in enumerate(task_ids):
-        log(f"\n[{i+1}/{len(task_ids)}] Processing {task_id}", prefix)
+    # Set total for progress tracking
+    _total_count = len(task_ids) + len(skipped_tasks)
+    _completed_count = len(skipped_tasks)  # Skipped tasks count as done
 
-        # Get rubric result
-        rubric_result = rubric_results.get(task_id, {})
+    # Dry run mode
+    if args.dry_run:
+        for i, task_id in enumerate(task_ids):
+            rubric_result = rubric_results.get(task_id, {})
+            conversations = load_task_conversations(trace_files, task_id)
+            task_details = get_task_details(trace_files, task_id)
+            prompt = build_claude_prompt(
+                task_id=task_id,
+                rubric_result=rubric_result,
+                conversations=conversations,
+                task_details=task_details,
+                benchmark=args.benchmark,
+            )
+            log(f"[{i+1}/{len(task_ids)}] {task_id} - Prompt length: {len(prompt)} chars", prefix)
+            if args.parallel == 1:  # Only show full prompt in sequential mode
+                print("\n" + "="*60)
+                print(f"PROMPT FOR {task_id}")
+                print("="*60)
+                print(prompt[:5000] + "..." if len(prompt) > 5000 else prompt)
+        return 0
 
-        # Load conversations
-        conversations = load_task_conversations(trace_files, task_id)
-        log(f"  Loaded conversations from {len(conversations)} models", prefix)
+    # Parallel mode
+    if args.parallel > 1:
+        log(f"\nRunning {len(task_ids)} tasks with {args.parallel} parallel workers", prefix)
+        log("=" * 60, prefix)
 
-        # Get task details
-        task_details = get_task_details(trace_files, task_id)
+        successes = 0
+        failures = 0
 
-        # Build prompt
-        prompt = build_claude_prompt(
-            task_id=task_id,
-            rubric_result=rubric_result,
-            conversations=conversations,
-            task_details=task_details,
-            benchmark=args.benchmark,
-        )
+        def run_task(task_id: str) -> Tuple[str, bool, str]:
+            log_progress(task_id, "started", prefix)
+            result = process_single_task(
+                task_id=task_id,
+                rubric_results=rubric_results,
+                trace_files=trace_files,
+                benchmark=args.benchmark,
+                quiet=True,  # Minimal logging in parallel mode
+                resume_session=args.resume_session,
+            )
+            if result[1]:
+                log_progress(task_id, "completed", prefix)
+            else:
+                log_progress(task_id, "failed", prefix)
+            return result
 
-        if args.dry_run:
-            log(f"  [DRY RUN] Prompt length: {len(prompt)} chars", prefix)
-            print("\n" + "="*60)
-            print(f"PROMPT FOR {task_id}")
-            print("="*60)
-            print(prompt[:5000] + "..." if len(prompt) > 5000 else prompt)
-            continue
+        with ThreadPoolExecutor(max_workers=args.parallel) as executor:
+            futures = {executor.submit(run_task, tid): tid for tid in task_ids}
 
-        # Create fixes directory
-        fix_dir = FIXES_DIR / args.benchmark / task_id
-        fix_dir.mkdir(parents=True, exist_ok=True)
+            for future in as_completed(futures):
+                task_id, success, message = future.result()
+                if success:
+                    successes += 1
+                else:
+                    failures += 1
+                    log(f"  {task_id} failed: {message}", prefix)
 
-        # Save prompt for reference
-        prompt_path = fix_dir / "claude_prompt.txt"
-        prompt_path.write_text(prompt)
-        log(f"  Saved prompt to {prompt_path}", prefix)
+        log("=" * 60, prefix)
+        log(f"SUMMARY: {successes} succeeded, {failures} failed, {len(skipped_tasks)} skipped", prefix)
 
-        # Run Claude Code
-        rc = run_claude_code(
-            prompt=prompt,
-            task_id=task_id,
-            working_dir=REPO_ROOT,
-            fix_dir=fix_dir,
-            resume_session=args.resume_session,
-        )
+    # Sequential mode (with full logging)
+    else:
+        log(f"\nProcessing {len(task_ids)} tasks sequentially (use --parallel N for parallel execution)", prefix)
 
-        if rc != 0:
-            log(f"  Claude Code exited with code {rc}", prefix)
-        else:
-            log(f"  Claude Code completed successfully", prefix)
+        for i, task_id in enumerate(task_ids):
+            log(f"\n[{i+1}/{len(task_ids)}] Processing {task_id}", prefix)
+
+            # Get rubric result
+            rubric_result = rubric_results.get(task_id, {})
+
+            # Load conversations
+            conversations = load_task_conversations(trace_files, task_id)
+            log(f"  Loaded conversations from {len(conversations)} models", prefix)
+
+            # Get task details
+            task_details = get_task_details(trace_files, task_id)
+
+            # Build prompt
+            prompt = build_claude_prompt(
+                task_id=task_id,
+                rubric_result=rubric_result,
+                conversations=conversations,
+                task_details=task_details,
+                benchmark=args.benchmark,
+            )
+
+            # Create fixes directory
+            fix_dir = FIXES_DIR / args.benchmark / task_id
+            fix_dir.mkdir(parents=True, exist_ok=True)
+
+            # Save prompt for reference
+            prompt_path = fix_dir / "claude_prompt.txt"
+            prompt_path.write_text(prompt)
+            log(f"  Saved prompt to {prompt_path}", prefix)
+
+            # Run Claude Code with full streaming output
+            rc = run_claude_code(
+                prompt=prompt,
+                task_id=task_id,
+                working_dir=REPO_ROOT,
+                fix_dir=fix_dir,
+                resume_session=args.resume_session,
+                quiet=False,  # Full logging in sequential mode
+            )
+
+            if rc != 0:
+                log(f"  Claude Code exited with code {rc}", prefix)
+            else:
+                log(f"  Claude Code completed successfully", prefix)
 
     return 0
 

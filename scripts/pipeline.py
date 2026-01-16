@@ -463,6 +463,12 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     if args.dry_run:
         cmd.append("--dry-run")
 
+    if args.parallel > 1:
+        cmd.extend(["--parallel", str(args.parallel)])
+
+    if args.skip_existing:
+        cmd.append("--skip-existing")
+
     if args.task_id:
         for tid in args.task_id:
             cmd.extend(["--task-id", tid])
@@ -747,6 +753,8 @@ Examples:
     p_inspect.add_argument("--task-id", action="append", help="Specific task IDs to fix")
     p_inspect.add_argument("--env-barriers-only", action="store_true", help="Only fix environmental barriers (score >= 1)")
     p_inspect.add_argument("--capability-issues-only", action="store_true", help="Only fix capability issues (score < 1)")
+    p_inspect.add_argument("--parallel", type=int, default=1, help="Number of parallel Claude sessions (default: 1)")
+    p_inspect.add_argument("--skip-existing", action="store_true", help="Skip tasks that already have fixes")
 
     # Cross-model rubric (recommended)
     p_cross = subparsers.add_parser("cross-rubric", help="Cross-model rubric evaluation (recommended)")
