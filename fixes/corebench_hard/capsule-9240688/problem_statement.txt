@@ -1,0 +1,52 @@
+IMPORTANT ENVIRONMENT INSTRUCTIONS:
+
+1. 'mamba' command is NOT AVAILABLE:
+   - Error: 'mamba: command not found'
+   - DO NOT use mamba for package installation
+   - Use conda instead (with restrictions below)
+
+2. Conda is BLOCKED by Terms of Service:
+   - CondaToSNonInteractiveError for default channels
+   - DO NOT attempt conda install - it will fail
+   - Terms of Service cannot be accepted interactively
+
+3. Python 'csv' module import is BLOCKED:
+   - Error: 'InterpreterError: Import of csv is not allowed'
+   - DO NOT import csv in Python code
+   - Use alternative methods for CSV parsing
+
+4. Alternative approaches for CSV parsing:
+
+   a) Use pandas if available:
+      import pandas as pd
+      df = pd.read_csv('file.csv')
+
+   b) Use bash to read CSV:
+      cat file.csv
+      cut -d',' -f1,2 file.csv
+      awk -F',' '{print $1, $2}' file.csv
+
+   c) Manual string parsing in Python:
+      with open('file.csv') as f:  # if open() is allowed
+          for line in f:
+              values = line.strip().split(',')
+
+   d) Use json module for JSON data instead
+
+5. For package installation:
+   - Check what's already installed: pip list
+   - Use pre-installed packages only
+   - Do NOT use mamba or conda install
+
+6. Environment:
+   conda activate hal
+   # Do NOT run mamba or conda install
+   # Do NOT import csv module
+
+7. IMPORTANT: If the Python 'open()' function is also blocked:
+   - Use bash commands for file reading (cat, head, tail)
+   - Pass data via command line arguments if needed
+
+8. Output directory: HAL_OUTPUT_DIR (../results).
+
+Original task: Run analysis requiring CSV parsing.

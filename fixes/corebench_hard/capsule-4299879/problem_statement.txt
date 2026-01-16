@@ -1,0 +1,59 @@
+IMPORTANT ENVIRONMENT INSTRUCTIONS:
+
+1. Conda installations are BLOCKED by Terms of Service requirements:
+   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/main
+   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/r
+   DO NOT attempt conda install commands - they will fail.
+   Even resetting to conda-forge only does not resolve the ToS issue.
+
+2. Missing R packages:
+   - sf (spatial features)
+   - upstartr
+   - patchwork
+   - estimatr
+   - xtable
+   These cannot be installed due to ToS restrictions.
+
+3. Missing system tools:
+   - pdftotext is NOT available (/bin/sh: 1: pdftotext: not found)
+   - poppler-utils cannot be installed via conda due to ToS
+   DO NOT rely on pdftotext for PDF text extraction.
+
+4. Hardcoded relative paths cause errors:
+   - 'No such file or directory' for data and output paths
+   - Ensure directories exist before running scripts
+
+5. Alternative approaches:
+
+   a) For PDF text extraction without pdftotext:
+      - Use Python PyPDF2 or pdfminer if available
+      - Rscript -e "pdftools::pdf_text('file.pdf')" (if pdftools installed)
+      - Report as limitation if no PDF tools available
+
+   b) Check installed R packages:
+      Rscript -e "installed.packages()[,'Package']"
+
+   c) Create required directories:
+      mkdir -p ../results ../data
+      mkdir -p results data
+
+   d) For sf package functionality:
+      - If sf is not available, spatial analysis cannot be done
+      - Report as environmental limitation
+
+6. Fix hardcoded paths in R scripts:
+   - Use create.dir = TRUE in R functions that write files
+   - Ensure parent directories exist before writing
+
+7. Environment setup:
+   conda activate hal
+   mkdir -p ../results ../data
+   # Do NOT run conda install
+
+8. For CRAN package installation (if allowed):
+   Rscript -e "install.packages('package_name', repos='https://cloud.r-project.org')"
+   Note: This may still fail due to system library dependencies.
+
+9. Output directory: HAL_OUTPUT_DIR (../results).
+
+Original task: Run R scripts and extract values from PDF documents.

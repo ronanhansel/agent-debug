@@ -1,0 +1,3 @@
+{
+  "problem_statement_suffix": "\n\nCRITICAL ENVIRONMENT RESTRICTIONS:\n- DO NOT import Python 'os' module - it is BLOCKED.\n- .Rmd files cannot be read by the file inspection tool - use bash 'cat' instead.\n- DO NOT run conda install - ToS issues block installation.\n- r-bchron is NOT available in conda-forge.\n- Use execute_bash for file operations (ls, mkdir, cat, etc.).\n- Render .Rmd files using: Rscript -e \"rmarkdown::render('file.Rmd', output_dir='../results')\"\n- Create directories with: mkdir -p ../results/figures"
+}

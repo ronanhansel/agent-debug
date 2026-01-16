@@ -1,0 +1,9 @@
+{
+  "HAL_SKIP_CONDA_INSTALL": "true",
+  "HAL_FORCE_CONDA_ENV": "hal",
+  "HAL_CONDA_CHANNELS": "conda-forge",
+  "CONDA_ALWAYS_YES": "true",
+  "R_LIBS_USER": "/tmp/R_libs",
+  "HAL_OUTPUT_DIR": "../results",
+  "PATH": "/usr/local/bin:/usr/bin:/bin"
+}

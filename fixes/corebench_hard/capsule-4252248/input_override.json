@@ -1,0 +1,3 @@
+{
+  "problem_statement_suffix": "\n\nCRITICAL ENVIRONMENT RESTRICTIONS:\n- DO NOT run conda install - ToS acceptance is blocked (CondaToSNonInteractiveError).\n- PharmacoGx, netbiov, apcluster, rcdk may not be available.\n- Check installed packages first: Rscript -e \"installed.packages()[,'Package']\"\n- If required Bioconductor packages are missing, report as environmental limitation.\n- Use bash 'cat' to read .R files if inspection tool fails.\n- Look for pre-computed results in data/ or results/ directories."
+}

@@ -1,0 +1,54 @@
+IMPORTANT ENVIRONMENT INSTRUCTIONS:
+
+1. Conda installations are BLOCKED by Terms of Service:
+   - CondaToSNonInteractiveError for default channels
+   DO NOT attempt conda install commands - they will fail.
+
+2. Missing system libraries:
+   - libxml2.so.2 NOT FOUND during R package builds
+   - This blocks installation of XML-dependent packages
+   - Cannot install system packages via apt-get
+
+3. Missing R packages:
+   - survminer failed to install (dependency issues)
+   - rmarkdown may not render PDF without TinyTeX
+   - Other packages requiring libxml2 will fail
+
+4. Alternative approaches:
+
+   a) Check what R packages ARE installed:
+      Rscript -e "installed.packages()[,'Package']"
+
+   b) For CRAN installation (if possible):
+      Rscript -e "install.packages('pkg', repos='https://cloud.r-project.org')"
+      Note: Packages requiring libxml2 will still fail
+
+   c) Set LD_LIBRARY_PATH if libxml2 exists elsewhere:
+      export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+      # Or check: find /usr -name "libxml2.so*" 2>/dev/null
+
+   d) For PDF rendering without TinyTeX:
+      - Try HTML output instead: output_format='html_document'
+      - Or install TinyTeX: Rscript -e "tinytex::install_tinytex()"
+
+   e) If survminer is required but unavailable:
+      - Use base R survival plotting
+      - Or report as environmental limitation
+
+5. For vignette/PDF rendering:
+   Rscript -e "rmarkdown::render('file.Rmd', output_dir='../results')"
+   # If PDF fails, try: output_format='html_document'
+
+6. Local R library setup:
+   mkdir -p /tmp/R_libs
+   export R_LIBS_USER=/tmp/R_libs
+   Rscript -e "install.packages('pkg', lib='/tmp/R_libs', repos='https://cloud.r-project.org')"
+
+7. Environment:
+   conda activate hal
+   export R_LIBS_USER=/tmp/R_libs
+   # Do NOT run conda install
+
+8. Output directory: ../results
+
+Original task: Render vignette and produce PDF output.

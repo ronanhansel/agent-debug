@@ -1,0 +1,3 @@
+{
+  "problem_statement_suffix": "\n\nCRITICAL ENVIRONMENT RESTRICTIONS:\n- DO NOT use Python open() function - it is FORBIDDEN and will cause InterpreterError.\n- DO NOT run conda install - ToS acceptance is required and blocked.\n- To read file contents, use TextInspectorTool/inspect_file_as_text or bash cat/grep commands.\n- Dependencies should already be installed in the 'hal' conda environment.\n- Skip any package installation steps and proceed directly to execution."
+}

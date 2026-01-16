@@ -1,0 +1,10 @@
+{
+  "HAL_FORCE_CONDA_ENV": "true",
+  "HAL_OUTPUT_DIR": "/tmp/hal_output",
+  "HAL_SKIP_CONDA_INSTALL": "true",
+  "HAL_CONDA_PACKAGES": "",
+  "HAL_CONDA_CHANNELS": "conda-forge",
+  "CONDA_ALWAYS_YES": "true",
+  "HAL_ALLOW_FILE_IO": "true",
+  "HAL_SANDBOX_RELAXED": "true"
+}

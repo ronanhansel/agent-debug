@@ -1,0 +1,3 @@
+{
+  "problem_statement_suffix": "\n\nCRITICAL ENVIRONMENT RESTRICTIONS:\n- Rscript may not be installed (exit code 127 indicates missing executable).\n- DO NOT run conda install - ToS acceptance is blocked.\n- Replication data files (replication_data/*.rda) may be MISSING.\n- Check file existence before attempting to load: ls -la replication_data/\n- If data files or R are missing, report as environmental limitation.\n- Do not attempt to install R packages if Rscript is unavailable."
+}

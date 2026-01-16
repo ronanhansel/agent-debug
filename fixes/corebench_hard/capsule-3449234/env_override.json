@@ -1,0 +1,7 @@
+{
+  "HAL_SKIP_CONDA_INSTALL": "true",
+  "HAL_FORCE_CONDA_ENV": "hal",
+  "HAL_CONDA_CHANNELS": "conda-forge",
+  "CONDA_ALWAYS_YES": "true",
+  "HAL_OUTPUT_DIR": "../results"
+}

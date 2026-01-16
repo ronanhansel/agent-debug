@@ -1,0 +1,36 @@
+IMPORTANT ENVIRONMENT INSTRUCTIONS:
+
+1. DO NOT attempt to install R packages via conda. The conda Terms of Service
+   restrictions prevent package installation (CondaToSNonInteractiveError).
+
+2. The .Rmd files CANNOT be directly inspected or converted by the file inspection
+   tool (UnsupportedFormatException). Do not rely on direct .Rmd file reading.
+
+3. The Python csv module is RESTRICTED. Do not use csv module for parsing.
+
+4. Alternative approaches for R processing:
+   - Use base R functions instead of packages like Rmisc
+   - For computing means and summaries, use: mean(), sd(), aggregate()
+   - Read CSV files with R: read.csv() or data.table::fread()
+
+5. To render R Markdown files:
+   Rscript -e "rmarkdown::render('path/to/file.Rmd', output_dir='../results/stats_figures_markdowns')"
+
+6. If Rmisc or other packages are unavailable, implement equivalent functionality:
+   - summarySE can be replaced with aggregate() + manual SE calculation
+   - Standard Error formula: SE = sd(x) / sqrt(length(x))
+
+   Example base R replacement for summarySE:
+   summarySE_base <- function(data, measurevar, groupvars) {
+     result <- aggregate(data[[measurevar]], by=data[groupvars], FUN=function(x) {
+       c(mean=mean(x, na.rm=TRUE), sd=sd(x, na.rm=TRUE), n=length(x))
+     })
+     result$se <- result$x[,"sd"] / sqrt(result$x[,"n"])
+     result
+   }
+
+7. Ensure all outputs go to HAL_OUTPUT_DIR (../results/stats_figures_markdowns).
+
+8. If rmarkdown package is unavailable, extract and run R code chunks manually.
+
+Original task: Compute the required statistics and produce outputs using available R functionality.

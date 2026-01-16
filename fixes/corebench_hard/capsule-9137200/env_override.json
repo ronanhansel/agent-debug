@@ -1,0 +1,6 @@
+{
+  "HAL_SKIP_CONDA_INSTALL": "true",
+  "HAL_FORCE_CONDA_ENV": "hal",
+  "CONDA_ALWAYS_YES": "true",
+  "HAL_OUTPUT_DIR": "../results"
+}

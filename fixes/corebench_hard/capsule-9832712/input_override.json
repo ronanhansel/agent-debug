@@ -1,0 +1,3 @@
+{
+  "problem_statement_suffix": "\n\nCRITICAL ENVIRONMENT RESTRICTIONS:\n- DO NOT run conda install - ToS acceptance is blocked.\n- tidyverse may NOT be available - use base R alternatives if needed.\n- Create required directories first: mkdir -p results/01_scopus-selection results/02_coding results/03_analyses\n- Check installed packages: Rscript -e \"installed.packages()[,'Package']\"\n- Use base R functions (read.csv, subset, merge, aggregate) if tidyverse unavailable.\n- If CRAN install needed: Rscript -e \"install.packages('pkg', repos='https://cloud.r-project.org')\""
+}

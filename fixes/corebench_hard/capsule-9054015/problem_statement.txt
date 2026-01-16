@@ -1,0 +1,55 @@
+IMPORTANT ENVIRONMENT INSTRUCTIONS:
+
+1. Conda installations are BLOCKED by Terms of Service:
+   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/main
+   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/r
+   DO NOT attempt conda install commands - they will fail.
+
+2. System headers are MISSING - R package compilation will fail:
+   - Error: 'fatal error: ft2build.h: No such file or directory'
+   - FreeType headers required for systemfonts package
+   - This blocks tidyverse installation from CRAN
+
+3. tidyverse is NOT AVAILABLE:
+   - library(tidyverse) will fail with "no package called 'tidyverse'"
+   - Cannot be installed due to missing system headers
+   - Cannot be installed via conda due to ToS restrictions
+
+4. Alternative approaches:
+
+   a) Check what R packages ARE installed:
+      Rscript -e "installed.packages()[,'Package']"
+
+   b) Use base R alternatives for tidyverse functions:
+      - read.csv() instead of readr::read_csv()
+      - subset(), merge() instead of dplyr functions
+      - aggregate() for group operations
+      - base R plotting instead of ggplot2
+
+   c) If the script requires tidyverse:
+      - Modify the script to use base R
+      - Or report as environmental limitation
+
+   d) Example base R replacements:
+      # Instead of: library(tidyverse)
+      # Use individual packages if available, or base R:
+
+      # Reading data:
+      data <- read.csv("file.csv")
+
+      # Filtering:
+      subset(data, column > value)
+
+      # Selecting columns:
+      data[, c("col1", "col2")]
+
+      # Summarizing:
+      aggregate(value ~ group, data, mean)
+
+5. Environment:
+   conda activate hal
+   # Do NOT run conda install or install.packages() for tidyverse
+
+6. Output directory: HAL_OUTPUT_DIR (../results).
+
+Original task: Run R analysis script that uses tidyverse.

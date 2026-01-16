@@ -1,0 +1,3 @@
+{
+  "problem_statement_suffix": "\n\nCRITICAL ENVIRONMENT RESTRICTIONS:\n- DO NOT import Python 'os' module - it is BLOCKED.\n- README.md cannot be read by file inspection tool - use bash 'cat README.md' instead.\n- For file operations, use bash commands (ls, cat, mkdir) via execute_bash.\n- Only a limited set of Python imports is allowed.\n- Read requirements.txt with bash: cat requirements.txt\n- Install dependencies: pip install -r requirements.txt\n- Run script: python multiclass_state_analysis_testing.py"
+}

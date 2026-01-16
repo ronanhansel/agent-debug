@@ -1,0 +1,10 @@
+{
+  "HAL_FORCE_CONDA_ENV": "false",
+  "HAL_SKIP_CONDA_INSTALL": "true",
+  "HAL_CONDA_PACKAGES": "",
+  "HAL_CONDA_CHANNELS": "conda-forge",
+  "CONDA_ALWAYS_YES": "true",
+  "R_LIBS_USER": "/opt/conda/envs/hal/lib/R/library",
+  "R_LIBS_SITE": "/opt/conda/envs/hal/lib/R/library",
+  "R_DEFAULT_PACKAGES": "datasets,utils,grDevices,graphics,stats,methods"
+}

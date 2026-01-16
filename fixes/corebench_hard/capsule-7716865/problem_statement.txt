@@ -1,0 +1,52 @@
+IMPORTANT ENVIRONMENT INSTRUCTIONS:
+
+1. Conda installations are BLOCKED by Terms of Service:
+   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/main
+   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/r
+   DO NOT attempt conda install commands - they will fail.
+
+2. Missing system-level dependencies:
+   - R may not be fully installed
+   - pandoc is NOT available
+   - pdflatex is NOT available
+   - CMake is NOT available
+   These CANNOT be installed due to environment restrictions.
+
+3. R package installation will fail:
+   - PackagesNotFoundError for tidyverse, r-webpower, etc.
+   - CMake is required for some R packages but missing
+   - CRAN source compilation will fail without system headers
+
+4. File I/O restrictions:
+   - '../results' directory may NOT be writable
+   - File reading may be forbidden for some paths (e.g., data/*.csv)
+   - Use HAL_OUTPUT_DIR for outputs
+
+5. Alternative approaches:
+
+   a) For Rmd rendering without pandoc/pdflatex:
+      - Cannot render to PDF without pdflatex
+      - Try HTML output: rmarkdown::render('file.Rmd', output_format='html_document')
+      - If pandoc is missing, rendering will fail entirely
+
+   b) For data file access:
+      - Check if files exist: ls -la data/
+      - Use bash cat to read CSV if Python I/O blocked
+      - Use R read.csv() if available
+
+   c) For output:
+      mkdir -p ../results
+      # Or use a writable temp directory
+
+6. If manuscript.Rmd cannot be rendered:
+   - Report that pandoc/pdflatex are missing
+   - Extract key values by running R code chunks directly
+   - Read the .Rmd as text and identify computations
+
+7. Environment:
+   conda activate hal
+   # Do NOT run conda install
+
+8. Output directory: Use HAL_OUTPUT_DIR or ensure ../results exists and is writable.
+
+Original task: Render manuscript.Rmd and extract required values.

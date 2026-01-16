@@ -1,0 +1,45 @@
+IMPORTANT ENVIRONMENT INSTRUCTIONS:
+
+1. Rscript may NOT be installed:
+   - Exit code 127 indicates Rscript is not in PATH
+   - Check if R is available: which Rscript or which R
+   - If not available, report as environmental limitation
+
+2. Conda installations are BLOCKED by Terms of Service:
+   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/main
+   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/r
+   DO NOT attempt conda install commands - they will fail.
+
+3. Replication data files are MISSING:
+   - replication_data/node_attributes.rda - NOT FOUND
+   - Other .rda files in replication_data/ may also be missing
+   - Error: 'cannot open the connection' when loading these files
+
+4. Alternative approaches:
+
+   a) Check if R is installed:
+      which Rscript
+      Rscript --version
+
+   b) If R is available but data files missing:
+      - List what files exist: ls -la replication_data/
+      - Report missing data artifacts as environmental limitation
+      - The analysis cannot be completed without the .rda files
+
+   c) If running tests/replicate.R:
+      - Check if file exists: ls -la tests/replicate.R
+      - If data files are missing, the script will fail
+      - Report this clearly rather than attempting execution
+
+5. Environment setup:
+   conda activate hal
+   # Do NOT run conda install - it will fail due to ToS
+
+6. If you must simulate output:
+   - Acknowledge that replication_data/*.rda files are missing
+   - Report that the replication script cannot complete
+   - Provide explanation of what the script would compute
+
+7. Output directory: HAL_OUTPUT_DIR (../results).
+
+Original task: Run the R replication script using the provided data files.

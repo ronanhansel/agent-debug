@@ -1,0 +1,3 @@
+{
+  "problem_statement_suffix": "\n\nCRITICAL ENVIRONMENT RESTRICTIONS:\n- DO NOT run conda install - ToS acceptance is blocked.\n- CMake is NOT available - packages requiring compilation will fail.\n- DO NOT use vision-language tool with model 'gpt-4o-2024-11-20' - it is invalid.\n- xvfb-run may not be available - use Rscript directly if needed.\n- For graphics without display: Rscript -e \"options(bitmapType='cairo'); source('Main.R')\"\n- Create output directories first: mkdir -p ../results"
+}

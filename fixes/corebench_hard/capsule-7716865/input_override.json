@@ -1,0 +1,3 @@
+{
+  "problem_statement_suffix": "\n\nCRITICAL ENVIRONMENT RESTRICTIONS:\n- DO NOT run conda install - ToS acceptance is blocked.\n- pandoc, pdflatex, CMake are NOT available - PDF rendering will fail.\n- R packages (tidyverse, webpower) cannot be installed.\n- ../results may not be writable - create with mkdir -p ../results first.\n- File I/O may be restricted for data/*.csv - use bash cat or R read.csv().\n- If Rmd rendering fails, extract values by running R code chunks directly.\n- Report missing dependencies as environmental limitations."
+}

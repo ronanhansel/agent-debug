@@ -1,0 +1,53 @@
+IMPORTANT ENVIRONMENT INSTRUCTIONS:
+
+1. Conda installations are BLOCKED by Terms of Service:
+   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/main
+   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/r
+   DO NOT attempt conda install commands - they will fail.
+
+2. tidyverse is NOT AVAILABLE:
+   - Error: "there is no package called 'tidyverse'"
+   - Cannot be installed via conda due to ToS restrictions
+   - CRAN installation may fail due to missing system headers
+
+3. Results directories may be empty:
+   - results/01_scopus-selection
+   - results/02_coding
+   - results/03_analyses
+   These directories must be created and populated.
+
+4. Alternative approaches:
+
+   a) Create required directories first:
+      mkdir -p results/01_scopus-selection results/02_coding results/03_analyses
+
+   b) Check what R packages ARE installed:
+      Rscript -e "installed.packages()[,'Package']"
+
+   c) Use base R alternatives for tidyverse functions:
+      - read.csv() instead of readr::read_csv()
+      - subset(), merge() instead of dplyr functions
+      - aggregate() for group operations
+      - base R plotting instead of ggplot2
+
+   d) If CRAN installation is possible:
+      Rscript -e "install.packages('tidyverse', repos='https://cloud.r-project.org')"
+      Note: This may still fail due to system header dependencies
+
+   e) If tidyverse cannot be installed:
+      - Modify master_script.R to use base R
+      - Or report as environmental limitation
+
+5. For master_script.R execution:
+   - Ensure directories exist before running
+   - Check library availability before loading
+   - Use try() or tryCatch() for error handling
+
+6. Environment:
+   conda activate hal
+   mkdir -p results/01_scopus-selection results/02_coding results/03_analyses
+   # Do NOT run conda install
+
+7. Output directory: Ensure results/ subdirectories exist and are writable.
+
+Original task: Run master_script.R to produce analysis outputs.

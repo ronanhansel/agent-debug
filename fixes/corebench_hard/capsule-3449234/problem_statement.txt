@@ -1,0 +1,40 @@
+IMPORTANT ENVIRONMENT INSTRUCTIONS:
+
+1. Conda installations are BLOCKED by Terms of Service requirements:
+   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/main
+   - CondaToSNonInteractiveError for https://repo.anaconda.com/pkgs/r
+   DO NOT attempt conda install commands - they will fail.
+
+2. Python file I/O is RESTRICTED:
+   - The 'open()' function is FORBIDDEN in the sandbox
+   - DO NOT use open() to read HTML or any other files
+   - This will cause InterpreterError
+
+3. Alternative approaches for reading file contents:
+
+   a) Use the TextInspectorTool or inspect_file_as_text tool:
+      - This is the approved method for reading file contents
+      - Example: inspect_file_as_text('results/visualize_results.html')
+
+   b) Use bash commands via execute_bash:
+      - cat results/visualize_results.html
+      - grep "pattern" results/visualize_results.html
+      - head -n 100 results/visualize_results.html
+
+4. For notebook execution:
+   - Use the notebook execution tools provided by the harness
+   - Do NOT rely on conda for dependency installation
+   - Use pre-installed packages in the 'hal' environment
+
+5. Environment setup:
+   conda activate hal
+   # Dependencies should already be available - do NOT run conda install
+
+6. To extract results from HTML output:
+   - Use bash: cat results/visualize_results.html | grep "value"
+   - Or use the TextInspectorTool to read the file
+   - Parse the content and extract needed values
+
+7. Output directory: HAL_OUTPUT_DIR (../results or results/).
+
+Original task: Execute the notebook and extract results from the HTML output.
