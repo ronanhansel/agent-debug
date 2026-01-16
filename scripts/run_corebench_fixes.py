@@ -13,10 +13,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import atexit
 import hashlib
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -24,12 +26,64 @@ import shlex
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from threading import Lock
+from typing import Any, Dict, List, Set
 import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# Track temporary conda environments for cleanup
+_temp_envs: Set[str] = set()
+_temp_envs_lock = Lock()
+_cleanup_done = False
+
+
+def _register_temp_env(env_name: str) -> None:
+    """Register a temporary environment for cleanup."""
+    with _temp_envs_lock:
+        _temp_envs.add(env_name)
+
+
+def _unregister_temp_env(env_name: str) -> None:
+    """Unregister a temporary environment after cleanup."""
+    with _temp_envs_lock:
+        _temp_envs.discard(env_name)
+
+
+def _cleanup_all_temp_envs() -> None:
+    """Clean up all registered temporary conda environments."""
+    global _cleanup_done
+    if _cleanup_done:
+        return
+    _cleanup_done = True
+
+    with _temp_envs_lock:
+        envs_to_clean = list(_temp_envs)
+
+    if not envs_to_clean:
+        return
+
+    print(f"\n[cleanup] Cleaning up {len(envs_to_clean)} temporary conda environment(s)...")
+    for env_name in envs_to_clean:
+        try:
+            _delete_conda_env(env_name, quiet=True)
+        except Exception as e:
+            print(f"[cleanup] Warning: Failed to clean up {env_name}: {e}")
+
+
+def _signal_handler(signum, frame):
+    """Handle Ctrl+C and other signals."""
+    print(f"\n[signal] Received signal {signum}, cleaning up...")
+    _cleanup_all_temp_envs()
+    sys.exit(128 + signum)
+
+
+# Register cleanup handlers
+atexit.register(_cleanup_all_temp_envs)
+signal.signal(signal.SIGINT, _signal_handler)
+signal.signal(signal.SIGTERM, _signal_handler)
 sys.path.insert(0, str(REPO_ROOT / "hal-harness"))
 
 DEFAULT_COREBENCH_DATA = REPO_ROOT / "hal-harness" / "hal" / "benchmarks" / "corebench" / "core_test.json"
@@ -150,6 +204,19 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Do not delete the isolated conda environment after the run (useful for debugging).",
     )
+    parser.add_argument(
+        "--rubric-csv",
+        help="Path to rubric CSV to determine which model failed for each task (for model-specific reruns).",
+    )
+    parser.add_argument(
+        "--model-config",
+        default=str(REPO_ROOT / "model_to_baseline.json"),
+        help="Path to model_to_baseline.json mapping model names to agent_args.",
+    )
+    parser.add_argument(
+        "--model",
+        help="Force a specific model for all tasks (overrides rubric CSV). Use model key from model_to_baseline.json.",
+    )
     return parser.parse_args()
 
 
@@ -158,6 +225,88 @@ def load_agent_args(path: Path) -> Dict[str, object]:
     if not isinstance(data, dict):
         raise ValueError(f"Agent args JSON must be an object, got {type(data)}")
     return data
+
+
+def load_model_config(path: Path) -> Dict[str, Dict[str, Any]]:
+    """Load model_to_baseline.json mapping model names to configs."""
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"Model config JSON must be an object, got {type(data)}")
+    return data
+
+
+def load_rubric_task_models(csv_path: Path) -> Dict[str, str]:
+    """Load rubric CSV and return mapping of task_id -> model name."""
+    import csv
+    task_models: Dict[str, str] = {}
+    if not csv_path.exists():
+        return task_models
+    with csv_path.open("r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            task_id = row.get("task_id", "").strip()
+            model = row.get("model", "").strip()
+            if task_id and model:
+                # Only keep first occurrence (in case of duplicates)
+                if task_id not in task_models:
+                    task_models[task_id] = model
+    return task_models
+
+
+def get_agent_args_for_task(
+    task_id: str,
+    task_models: Dict[str, str],
+    model_config: Dict[str, Dict[str, Any]],
+    default_agent_args: Dict[str, object],
+    forced_model: str | None = None,
+) -> Dict[str, object]:
+    """Get the agent_args for a specific task based on which model failed.
+
+    Args:
+        task_id: The capsule ID
+        task_models: Mapping of task_id -> model name from rubric CSV
+        model_config: The model_to_baseline.json config
+        default_agent_args: Fallback agent_args if no model match
+        forced_model: If set, use this model for all tasks
+
+    Returns:
+        Agent args dict with model_name, reasoning_effort, etc.
+    """
+    # Determine which model to use
+    if forced_model:
+        model_key = forced_model
+    else:
+        model_key = task_models.get(task_id)
+
+    if not model_key:
+        print(f"[model] No model found for {task_id}, using default agent_args")
+        return default_agent_args.copy()
+
+    # Look up model config
+    model_entry = model_config.get(model_key)
+    if not model_entry:
+        # Try partial match (e.g., "gpt-4.1-04-14" -> "gpt-4.1")
+        for key, entry in model_config.items():
+            if key in model_key or model_key in key:
+                model_entry = entry
+                print(f"[model] Partial match: '{model_key}' -> '{key}'")
+                break
+
+    if not model_entry:
+        print(f"[model] Model '{model_key}' not found in config, using default agent_args")
+        return default_agent_args.copy()
+
+    # Build agent_args from model config
+    agent_args = model_entry.get("agent_args", {}).copy()
+    if not agent_args:
+        print(f"[model] No agent_args in model config for '{model_key}', using default")
+        return default_agent_args.copy()
+
+    print(f"[model] Task {task_id} will use model: {agent_args.get('model_name')} "
+          f"(reasoning_effort={agent_args.get('reasoning_effort', 'N/A')})")
+    return agent_args
 
 
 def normalize_value(value: object) -> str:
@@ -213,6 +362,66 @@ def _conda_executable() -> str | None:
     if mamba_in_env.exists():
         return str(mamba_in_env)
     return shutil.which("mamba") or shutil.which("conda") or os.environ.get("CONDA_EXE")
+
+
+def _create_isolated_conda_env(
+    base_env: str,
+    capsule_id: str,
+    python_version: str = "3.12",
+) -> str:
+    """Create an isolated conda environment for a capsule.
+
+    Clones from the base environment to get core dependencies,
+    then returns the new environment name.
+    """
+    conda = _conda_executable()
+    if not conda:
+        raise FileNotFoundError("conda/mamba executable not found")
+
+    # Generate unique env name
+    env_name = f"hal_capsule_{capsule_id}_{uuid.uuid4().hex[:8]}"
+
+    print(f"[conda][create] Creating isolated environment: {env_name}")
+
+    # Clone from base env to get core dependencies (faster than fresh install)
+    cmd = [conda, "create", "-n", env_name, "--clone", base_env, "-y"]
+    print(f"[conda][create] Cloning from {base_env}...")
+
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        # If clone fails, create fresh env with Python
+        print(f"[conda][create] Clone failed, creating fresh environment...")
+        cmd = [conda, "create", "-n", env_name, f"python={python_version}", "-y"]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        if proc.returncode != 0:
+            raise RuntimeError(f"Failed to create conda env: {proc.stderr}")
+
+    # Register for cleanup
+    _register_temp_env(env_name)
+    print(f"[conda][create] Created environment: {env_name}")
+
+    return env_name
+
+
+def _delete_conda_env(env_name: str, quiet: bool = False) -> None:
+    """Delete a conda environment."""
+    conda = _conda_executable()
+    if not conda:
+        return
+
+    if not quiet:
+        print(f"[conda][delete] Removing environment: {env_name}")
+
+    cmd = [conda, "env", "remove", "-n", env_name, "-y"]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+
+    if proc.returncode == 0:
+        _unregister_temp_env(env_name)
+        if not quiet:
+            print(f"[conda][delete] Removed environment: {env_name}")
+    else:
+        if not quiet:
+            print(f"[conda][delete] Warning: Failed to remove {env_name}: {proc.stderr}")
 
 
 def _conda_spec_name(spec: str) -> str:
@@ -435,6 +644,7 @@ def build_hal_eval_cmd(
     run_id: str,
     docker: bool,
     vm: bool,
+    max_concurrent: int = 1,
 ) -> List[str]:
     cmd: List[str] = [
         sys.executable,
@@ -445,7 +655,7 @@ def build_hal_eval_cmd(
         "--agent_function", "main.run",
         "--agent_dir", str(agent_dir),
         "--run_id", run_id,
-        "--max_concurrent", "1",
+        "--max_concurrent", str(max_concurrent),
     ]
     for key, value in agent_args.items():
         cmd += ["-A", f"{key}={normalize_value(value)}"]
@@ -456,18 +666,42 @@ def build_hal_eval_cmd(
     return cmd
 
 
-def copy_agent_with_fix(base_dir: Path, task_id: str, fix_root: Path, *, benchmark: str) -> Path:
+def copy_agent_with_fix(
+    base_dir: Path,
+    task_id: str,
+    fix_root: Path,
+    *,
+    benchmark: str,
+    env_override: Dict[str, str] | None = None,
+) -> Path:
     temp_dir = Path(tempfile.mkdtemp(prefix="corebench_fix_"))
     shutil.copytree(base_dir, temp_dir, dirs_exist_ok=True)
     if SMOLAGENTS_SRC.exists():
         shutil.copytree(SMOLAGENTS_SRC, temp_dir / "smolagents", dirs_exist_ok=True)
     fix = load_fix_package(task_id, fixes_root=fix_root, benchmark=benchmark)
     if not fix:
-        return temp_dir
-    if fix.agent_overlay:
-        apply_agent_overlay(temp_dir, fix.agent_overlay)
-    if fix.agent_patch:
-        apply_agent_patch(temp_dir, fix.agent_patch)
+        pass  # Continue to check env_override for pip packages
+    else:
+        if fix.agent_overlay:
+            apply_agent_overlay(temp_dir, fix.agent_overlay)
+        if fix.agent_patch:
+            apply_agent_patch(temp_dir, fix.agent_patch)
+
+    # Add pip packages from env_override to requirements.txt (for Docker builds)
+    if env_override:
+        pip_packages = env_override.get("HAL_PIP_PACKAGES", "").split()
+        if pip_packages:
+            requirements_path = temp_dir / "requirements.txt"
+            existing = requirements_path.read_text() if requirements_path.exists() else ""
+            # Append pip packages if not already present
+            new_packages = [p for p in pip_packages if p not in existing]
+            if new_packages:
+                with requirements_path.open("a") as f:
+                    f.write("\n# Added by fix package\n")
+                    for pkg in new_packages:
+                        f.write(f"{pkg}\n")
+                print(f"[agent] Added {len(new_packages)} pip packages to requirements.txt for {task_id}")
+
     return temp_dir
 
 
@@ -719,11 +953,50 @@ def run_one_capsule(
     rubric_output_dir: Path,
     skip_rubrics: bool,
     keep_temp: bool,
+    conda_env: str = "hal",
+    use_isolated_env: bool = False,
+    keep_isolated_env: bool = False,
 ) -> Path:
     dataset_path = dataset_dir / f"core_test_{capsule_id}_{uuid.uuid4().hex}.json"
     dataset_path.write_text(dataset_payload, encoding="utf-8")
 
-    temp_agent_dir = copy_agent_with_fix(agent_dir, capsule_id, fixes_base, benchmark=benchmark)
+    # For Docker mode: packages are installed INSIDE the Docker container via requirements.txt
+    # For non-Docker mode: install packages on host conda env
+    isolated_env_name: str | None = None
+    active_conda_env = conda_env
+
+    if not docker:
+        # Only do host-side conda installation for non-Docker mode
+        if use_isolated_env:
+            try:
+                isolated_env_name = _create_isolated_conda_env(
+                    base_env=conda_env,
+                    capsule_id=capsule_id,
+                )
+                active_conda_env = isolated_env_name
+            except Exception as exc:
+                print(f"[capsule][conda] WARNING: Failed to create isolated env for {capsule_id}: {exc}")
+                print(f"[capsule][conda] Falling back to shared env: {conda_env}")
+
+        # Install per-capsule conda packages into the host environment
+        if env_override:
+            channels = _split_channels(env_override.get("HAL_CONDA_CHANNELS")) or ["conda-forge"]
+            packages = _split_packages(env_override.get("HAL_CONDA_PACKAGES"))
+            if packages:
+                print(f"[capsule][conda] Installing {len(packages)} packages for {capsule_id} into {active_conda_env}...")
+                try:
+                    _install_conda_packages(env_name=active_conda_env, channels=channels, packages=packages)
+                except Exception as exc:
+                    print(f"[capsule][conda] WARNING: Failed to install packages for {capsule_id}: {exc}")
+    else:
+        print(f"[capsule] Docker mode: packages will be installed inside container via requirements.txt")
+
+    # Copy agent and apply fixes (also adds pip packages to requirements.txt for Docker)
+    temp_agent_dir = copy_agent_with_fix(
+        agent_dir, capsule_id, fixes_base,
+        benchmark=benchmark,
+        env_override=env_override,
+    )
     try:
         prefix_value = str(prefix or "").strip()
         prefix_part = f"{_slugify(prefix_value, '')}_" if prefix_value else ""
@@ -808,6 +1081,12 @@ def run_one_capsule(
         dataset_path.unlink(missing_ok=True)
         if not keep_temp:
             shutil.rmtree(temp_agent_dir, ignore_errors=True)
+        # Clean up isolated conda environment
+        if isolated_env_name and not keep_isolated_env:
+            try:
+                _delete_conda_env(isolated_env_name)
+            except Exception as exc:
+                print(f"[capsule][conda] WARNING: Failed to clean up isolated env {isolated_env_name}: {exc}")
 
 
 def main() -> None:
@@ -821,8 +1100,28 @@ def main() -> None:
     rubric_output_dir = REPO_ROOT / "rubrics_output"
     rubric_output_dir.mkdir(parents=True, exist_ok=True)
 
-    agent_args = load_agent_args(agent_args_path)
-    agent_args["benchmark_name"] = args.benchmark
+    # Load default agent_args (fallback if no model match)
+    default_agent_args = load_agent_args(agent_args_path)
+    default_agent_args["benchmark_name"] = args.benchmark
+
+    # Load model config for model-specific agent_args
+    model_config_path = Path(args.model_config)
+    model_config = load_model_config(model_config_path)
+    if model_config:
+        print(f"[model] Loaded {len(model_config)} model configs from {model_config_path.name}")
+    else:
+        print(f"[model] No model config found, will use default agent_args for all tasks")
+
+    # Load task->model mapping from rubric CSV
+    task_models: Dict[str, str] = {}
+    if args.rubric_csv:
+        rubric_csv_path = Path(args.rubric_csv)
+        task_models = load_rubric_task_models(rubric_csv_path)
+        print(f"[model] Loaded {len(task_models)} task->model mappings from {rubric_csv_path.name}")
+    elif args.model:
+        print(f"[model] Using forced model '{args.model}' for all tasks")
+    else:
+        print(f"[model] No --rubric-csv or --model specified, will use default agent_args")
 
     if not args.skip_install:
         install_agent_requirements(agent_dir)
@@ -844,10 +1143,9 @@ def main() -> None:
 
     try:
         fixes_base = fixes_root.parent
-        capsule_jobs: List[tuple[str, str, Dict[str, str] | None]] = []
+        # capsule_jobs now includes per-task agent_args: (capsule_id, payload, env_override, task_agent_args)
+        capsule_jobs: List[tuple[str, str, Dict[str, str] | None, Dict[str, object]]] = []
         conda_env = "hal"
-        conda_channels: List[str] = []
-        conda_packages: List[str] = []
         for fix_dir in fix_dirs:
             capsule_id = fix_dir.name
             print(f"\n=== Queuing {capsule_id} ===")
@@ -866,30 +1164,36 @@ def main() -> None:
             env_override = fix.env_override if fix else None
             if env_override:
                 conda_env = str(env_override.get("HAL_FORCE_CONDA_ENV") or conda_env)
-                conda_channels.extend(_split_channels(env_override.get("HAL_CONDA_CHANNELS")))
-                conda_packages.extend(_split_packages(env_override.get("HAL_CONDA_PACKAGES")))
             payload = build_single_task_payload(
                 original_tasks=capsule_map,
                 capsule_id=capsule_id,
                 input_override=input_override,
             )
-            capsule_jobs.append((capsule_id, payload, env_override))
+            # Get model-specific agent_args for this task
+            task_agent_args = get_agent_args_for_task(
+                task_id=capsule_id,
+                task_models=task_models,
+                model_config=model_config,
+                default_agent_args=default_agent_args,
+                forced_model=args.model,
+            )
+            task_agent_args["benchmark_name"] = args.benchmark
+            capsule_jobs.append((capsule_id, payload, env_override, task_agent_args))
 
         if not capsule_jobs:
             print("No runnable capsules found after filtering.")
             return
 
-        # Best-effort: ensure conda packages requested by fix packages are installed once up-front.
-        conda_packages = sorted({p for p in conda_packages if p})
-        conda_channels = sorted({c for c in conda_channels if c}) or ["conda-forge"]
-        ensure_hal_cli_dependencies(conda_env, conda_channels)
-        if conda_packages:
-            _install_conda_packages(env_name=conda_env, channels=conda_channels, packages=conda_packages)
+        # Ensure basic CLI dependencies (click) are available
+        ensure_hal_cli_dependencies(conda_env, ["conda-forge"])
+
+        # NOTE: Per-capsule conda packages are now installed inside run_one_capsule()
+        # This avoids conflicts when different capsules need different package versions (e.g., r-base=4.0 vs r-base=4.2)
 
         generated_traces: List[Path] = []
         max_workers = max(1, int(args.max_parallel_capsules))
         if max_workers <= 1 or len(capsule_jobs) <= 1:
-            for capsule_id, payload, env_override in capsule_jobs:
+            for capsule_id, payload, env_override, task_agent_args in capsule_jobs:
                 print(f"\n=== Processing {capsule_id} ===")
                 generated_traces.append(
                     run_one_capsule(
@@ -898,7 +1202,7 @@ def main() -> None:
                         dataset_dir=temp_root,
                         dataset_payload=payload,
                         agent_dir=agent_dir,
-                        agent_args=agent_args,
+                        agent_args=task_agent_args,
                         benchmark=args.benchmark,
                         prefix=args.prefix,
                         docker=args.docker,
@@ -909,6 +1213,9 @@ def main() -> None:
                         rubric_output_dir=rubric_output_dir,
                         skip_rubrics=args.skip_rubrics,
                         keep_temp=args.keep_temp,
+                        conda_env=conda_env,
+                        use_isolated_env=args.isolated_env,
+                        keep_isolated_env=args.keep_isolated_env,
                     )
                 )
         else:
@@ -922,7 +1229,7 @@ def main() -> None:
                         dataset_dir=temp_root,
                         dataset_payload=payload,
                         agent_dir=agent_dir,
-                        agent_args=agent_args,
+                        agent_args=task_agent_args,
                         benchmark=args.benchmark,
                         prefix=args.prefix,
                         docker=args.docker,
@@ -933,8 +1240,11 @@ def main() -> None:
                         rubric_output_dir=rubric_output_dir,
                         skip_rubrics=args.skip_rubrics,
                         keep_temp=args.keep_temp,
+                        conda_env=conda_env,
+                        use_isolated_env=args.isolated_env,
+                        keep_isolated_env=args.keep_isolated_env,
                     ): capsule_id
-                    for capsule_id, payload, env_override in capsule_jobs
+                    for capsule_id, payload, env_override, task_agent_args in capsule_jobs
                 }
                 for future in as_completed(futures):
                     try:

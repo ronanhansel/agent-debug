@@ -411,6 +411,18 @@ def cmd_fix(args: argparse.Namespace) -> int:
         cmd.extend(["--rubric-model", args.rubric_model])
     if args.skip_rubrics:
         cmd.append("--skip-rubrics")
+    if args.max_parallel_capsules > 1:
+        cmd.extend(["--max-parallel-capsules", str(args.max_parallel_capsules)])
+    if args.isolated_env:
+        cmd.append("--isolated-env")
+    if args.keep_isolated_env:
+        cmd.append("--keep-isolated-env")
+    if args.rubric_csv:
+        cmd.extend(["--rubric-csv", args.rubric_csv])
+    if args.model_config:
+        cmd.extend(["--model-config", args.model_config])
+    if args.model:
+        cmd.extend(["--model", args.model])
 
     log(f"Running fixes with prefix: {prefix}", prefix)
     log(f"Command: {' '.join(cmd)}", prefix)
@@ -741,6 +753,12 @@ Examples:
     p_fix.add_argument("--task-id", action="append", help="Specific task IDs to fix")
     p_fix.add_argument("--rubric-model", help="Model for rubric re-evaluation")
     p_fix.add_argument("--skip-rubrics", action="store_true", help="Skip rubric evaluation")
+    p_fix.add_argument("--max-parallel-capsules", type=int, default=1, help="Max concurrent capsule evaluations (default: 1)")
+    p_fix.add_argument("--isolated-env", action="store_true", help="Create isolated conda env per capsule (avoids version conflicts)")
+    p_fix.add_argument("--keep-isolated-env", action="store_true", help="Keep isolated envs after completion (for debugging)")
+    p_fix.add_argument("--rubric-csv", help="Rubric CSV to determine which model failed for each task")
+    p_fix.add_argument("--model-config", help="Path to model_to_baseline.json")
+    p_fix.add_argument("--model", help="Force a specific model for all tasks")
 
     # Inspect
     p_inspect = subparsers.add_parser("inspect", help="Use Claude Code CLI to diagnose and fix env barriers")
