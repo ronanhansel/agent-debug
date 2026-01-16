@@ -300,6 +300,61 @@ Individual traces likely lack `raw_logging_results`. Extract from Weave first.
 | `scripts/run_corebench_fixes.py` | Apply fixes and re-run |
 | `rubrics/environmental_barrier.txt` | Rubric definition |
 
+## Cross-Model Rubric Evaluation (Recommended)
+
+For the most accurate environmental barrier detection, use cross-model evaluation:
+
+```bash
+python scripts/cross_model_rubric.py \
+  --traces \
+    traces/baseline_gpt41.json \
+    traces/baseline_o3.json \
+    traces/baseline_o4mini_high.json \
+    traces/baseline_o4mini_low.json \
+  --prefix iter1_ \
+  --failed-only
+```
+
+### How It Works
+
+**Key insight**: If ANY model succeeded at a task, that task has NO environmental barrier.
+
+1. **Phase 1: Build Task Success Map**
+   - Scan all model traces
+   - Identify which tasks each model passed/failed
+   - Extract error patterns from each model
+
+2. **Phase 2: Context-Aware Evaluation**
+   - **Quick decisions**: If any model succeeded → score=0 (capability issue)
+   - **Deep analysis**: If ALL models failed → detailed rubric evaluation with cross-model context
+
+### Benefits
+
+- **More accurate**: Uses evidence from multiple models
+- **Faster**: Quick decisions for tasks where any model succeeded
+- **Better reasoning**: Rubric sees "Model A succeeded, so this is NOT an env barrier"
+
+### Example Output
+
+```
+Task summary: 45 total tasks
+  - 22 tasks solved by at least one model (NOT env barriers)
+  - 23 tasks failed by ALL models (potential env barriers)
+
+Quick decisions (other model succeeded): 22
+Full evaluations needed: 23
+```
+
+### Summary Mode
+
+Preview the cross-model summary without running evaluation:
+
+```bash
+python scripts/cross_model_rubric.py \
+  --traces traces/*.json \
+  --summary-only
+```
+
 ## Models
 
 Recommended models for rubric evaluation:

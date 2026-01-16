@@ -532,6 +532,60 @@ def cmd_full(args: argparse.Namespace) -> int:
 
 
 # =============================================================================
+# CROSS-MODEL RUBRIC
+# =============================================================================
+
+def cmd_cross_rubric(args: argparse.Namespace) -> int:
+    """Run cross-model rubric evaluation for better accuracy."""
+    import subprocess
+
+    prefix = args.prefix or ""
+    traces = args.traces or []
+
+    if not traces:
+        # Find baseline traces
+        import glob
+        patterns = [
+            f"{TRACES_DIR}/corebench_hard_hal_generalist_agent*_UPLOAD.json",
+            f"{TRACES_DIR}/*baseline*.json",
+        ]
+        for pattern in patterns:
+            traces.extend(glob.glob(pattern))
+        traces = sorted(set(traces))[:4]  # Limit to 4
+
+    if not traces:
+        log("No traces found. Specify --traces or ensure baseline traces exist.", prefix)
+        return 1
+
+    cmd = [
+        sys.executable, str(REPO_ROOT / "scripts" / "cross_model_rubric.py"),
+        "--traces", *traces,
+        "--model", args.model or "gpt-5.2",
+        "--rubrics-dir", str(RUBRICS_DIR),
+        "--output-dir", str(REPO_ROOT / "rubrics_output"),
+    ]
+
+    if prefix:
+        cmd.extend(["--prefix", prefix])
+    if args.failed_only:
+        cmd.append("--failed-only")
+    if args.max_tasks:
+        cmd.extend(["--max-tasks", str(args.max_tasks)])
+    if args.summary_only:
+        cmd.append("--summary-only")
+    if args.evaluate_model:
+        cmd.extend(["--evaluate-model", args.evaluate_model])
+    if args.base_url:
+        cmd.extend(["--base-url", args.base_url])
+
+    log(f"Running cross-model rubric evaluation", prefix)
+    log(f"Traces: {len(traces)}", prefix)
+
+    result = subprocess.run(cmd, cwd=REPO_ROOT)
+    return result.returncode
+
+
+# =============================================================================
 # STATUS
 # =============================================================================
 
@@ -662,6 +716,17 @@ Examples:
     p_inspect.add_argument("--dry-run", action="store_true", help="Don't write fix files")
     p_inspect.add_argument("--task-id", action="append", help="Specific task IDs")
 
+    # Cross-model rubric (recommended)
+    p_cross = subparsers.add_parser("cross-rubric", help="Cross-model rubric evaluation (recommended)")
+    add_common(p_cross)
+    p_cross.add_argument("--traces", nargs="+", help="Trace files to analyze (auto-detects if not specified)")
+    p_cross.add_argument("--model", default="gpt-5.2", help="Model for rubric evaluation")
+    p_cross.add_argument("--failed-only", action="store_true", help="Only evaluate failed tasks")
+    p_cross.add_argument("--max-tasks", type=int, help="Limit number of tasks")
+    p_cross.add_argument("--summary-only", action="store_true", help="Only print cross-model summary")
+    p_cross.add_argument("--evaluate-model", help="Only evaluate failures from this model")
+    p_cross.add_argument("--base-url", help="OpenAI API base URL")
+
     # Full pipeline
     p_full = subparsers.add_parser("full", help="Run full pipeline")
     add_common(p_full)
@@ -693,6 +758,7 @@ Examples:
     commands = {
         "status": cmd_status,
         "rubric": cmd_rubric,
+        "cross-rubric": cmd_cross_rubric,
         "extract": cmd_extract,
         "merge": cmd_merge,
         "fix": cmd_fix,
