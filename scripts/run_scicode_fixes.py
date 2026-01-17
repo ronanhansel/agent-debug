@@ -1069,10 +1069,18 @@ def main():
                                 all_failed.add(str(task_id))
                         total_cost += results.get("total_cost", 0)
 
-                    # Merge raw_eval_results details
+                    # Merge raw_eval_results details - combine unique subtasks
                     if "raw_eval_results" in data and "details" in data["raw_eval_results"]:
-                        for task_id, details in data["raw_eval_results"]["details"].items():
-                            merged_raw_eval["details"][task_id] = details
+                        for task_id, subtasks in data["raw_eval_results"]["details"].items():
+                            task_id_str = str(task_id)
+                            if task_id_str not in merged_raw_eval["details"]:
+                                merged_raw_eval["details"][task_id_str] = []
+                            # Merge subtask lists, keeping unique subtasks
+                            existing_subtasks = set(merged_raw_eval["details"][task_id_str])
+                            for subtask in subtasks:
+                                if subtask not in existing_subtasks:
+                                    merged_raw_eval["details"][task_id_str].append(subtask)
+                                    existing_subtasks.add(subtask)
 
                     # Keep config from first file
                     if not merged_config and "config" in data:
@@ -1085,14 +1093,22 @@ def main():
             total_tasks = len(all_successful) + len(all_failed)
             accuracy = len(all_successful) / total_tasks if total_tasks > 0 else 0.0
 
+            # Calculate subtask_accuracy from merged details
+            # Count total successful subtasks across all tasks
+            successful_subtasks = sum(
+                len(subtasks) for subtasks in merged_raw_eval["details"].values()
+            )
+            # Scicode has 288 total subtasks across 80 tasks
+            subtask_accuracy = successful_subtasks / 288 if successful_subtasks > 0 else 0.0
+
             # Create merged trace with proper structure
             merged_trace = {
                 "config": merged_config,
                 "results": {
                     "accuracy": accuracy,
-                    "subtask_accuracy": 0.0,  # Would need per-step data to calculate
-                    "successful_tasks": sorted(all_successful),
-                    "failed_tasks": sorted(all_failed),
+                    "subtask_accuracy": subtask_accuracy,
+                    "successful_tasks": sorted(all_successful, key=lambda x: (int(x) if x.isdigit() else float('inf'), x)),
+                    "failed_tasks": sorted(all_failed, key=lambda x: (int(x) if x.isdigit() else float('inf'), x)),
                     "total_cost": total_cost,
                     "latencies": {},
                 },
@@ -1114,6 +1130,7 @@ def main():
             log(f"Saved: {merged_path.name}", "merge")
             log(f"  Tasks: {len(all_successful)} successful, {len(all_failed)} failed ({total_tasks} total)", "merge")
             log(f"  Accuracy: {accuracy:.1%}", "merge")
+            log(f"  Subtask accuracy: {subtask_accuracy:.1%} ({successful_subtasks}/288 subtasks)", "merge")
 
         print(f"\n{'='*60}")
         print(f"Merged {len(model_traces)} model traces")

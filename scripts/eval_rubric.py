@@ -159,6 +159,11 @@ def main():
         help="Sort tasks from least to most messages before processing.",
     )
     parser.add_argument(
+        "--sort-by-file-size",
+        action="store_true",
+        help="Sort trace files from smallest to largest file size before processing.",
+    )
+    parser.add_argument(
         "--inbetween",
         type=str,
         help="Bash command to execute after each trace file (e.g., 'TMUX= ./deploy_llm.sh')",
@@ -205,11 +210,25 @@ def main():
         output_dir = REPO_ROOT / output_dir
     args.output_dir = str(output_dir)
 
-    # Process each trace file independently
-    for i, trace_file in enumerate(args.trace_files):
+    # Resolve all trace file paths
+    trace_files = []
+    for trace_file in args.trace_files:
         trace_path = Path(trace_file)
         if not trace_path.is_absolute():
             trace_path = REPO_ROOT / trace_path
+        trace_files.append(trace_path)
+
+    # Sort by file size if requested (smallest to largest)
+    if args.sort_by_file_size:
+        trace_files.sort(key=lambda p: p.stat().st_size)
+        print("Trace files sorted by file size (smallest to largest):")
+        for tf in trace_files:
+            size_mb = tf.stat().st_size / (1024 * 1024)
+            print(f"  {tf.name}: {size_mb:.2f} MB")
+        print()
+
+    # Process each trace file independently
+    for i, trace_path in enumerate(trace_files):
         args.trace_file = str(trace_path)
 
         print(f"\n{'='*60}")
