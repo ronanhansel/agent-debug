@@ -524,7 +524,7 @@ def main():
             grade_display = int(verdict.final_grade) if verdict.final_grade in (0, 1, 0.0, 1.0) else verdict.final_grade
             print(f"[{completed_count[0]}/{len(task_ids)}] Done: task {task_id} -> {status} (grade: {grade_display})")
             if verdict.reasoning:
-                reasoning_preview = verdict.reasoning[:120].replace("\n", " ")
+                reasoning_preview = verdict.reasoning.replace("\n", " ")
                 print(f"    Reasoning: {reasoning_preview}...")
 
         # Delay between tasks (per-thread)

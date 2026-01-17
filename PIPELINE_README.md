@@ -5,6 +5,7 @@ This document describes the full pipeline for debugging and improving HAL agent 
 ## Overview
 
 The pipeline consists of these stages:
+
 1. **Traces** - Agent run results from HAL evaluation
 2. **Rubric Evaluation** - Classify failures using benchmark-specific rubrics
 3. **Inspection** - Analyze failures and generate fix recommendations
@@ -40,14 +41,15 @@ python scripts/eval_rubric.py \
 
 Each benchmark has its own rubric template in `rubric_templates/`:
 
-| Benchmark | Rubric File | Focus |
-|-----------|-------------|-------|
-| SciCode | `scicode.txt` | Intrinsic Formation Errors (syntactic corruption, contextual discontinuity, mathematical ambiguity, environmental contradiction) |
-| CoreBench | `corebench.txt` | Environmental Barriers vs Capability Issues |
+| Benchmark | Rubric File     | Focus                                                                                                                            |
+| --------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| SciCode   | `scicode.txt`   | Intrinsic Formation Errors (syntactic corruption, contextual discontinuity, mathematical ambiguity, environmental contradiction) |
+| CoreBench | `corebench.txt` | Environmental Barriers vs Capability Issues                                                                                      |
 
 ### Output Structure
 
 Rubric evaluation outputs go to `rubrics_output/<rubric_name>/`:
+
 ```
 rubrics_output/
 ├── scicode/                    # SciCode rubric results
@@ -61,6 +63,7 @@ rubrics_output/
 ## Rubric Evaluation (Docent-based)
 
 The primary rubric evaluation uses **Docent** for:
+
 - SQLite LLM response caching (no repeat API calls)
 - Batch processing with retry logic
 - Proper message parsing from HAL traces
@@ -71,19 +74,32 @@ The primary rubric evaluation uses **Docent** for:
 ```bash
 # Evaluate with a specific rubric
 python scripts/eval_rubric.py \
-    --trace-file traces/scicode_hal_generalist_agent_o4mini20250416_low_1745608137_UPLOAD.json \
-    --trace-file traces/scicode_scicode_tool_calling_agent_claudeopus41_1755801688_UPLOAD.json \
-    --trace-file traces/scicode_scicode-tool_calling_agent_claudeopus4120250514_1754678715_UPLOAD.json \
-    --trace-file traces/scicode_scicode_tool_calling_agent_claude37sonnet20250219_high_1753770104_UPLOAD.json \
-    --trace-file traces/scicode_scicode_tool_calling_agent_claudesonnet45_high_1759429729_UPLOAD.json \
     --trace-file traces/scicode_scicode_tool_calling_agent_deepseekaiDeepSeekV3_1745349011_UPLOAD.json \
     --trace-file traces/scicode_hal_generalist_agent_claude37sonnet20250219_high_1748947217_UPLOAD.json \
     --rubric rubric_templates/scicode.txt \
     --rubric-model openai:gpt-5.2 \
+    --inbetween "TMUX= ./deploy_llm.sh" \
+    --sleep 5s \
+    --max-batch-messages 400 \
+    --inter-batch-delay 0 \
+    --retries 10 \
+    --sort-by-messages \
     -y
 ```
 
-`--parallel`
+`--parallel` vs `--max-batch-messages`: parallel are of equal size, batch fills up to max messages.
+
+To give out final evaluation
+
+```bash
+python scripts/judge.py \
+      --pattern "scicode_*" \
+      --rubric-dir rubrics_output/scicode \
+      --model openai:gpt-5.2 \
+      -y
+```
+
+`--max-tasks`
 
 ### Batch Evaluation
 
@@ -99,16 +115,16 @@ python scripts/eval_rubric.py \
 
 ### Available Options
 
-| Option | Description |
-|--------|-------------|
-| `--trace-file` | Path to trace JSON file |
-| `--rubric` | Single rubric .txt file (overrides --rubrics-dir) |
-| `--rubrics-dir` | Directory of rubric .txt files |
-| `--rubric-model` | Model as provider:model (e.g., `openai:gpt-4o`) |
-| `--output-mode` | `csv` (default) or `stdout` |
-| `--max-tasks` | Limit number of tasks to evaluate |
-| `--failed-only` | Only evaluate failed tasks |
-| `-y` | Skip confirmation prompt |
+| Option           | Description                                       |
+| ---------------- | ------------------------------------------------- |
+| `--trace-file`   | Path to trace JSON file                           |
+| `--rubric`       | Single rubric .txt file (overrides --rubrics-dir) |
+| `--rubrics-dir`  | Directory of rubric .txt files                    |
+| `--rubric-model` | Model as provider:model (e.g., `openai:gpt-4o`)   |
+| `--output-mode`  | `csv` (default) or `stdout`                       |
+| `--max-tasks`    | Limit number of tasks to evaluate                 |
+| `--failed-only`  | Only evaluate failed tasks                        |
+| `-y`             | Skip confirmation prompt                          |
 
 ## Cross-Model Rubric Evaluation
 
@@ -128,6 +144,7 @@ python scripts/cross_model_rubric.py \
 ## Trace Files
 
 ### SciCode Traces
+
 ```bash
 traces/scicode_hal_generalist_agent_gpt4120250414_*.json     # GPT-4.1
 traces/scicode_hal_generalist_agent_o4mini20250416_high_*.json  # O4-mini high
@@ -136,6 +153,7 @@ traces/scicode_hal_generalist_agent_o320250416_*.json         # O3
 ```
 
 ### CoreBench Traces
+
 ```bash
 traces/corebench_hard_hal_generalist_agentgpt41_*.json      # GPT-4.1
 traces/corebench_hard_hal_generalist_agento3medium_*.json   # O3 medium
@@ -160,11 +178,11 @@ export OPENAI_BASE_URL="http://localhost:4000/v1"  # Local proxy
 
 ### Required Environment Variables
 
-| Variable | Purpose |
-|----------|---------|
-| `OPENAI_API_KEY` | API key for rubric evaluation |
+| Variable          | Purpose                            |
+| ----------------- | ---------------------------------- |
+| `OPENAI_API_KEY`  | API key for rubric evaluation      |
 | `OPENAI_BASE_URL` | API endpoint (optional, for proxy) |
-| `WANDB_API_KEY` | For Weave extraction |
+| `WANDB_API_KEY`   | For Weave extraction               |
 
 ## Creating Custom Rubrics
 
@@ -203,18 +221,44 @@ Respond with valid JSON:
 ```bash
 # 1. Evaluate failed tasks with SciCode rubric
 python scripts/eval_rubric.py \
-    --trace-file traces/scicode_hal_generalist_agent_gpt4120250414_*.json \
+    --trace-file traces/scicode_hal_generalist_agent_o4mini20250416_low_1745608137_UPLOAD.json \
+    --trace-file traces/scicode_scicode_tool_calling_agent_claudeopus41_1755801688_UPLOAD.json \
+    --trace-file traces/scicode_scicode-tool_calling_agent_claudeopus4120250514_1754678715_UPLOAD.json \
+    --trace-file traces/scicode_scicode_tool_calling_agent_claude37sonnet20250219_high_1753770104_UPLOAD.json \
+    --trace-file traces/scicode_scicode_tool_calling_agent_claudesonnet45_high_1759429729_UPLOAD.json \
+    --trace-file traces/scicode_scicode_tool_calling_agent_deepseekaiDeepSeekV3_1745349011_UPLOAD.json \
+    --trace-file traces/scicode_hal_generalist_agent_claude37sonnet20250219_high_1748947217_UPLOAD.json \
     --rubric rubric_templates/scicode.txt \
-    --rubric-model openai:gpt-4o \
-    --failed-only \
+    --rubric-model openai:gpt-5.2 \
+    --inbetween "TMUX= ./deploy_llm.sh" \
+    --sleep 5s \
+    --max-batch-messages 400 \
+    --inter-batch-delay 0 \
+    --retries 10 \
+    --sort-by-messages \
     -y
 
-# 2. View results
-cat rubrics_output/scicode/*.csv
+python scripts/judge.py \
+      --pattern "scicode_*" \
+      --rubric-dir rubrics_output/scicode \
+      --model openai:gpt-5.2 \
+      --parallel 5 \
+      -y
 
-# 3. Analyze specific error categories
-grep "syntactic_corruption" rubrics_output/scicode/*.csv
-grep "mathematical_ambiguity" rubrics_output/scicode/*.csv
+
+python scripts/claude_fixer_scicode.py \
+    --rubric-dir rubrics_output/scicode \
+    --judge-csv judge_output/scicode_verdict.csv \
+    --trace-files traces/scicode_hal_generalist_agent_o4mini20250416_low_1745608137_UPLOAD.json \
+    --benchmark scicode \
+    --skip-existing
+
+python scripts/run_scicode_fixes.py \
+      --task-id 11 \
+      --output-prefix fixed_scicode \
+      --agent-dir hal-harness/agents/scicode_tool_calling_agent \
+      --agent-args agent_args.json
+      --docker
 ```
 
 ### CoreBench Pipeline
@@ -246,14 +290,14 @@ python scripts/pipeline.py fix --prefix iter1_ --docker
 
 The rubric evaluation produces CSVs with these columns:
 
-| Column | Description |
-|--------|-------------|
-| `task_id` | Task identifier (e.g., `capsule-1234567`) |
-| `criteria` | Rubric name used |
-| `grade` | Score (0.0-1.0) |
-| `correct` | Whether task passed originally |
-| `explanation` | LLM's reasoning |
-| `model_run` | Model used for evaluation |
+| Column        | Description                               |
+| ------------- | ----------------------------------------- |
+| `task_id`     | Task identifier (e.g., `capsule-1234567`) |
+| `criteria`    | Rubric name used                          |
+| `grade`       | Score (0.0-1.0)                           |
+| `correct`     | Whether task passed originally            |
+| `explanation` | LLM's reasoning                           |
+| `model_run`   | Model used for evaluation                 |
 
 ### Example CSV Row
 
@@ -285,24 +329,26 @@ unset OPENAI_BASE_URL
 ### "No raw_logging_results in trace"
 
 Run Weave extraction first:
+
 ```bash
 python scripts/pipeline.py extract --prefix <prefix> --project hal-agent-debug
 ```
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `scripts/eval_rubric.py` | **Primary** Docent-based rubric evaluation |
-| `scripts/cross_model_rubric.py` | Cross-model comparison rubric evaluation |
-| `scripts/pipeline.py` | Unified CLI for all pipeline operations |
-| `rubric_templates/scicode.txt` | SciCode Intrinsic Formation Error rubric |
-| `rubric_templates/corebench.txt` | CoreBench Environmental Barrier rubric |
-| `rubric_evaluator/cli.py` | Core rubric evaluation logic with Docent |
+| File                             | Purpose                                    |
+| -------------------------------- | ------------------------------------------ |
+| `scripts/eval_rubric.py`         | **Primary** Docent-based rubric evaluation |
+| `scripts/cross_model_rubric.py`  | Cross-model comparison rubric evaluation   |
+| `scripts/pipeline.py`            | Unified CLI for all pipeline operations    |
+| `rubric_templates/scicode.txt`   | SciCode Intrinsic Formation Error rubric   |
+| `rubric_templates/corebench.txt` | CoreBench Environmental Barrier rubric     |
+| `rubric_evaluator/cli.py`        | Core rubric evaluation logic with Docent   |
 
 ## Models
 
 Recommended models for rubric evaluation:
+
 - `openai:gpt-4o` - Best balance of speed/accuracy (recommended)
 - `openai:gpt-4o-mini` - Fast, good for iteration
 - `azure_openai:gpt-4o` - If using Azure
