@@ -11,6 +11,7 @@ Usage:
         --rubric-dir rubrics_output/scicode \
         --model openai:gpt-5.2 \
         --output judge_output/scicode_verdict.csv \
+        --parallel 5 \
         -y
 
     # With reasoning model
@@ -19,6 +20,7 @@ Usage:
         --rubric-dir rubrics_output/scicode \
         --model openai:o3-mini \
         --reasoning-effort medium \
+        --parallel 5 \
         -y
 """
 
@@ -31,7 +33,9 @@ import os
 import re
 import sys
 import time
+import threading
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
@@ -76,41 +80,69 @@ class JudgeVerdict:
     model_runs: list[str]
 
 
-JUDGE_SYSTEM_PROMPT = """You are an expert judge analyzing rubric evaluations from multiple AI agent runs on scientific coding benchmarks.
+JUDGE_SYSTEM_PROMPT = """You are an EXTREMELY SKEPTICAL expert judge analyzing rubric evaluations from multiple AI agent runs on scientific coding benchmarks.
 
 Your task is to determine whether a specific task has "Intrinsic Formation Errors" (IFEs) based on evaluations from different model runs.
 
-## What are Intrinsic Formation Errors?
-IFEs are defects in the benchmark/evaluation setup itself - NOT failures in agent reasoning or coding ability. Examples include:
-- Contradictory or impossible task requirements (e.g., dependency restrictions that conflict with required functionality)
-- Parsing/regex issues in the evaluation harness that reject valid solutions
-- Ambiguous or inconsistent instructions across task steps
-- Missing dependencies, broken test infrastructure, or environment issues
-- Evaluation criteria that don't match the stated task requirements
+## CRITICAL: Be Highly Skeptical
 
-## What are NOT Intrinsic Formation Errors?
-- Agent making coding mistakes or logic errors
-- Agent misunderstanding a clear task requirement
-- Agent producing incorrect numerical results
-- Agent failing to follow clear formatting instructions that were explicitly stated
+YOU MUST BE SKEPTICAL OF THE EVIDENCE PROVIDED. The evaluations you receive may contain:
+- Incorrect analysis or misattributed failures
+- Confirmation bias from evaluators
+- Superficial pattern matching without deep understanding
+- Mistakes in understanding the task requirements
+- Overconfident claims without sufficient proof
 
-## Your Task
-For each task, you will see evaluations from multiple model runs. Each evaluation includes:
-- The grade (0-1 scale, where 1.0 = clear IFE detected, 0.0 = no IFE)
-- Whether the task was marked correct/failed
-- The explanation analyzing the trace for formation deficiencies
+ALWAYS ask yourself:
+1. Could this failure actually be the agent's fault disguised as a benchmark issue?
+2. Is there an alternative explanation where the benchmark is correct and the agent simply failed?
+3. Could a sufficiently capable agent have solved this task correctly?
+4. Is the "evidence" actually proving an IFE, or just showing agent mistakes?
+5. Are there ways the agent could have worked around the supposed issue?
 
-Analyze all evaluations and determine:
-1. Do the evaluations consistently identify the same formation issue?
-2. Is the identified issue truly a benchmark defect (IFE) or an agent capability failure?
-3. Would fixing the benchmark (not the agent) resolve this failure mode?
+## What are Intrinsic Formation Errors (IFEs)?
+IFEs are GENUINE defects in the benchmark/evaluation setup itself - NOT failures in agent reasoning or coding ability. TRUE IFEs include:
+- Contradictory or PROVABLY impossible task requirements (not just difficult ones)
+- Parsing/regex issues in the evaluation harness that DEFINITIVELY reject valid solutions
+- Instructions that are GENUINELY ambiguous with no reasonable interpretation
+- Missing dependencies that CANNOT be installed or worked around
+- Evaluation criteria that DIRECTLY contradict the stated task requirements
 
+## What are DEFINITELY NOT IFEs (reject these claims):
+- Agent making coding mistakes or logic errors (this is agent failure)
+- Agent misunderstanding a clear task requirement (agent failure)
+- Agent producing incorrect numerical results (agent failure)
+- Agent failing to follow formatting instructions (agent failure)
+- Tasks that are "difficult" or "require domain knowledge" (not an IFE)
+- Tasks where the agent "almost" got it right (still agent failure)
+- Vague claims of "ambiguity" without specific proof
+- Speculation about what "might" be wrong with the benchmark
+
+## Original Rubric Context (for reference)
+The original rubric evaluates whether traces show evidence of Intrinsic Formation Errors:
+- Grade 1.0: Clear, irrefutable evidence of benchmark defect that NO agent could overcome
+- Grade 0.0: No evidence of benchmark defect, or failure is attributable to agent
+
+## Your Task - BINARY DECISION REQUIRED
+You MUST output a BINARY grade: either 0 or 1. No intermediate values.
+- Grade 1: ONLY if there is OVERWHELMING, IRREFUTABLE evidence of a genuine benchmark defect
+- Grade 0: If there is ANY reasonable doubt, or if the failure could be agent-related
+
+For each task, critically analyze:
+1. Is the claimed issue PROVABLY a benchmark defect, or could it be agent failure?
+2. What alternative explanations exist? Could a better agent have succeeded?
+3. Is the evidence concrete and specific, or vague and speculative?
+4. Would you bet your reputation that this is truly a benchmark bug?
+
+## Response Format
 Respond in JSON format:
 {
-    "final_grade": <float 0-1, where 1.0 = definite IFE, 0.0 = no IFE>,
-    "satisfies_rubric": <boolean - true if IFE exists and benchmark should be fixed>,
-    "reasoning": "<your analysis of the evaluations and final determination>"
+    "final_grade": <BINARY: 0 or 1 ONLY>,
+    "satisfies_rubric": <boolean - true ONLY if grade is 1>,
+    "reasoning": "<your SKEPTICAL analysis including: (1) claimed issue, (2) why you doubt/accept it, (3) alternative explanations considered, (4) final determination>"
 }
+
+Remember: When in doubt, grade 0. The burden of proof is on demonstrating a TRUE benchmark defect.
 """
 
 
@@ -173,35 +205,50 @@ Respond in JSON format with: final_grade, satisfies_rubric, reasoning
 
 
 def parse_judge_response(response: str) -> dict:
-    """Parse the JSON response from the judge LLM."""
+    """Parse the JSON response from the judge LLM. Enforces binary grades."""
+    parsed = None
+
     # Try to extract JSON from the response
     try:
         # First try direct parse
-        return json.loads(response)
+        parsed = json.loads(response)
     except json.JSONDecodeError:
         pass
 
-    # Try to find JSON block in response
-    json_match = re.search(r'\{[^{}]*"final_grade"[^{}]*\}', response, re.DOTALL)
-    if json_match:
-        try:
-            return json.loads(json_match.group())
-        except json.JSONDecodeError:
-            pass
+    if not parsed:
+        # Try to find JSON block in response
+        json_match = re.search(r'\{[^{}]*"final_grade"[^{}]*\}', response, re.DOTALL)
+        if json_match:
+            try:
+                parsed = json.loads(json_match.group())
+            except json.JSONDecodeError:
+                pass
 
-    # Try to find JSON in code block
-    code_block_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response, re.DOTALL)
-    if code_block_match:
-        try:
-            return json.loads(code_block_match.group(1))
-        except json.JSONDecodeError:
-            pass
+    if not parsed:
+        # Try to find JSON in code block
+        code_block_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response, re.DOTALL)
+        if code_block_match:
+            try:
+                parsed = json.loads(code_block_match.group(1))
+            except json.JSONDecodeError:
+                pass
 
-    # Return default if parsing fails
+    if not parsed:
+        # Return default if parsing fails
+        return {
+            "final_grade": 0,
+            "satisfies_rubric": False,
+            "reasoning": f"Failed to parse response: {response[:500]}",
+        }
+
+    # ENFORCE BINARY GRADE: round to 0 or 1
+    raw_grade = float(parsed.get("final_grade", 0))
+    binary_grade = 1 if raw_grade >= 0.5 else 0
+
     return {
-        "final_grade": 0.0,
-        "satisfies_rubric": False,
-        "reasoning": f"Failed to parse response: {response[:500]}",
+        "final_grade": binary_grade,
+        "satisfies_rubric": binary_grade == 1,
+        "reasoning": parsed.get("reasoning", ""),
     }
 
 
@@ -241,7 +288,7 @@ def judge_task(
 
             return JudgeVerdict(
                 task_id=task_id,
-                final_grade=float(parsed.get("final_grade", 0.0)),
+                final_grade=int(parsed.get("final_grade", 0)),
                 satisfies_rubric=bool(parsed.get("satisfies_rubric", False)),
                 reasoning=str(parsed.get("reasoning", "")),
                 num_evaluations=len(evals),
@@ -283,7 +330,7 @@ def write_verdicts_csv(verdicts: list[JudgeVerdict], output_path: Path) -> None:
         for v in verdicts:
             writer.writerow([
                 v.task_id,
-                f"{v.final_grade:.3f}",
+                v.final_grade,  # Binary: 0 or 1
                 "1" if v.satisfies_rubric else "0",
                 v.num_evaluations,
                 ";".join(v.model_runs),
@@ -350,6 +397,12 @@ def main():
         type=float,
         default=0,
         help="Delay in seconds between API calls (default: 0)",
+    )
+    parser.add_argument(
+        "--parallel",
+        type=int,
+        default=1,
+        help="Number of parallel tasks to judge at once (default: 1)",
     )
     parser.add_argument(
         "--yes", "-y",
@@ -445,11 +498,16 @@ def main():
         print("="*60)
         return
 
-    # Run judge
-    verdicts = []
-    for i, task_id in enumerate(task_ids, 1):
+    # Thread-safe counter and lock for progress
+    completed_count = [0]
+    print_lock = threading.Lock()
+
+    def judge_task_wrapper(task_id: str, task_idx: int) -> JudgeVerdict:
+        """Wrapper for parallel execution with logging."""
         evals = evaluations[task_id]
-        print(f"\n[{i}/{len(task_ids)}] Judging task {task_id} ({len(evals)} evaluations)...")
+
+        with print_lock:
+            print(f"[{task_idx}/{len(task_ids)}] Starting: task {task_id} ({len(evals)} evaluations)")
 
         verdict = judge_task(
             client=client,
@@ -459,26 +517,77 @@ def main():
             reasoning_effort=args.reasoning_effort,
             retries=args.retries,
         )
-        verdicts.append(verdict)
 
-        status = "SATISFIES" if verdict.satisfies_rubric else "DOES NOT SATISFY"
-        print(f"  -> {status} rubric (grade: {verdict.final_grade:.2f})")
-        if verdict.reasoning:
-            reasoning_preview = verdict.reasoning[:150].replace("\n", " ")
-            print(f"     Reasoning: {reasoning_preview}...")
+        with print_lock:
+            completed_count[0] += 1
+            status = "IFE CONFIRMED" if verdict.satisfies_rubric else "NO IFE"
+            grade_display = int(verdict.final_grade) if verdict.final_grade in (0, 1, 0.0, 1.0) else verdict.final_grade
+            print(f"[{completed_count[0]}/{len(task_ids)}] Done: task {task_id} -> {status} (grade: {grade_display})")
+            if verdict.reasoning:
+                reasoning_preview = verdict.reasoning[:120].replace("\n", " ")
+                print(f"    Reasoning: {reasoning_preview}...")
 
-        # Delay between tasks
-        if args.delay > 0 and i < len(task_ids):
+        # Delay between tasks (per-thread)
+        if args.delay > 0:
             time.sleep(args.delay)
+
+        return verdict
+
+    # Run judge with parallelism
+    print(f"\nJudging {len(task_ids)} tasks with {args.parallel} parallel workers...")
+    print("=" * 60)
+
+    verdicts = []
+    if args.parallel > 1:
+        with ThreadPoolExecutor(max_workers=args.parallel) as executor:
+            futures = {
+                executor.submit(judge_task_wrapper, task_id, i): task_id
+                for i, task_id in enumerate(task_ids, 1)
+            }
+            for future in as_completed(futures):
+                task_id = futures[future]
+                try:
+                    verdict = future.result()
+                    verdicts.append(verdict)
+                except Exception as e:
+                    with print_lock:
+                        print(f"ERROR: Task {task_id} failed: {e}")
+                    verdicts.append(JudgeVerdict(
+                        task_id=task_id,
+                        final_grade=0,
+                        satisfies_rubric=False,
+                        reasoning=f"Execution error: {e}",
+                        num_evaluations=len(evaluations[task_id]),
+                        model_runs=[ev.model_run for ev in evaluations[task_id]],
+                    ))
+    else:
+        # Sequential execution
+        for i, task_id in enumerate(task_ids, 1):
+            verdict = judge_task_wrapper(task_id, i)
+            verdicts.append(verdict)
 
     # Write output
     write_verdicts_csv(verdicts, output_path)
 
+    # Sort verdicts by task_id for consistent output
+    verdicts.sort(key=lambda v: v.task_id)
+
     # Summary
-    satisfies_count = sum(1 for v in verdicts if v.satisfies_rubric)
+    ife_confirmed = [v for v in verdicts if v.satisfies_rubric]
+    no_ife = [v for v in verdicts if not v.satisfies_rubric]
+
     print(f"\n{'='*60}")
-    print(f"Summary: {satisfies_count}/{len(verdicts)} tasks satisfy the rubric")
-    print(f"Output: {output_path}")
+    print("SUMMARY (Binary Grades)")
+    print("="*60)
+    print(f"IFE Confirmed (grade=1): {len(ife_confirmed)}/{len(verdicts)}")
+    print(f"No IFE (grade=0):        {len(no_ife)}/{len(verdicts)}")
+
+    if ife_confirmed:
+        print(f"\nTasks with confirmed IFEs:")
+        for v in ife_confirmed:
+            print(f"  - {v.task_id}")
+
+    print(f"\nOutput: {output_path}")
 
 
 if __name__ == "__main__":
