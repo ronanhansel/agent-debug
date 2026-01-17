@@ -700,11 +700,18 @@ def build_docent_agent_runs(
             "Docent data models are unavailable. Ensure the docent package is installed and importable."
         )
 
+    # Map unsupported roles to supported ones
+    ROLE_MAPPING = {
+        "developer": "system",  # OpenAI's developer role is similar to system
+    }
+
     agent_runs: list[AgentRun] = []
     for conversation in conversations:
         parsed_messages = []
         for message in conversation.messages:
-            payload = {"role": message.role, "content": message.content or ""}
+            # Map unsupported roles to supported equivalents
+            role = ROLE_MAPPING.get(message.role, message.role)
+            payload = {"role": role, "content": message.content or ""}
             try:
                 parsed_messages.append(parse_chat_message(payload))
             except Exception as exc:  # pragma: no cover - best effort logging
