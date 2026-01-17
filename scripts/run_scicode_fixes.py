@@ -58,6 +58,8 @@ FIXES_DIR = REPO_ROOT / "fixes"
 TRACES_DIR = REPO_ROOT / "traces"
 HAL_HARNESS = REPO_ROOT / "hal-harness"
 DEFAULT_MODEL_CONFIG = REPO_ROOT / "model_to_baseline_scicode.json"
+TMP_DIR = REPO_ROOT / ".tmp"
+TMP_DIR.mkdir(exist_ok=True)  # Ensure .tmp directory exists
 
 
 def log(msg: str, prefix: str = "main") -> None:
@@ -209,21 +211,24 @@ def _extract_model_from_run_name(model_run: str) -> Optional[str]:
 def get_agent_args_for_model(
     model_key: str,
     model_config: Dict[str, Dict[str, Any]],
-) -> Optional[Dict[str, Any]]:
+) -> Optional[Tuple[Dict[str, Any], str]]:
     """Get the agent_args for a specific model.
 
     Args:
-        model_key: The model name/key to look up
+        model_key: The model name/key to look up (used for pricing)
         model_config: The model config dict
 
     Returns:
-        Agent args dict with model_name, reasoning_effort, etc.
+        Tuple of (agent_args dict, pricing_key) where:
+        - agent_args contains model_name (from model_id), reasoning_effort, etc.
+        - pricing_key is the config key used for pricing lookup
         Returns None if model not found in config.
     """
     if not model_key:
         return None
 
     # Direct lookup
+    pricing_key = model_key
     model_entry = model_config.get(model_key)
 
     # Try matching by model_id
@@ -231,25 +236,27 @@ def get_agent_args_for_model(
         for key, entry in model_config.items():
             if entry.get("model_id") == model_key:
                 model_entry = entry
+                pricing_key = key  # Use the config key for pricing
                 break
 
     if not model_entry:
         return None
 
     # Build agent_args from model config
+    # model_id is for API calls, pricing_key is for cost tracking
     model_id = model_entry.get("model_id")
     if not model_id:
         return None
 
     agent_args: Dict[str, Any] = {
-        "model_name": model_id,
+        "model_name": model_id,  # Used for API calls
     }
     if "reasoning_effort" in model_entry:
         agent_args["reasoning_effort"] = model_entry["reasoning_effort"]
     if "max_steps" in model_entry:
         agent_args["max_steps"] = model_entry["max_steps"]
 
-    return agent_args
+    return agent_args, pricing_key
 
 
 def load_fix_package(task_id: str, fixes_root: Path) -> Dict[str, Any]:
@@ -600,8 +607,16 @@ def run_hal_eval(
     benchmark: str = "scicode",
     docker: bool = False,
     task_id: Optional[str] = None,
+    pricing_key: Optional[str] = None,
 ) -> Tuple[bool, str, Optional[Path]]:
-    """Run HAL evaluation with a custom dataset."""
+    """Run HAL evaluation with a custom dataset.
+
+    Runs from REPO_ROOT (like corebench) so results go to results/scicode/.
+
+    Args:
+        pricing_key: The config key used for pricing lookup (may differ from model_id).
+                     If None, falls back to model_name from agent_args.
+    """
 
     # Build run_id with model info for better traceability
     model_name = str(agent_args.get("model_name", "model"))
@@ -631,40 +646,69 @@ def run_hal_eval(
         else:
             cmd += ["-A", f"{key}={value}"]
 
-    # Set environment to use our custom dataset
+    # Set environment (like corebench does)
     env = os.environ.copy()
     env["SCICODE_DATASET_PATH"] = str(dataset_path)
 
+    # Add hal-harness to PYTHONPATH so hal.cli can be found when running from REPO_ROOT
+    extra_path = str(HAL_HARNESS)
+    env["PYTHONPATH"] = f"{extra_path}{os.pathsep}{env.get('PYTHONPATH', '')}".rstrip(os.pathsep)
+    env.setdefault("WANDB_SILENT", "true")
+    # Use pricing_key for cost tracking (config key), model_name is for API calls (model_id)
+    effective_pricing_key = pricing_key or str(agent_args.get("model_name", ""))
+    env["HAL_PRICING_MODEL_NAME"] = effective_pricing_key  # Use assignment, not setdefault
+
     log(f"Running HAL eval with run_id: {run_id}", "hal")
+    log(f"Model (API): {agent_args.get('model_name')} | Pricing key: {effective_pricing_key}", "hal")
     log(f"Dataset: {dataset_path}", "hal")
+    log(f"Command: {' '.join(cmd)}", "hal")
+
+    # Results directory (at REPO_ROOT, not HAL_HARNESS)
+    results_dir = REPO_ROOT / "results" / benchmark / run_id
+    results_dir.mkdir(parents=True, exist_ok=True)
 
     try:
+        # Run from REPO_ROOT (like corebench) - let output stream to console
         result = subprocess.run(
             cmd,
-            cwd=HAL_HARNESS,
+            cwd=REPO_ROOT,
             env=env,
-            capture_output=True,
-            text=True,
             timeout=3600,  # 1 hour timeout
         )
 
-        # Find output trace
-        results_dir = HAL_HARNESS / "results" / benchmark
-        traces = sorted(results_dir.glob(f"*{run_id}*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        # Find output trace in REPO_ROOT/results (like corebench)
+        trace_path = results_dir / f"{run_id}_UPLOAD.json"
+
+        # Also check HAL_HARNESS results as fallback
+        if not trace_path.exists():
+            hal_results_dir = HAL_HARNESS / "results" / benchmark / run_id
+            alt_trace = hal_results_dir / f"{run_id}_UPLOAD.json"
+            if alt_trace.exists():
+                # Copy to expected location
+                results_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy(alt_trace, trace_path)
+                # Also copy logs if they exist
+                for log_file in hal_results_dir.glob("*.log"):
+                    shutil.copy(log_file, results_dir / log_file.name)
 
         if result.returncode == 0:
-            trace_path = traces[0] if traces else None
-            # Copy trace to our traces directory with prefix
-            if trace_path:
+            if trace_path.exists():
+                # Copy trace to our traces directory with prefix
                 dest = TRACES_DIR / f"{output_prefix}_{trace_path.name}"
+                TRACES_DIR.mkdir(parents=True, exist_ok=True)
                 shutil.copy(trace_path, dest)
                 log(f"Trace saved to: {dest}", "hal")
+                log(f"Results in: {results_dir}", "hal")
                 return True, "Success", dest
 
             return True, "Success (no trace found)", None
         else:
-            log(f"HAL eval failed: {result.stderr[:500]}", "hal")
-            return False, result.stderr[:200], None
+            log(f"HAL eval failed with exit code {result.returncode}", "hal")
+            # Check for verbose log to find error
+            verbose_log = results_dir / f"{run_id}_verbose.log"
+            if verbose_log.exists():
+                log(f"Check verbose log: {verbose_log}", "hal")
+            return False, f"Exit code {result.returncode}", None
 
     except subprocess.TimeoutExpired:
         return False, "Timeout", None
@@ -722,6 +766,12 @@ def main():
         help="Preview what would be done.",
     )
     parser.add_argument(
+        "--parallel",
+        type=int,
+        default=1,
+        help="Number of parallel HAL evaluations (default: 1).",
+    )
+    parser.add_argument(
         "--list-fixes",
         action="store_true",
         help="List available fixes and exit.",
@@ -746,7 +796,12 @@ def main():
     )
     parser.add_argument(
         "--model",
-        help="Force a specific model for all tasks (overrides rubric CSV). Use model_id from model config.",
+        help="Force a specific model for all tasks (overrides rubric CSV). Use config key like 'openai/gpt-4.1-2025-04-14'.",
+    )
+    parser.add_argument(
+        "--all-models",
+        action="store_true",
+        help="Run all models from model_to_baseline_scicode.json for each task with fixes.",
     )
     parser.add_argument(
         "--verify-fixes",
@@ -960,7 +1015,18 @@ def main():
     # Build (task_id, model_id) pairs to run
     task_model_pairs: List[Tuple[str, str]] = []
 
-    if args.model:
+    if args.all_models:
+        # Run all models from config for each task with fixes
+        if not model_config:
+            log("ERROR: --all-models requires model config file", "model")
+            return
+        for task_id in sorted(available_fixes):
+            for model_key in model_config.keys():
+                task_model_pairs.append((task_id, model_key))
+        log(f"Running all {len(model_config)} models for {len(available_fixes)} tasks = {len(task_model_pairs)} total jobs", "model")
+        for model_key in model_config.keys():
+            log(f"  - {model_key}", "model")
+    elif args.model:
         # Force a specific model for all fixes
         for task_id in sorted(available_fixes):
             task_model_pairs.append((task_id, args.model))
@@ -978,9 +1044,17 @@ def main():
             if task_id in available_fixes:
                 task_model_pairs.append((task_id, model_id))
         log(f"Filtered to {len(task_model_pairs)} pairs with available fixes", "model")
+    elif model_config:
+        # Default: run all models from config for each task with fixes
+        for task_id in sorted(available_fixes):
+            for model_key in model_config.keys():
+                task_model_pairs.append((task_id, model_key))
+        log(f"Running all {len(model_config)} models for {len(available_fixes)} tasks = {len(task_model_pairs)} total jobs", "model")
+        for model_key in model_config.keys():
+            log(f"  - {model_key}", "model")
     else:
         # Legacy mode: use all fixes with default model from agent_args
-        log("No --rubric-csv or --model specified, using legacy mode with agent_args", "model")
+        log("No model config found, using legacy mode with agent_args", "model")
         for task_id in sorted(available_fixes):
             task_model_pairs.append((task_id, ""))  # Empty model = use agent_args
 
@@ -1058,44 +1132,33 @@ def main():
             fallback_agent_args = json.loads(args_path.read_text())
             log(f"Loaded fallback agent args: {list(fallback_agent_args.keys())}", "main")
 
-    # Run each (task, model) pair
-    generated_traces: List[Path] = []
-    failed_runs: List[Tuple[str, str, str]] = []
-
-    for i, (task_id, model_id) in enumerate(task_model_pairs):
-        log(f"\n=== Processing {i+1}/{len(task_model_pairs)}: task={task_id}, model={model_id or 'default'} ===", "main")
+    # Define job runner function for parallel execution
+    def run_single_job(job_info: Tuple[int, str, str]) -> Tuple[str, str, bool, Optional[Path], str]:
+        """Run a single (task, model) job. Returns (task_id, model_id, success, trace_path, message)."""
+        job_idx, task_id, model_id = job_info
 
         # Get agent args for this model
+        # Returns (agent_args, pricing_key) where pricing_key is config key for cost tracking
+        pricing_key = None
         if model_id and model_config:
-            task_agent_args = get_agent_args_for_model(model_id, model_config)
-            if task_agent_args is None:
-                log(f"SKIP: Model '{model_id}' not found in config", "model")
-                failed_runs.append((task_id, model_id, "model not in config"))
-                continue
+            result = get_agent_args_for_model(model_id, model_config)
+            if result is None:
+                return (task_id, model_id, False, None, "model not in config")
+            task_agent_args, pricing_key = result
         else:
             task_agent_args = fallback_agent_args.copy()
-
-        log(f"Using model: {task_agent_args.get('model_name')} (effort={task_agent_args.get('reasoning_effort', 'N/A')})", "model")
 
         # Create filtered dataset with just this task
         fix = fixes.get(task_id)
         if not fix:
-            log(f"SKIP: No fix found for task {task_id}", "main")
-            failed_runs.append((task_id, model_id, "no fix"))
-            continue
+            return (task_id, model_id, False, None, "no fix")
 
-        filtered, changes_applied = create_filtered_dataset(dataset, {task_id: fix}, [task_id])
+        filtered, changes_applied = create_filtered_dataset(dataset, {task_id: fix}, [task_id], verbose=False)
         if not filtered:
-            log(f"SKIP: Task {task_id} not found in dataset", "main")
-            failed_runs.append((task_id, model_id, "task not in dataset"))
-            continue
-
-        # Verify changes were applied
-        if task_id in changes_applied and not changes_applied[task_id]:
-            log(f"WARNING: No actual changes applied for task {task_id}", "fix")
+            return (task_id, model_id, False, None, "task not in dataset")
 
         # Write temporary dataset file
-        temp_dataset = Path(tempfile.mktemp(suffix=".json", prefix=f"scicode_{task_id}_"))
+        temp_dataset = TMP_DIR / f"scicode_{task_id}_{model_id.replace('/', '_')}_{time.time()}.json"
         temp_dataset.write_text(json.dumps(filtered, indent=2))
 
         try:
@@ -1107,16 +1170,64 @@ def main():
                 benchmark=args.benchmark,
                 docker=args.docker,
                 task_id=task_id,
+                pricing_key=pricing_key,  # Config key for cost tracking
             )
+            return (task_id, model_id, success and trace_path is not None, trace_path, message)
+        finally:
+            temp_dataset.unlink(missing_ok=True)
+
+    # Run jobs
+    generated_traces: List[Path] = []
+    failed_runs: List[Tuple[str, str, str]] = []
+    total_jobs = len(task_model_pairs)
+
+    # Prepare job list with indices
+    jobs = [(i, task_id, model_id) for i, (task_id, model_id) in enumerate(task_model_pairs)]
+
+    if args.parallel > 1:
+        # Parallel execution
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import threading
+
+        log(f"Running {total_jobs} jobs with {args.parallel} parallel workers", "main")
+        completed = 0
+        lock = threading.Lock()
+
+        with ThreadPoolExecutor(max_workers=args.parallel) as executor:
+            future_to_job = {executor.submit(run_single_job, job): job for job in jobs}
+
+            for future in as_completed(future_to_job):
+                job = future_to_job[future]
+                job_idx, task_id, model_id = job
+
+                try:
+                    task_id, model_id, success, trace_path, message = future.result()
+                    with lock:
+                        completed += 1
+                        if success and trace_path:
+                            generated_traces.append(trace_path)
+                            log(f"[{completed}/{total_jobs}] SUCCESS: task={task_id} model={model_id}", "main")
+                        else:
+                            failed_runs.append((task_id, model_id, message))
+                            log(f"[{completed}/{total_jobs}] FAILED: task={task_id} model={model_id} - {message}", "main")
+                except Exception as e:
+                    with lock:
+                        completed += 1
+                        failed_runs.append((task_id, model_id, str(e)))
+                        log(f"[{completed}/{total_jobs}] ERROR: task={task_id} model={model_id} - {e}", "main")
+    else:
+        # Sequential execution
+        for i, (task_id, model_id) in enumerate(task_model_pairs):
+            log(f"\n=== [{i+1}/{total_jobs}] task={task_id}, model={model_id or 'default'} ===", "main")
+
+            task_id, model_id, success, trace_path, message = run_single_job((i, task_id, model_id))
 
             if success and trace_path:
                 generated_traces.append(trace_path)
                 log(f"SUCCESS: {trace_path}", "main")
             else:
-                log(f"FAILED: {message}", "main")
                 failed_runs.append((task_id, model_id, message))
-        finally:
-            temp_dataset.unlink(missing_ok=True)
+                log(f"FAILED: {message}", "main")
 
     # Summary
     print(f"\n{'='*60}")

@@ -12,14 +12,14 @@
     "reasoning_effort": "medium",
     "max_steps": 5
   },
-  "openai/o4-mini-2025-04-16-high": {
+  "openai/o4-mini-2025-04-16": {
     "model_id": "openai/o4-mini_2025-04-16",
     "short_name": "o4-mini-high",
     "baseline_trace": "scicode_scicode_tool_calling_agent_o4mini20250416_high_1745414081_UPLOAD.json",
     "reasoning_effort": "high",
     "max_steps": 5
   },
-  "openai/o4-mini-2025-04-16-low": {
+  "o4-mini-2025-04-16": {
     "model_id": "openai/o4-mini_2025-04-16",
     "short_name": "o4-mini-low",
     "baseline_trace": "scicode_scicode_tool_calling_agent_o4mini20250416_low_1745286980_UPLOAD.json",
