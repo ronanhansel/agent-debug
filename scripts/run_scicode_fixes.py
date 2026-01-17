@@ -72,30 +72,36 @@ def _slugify(value: str, fallback: str) -> str:
 
 
 def load_model_config(path: Path) -> Dict[str, Dict[str, Any]]:
-    """Load model_to_baseline_scicode.json and return a dict mapping model_id to config.
+    """Load model_to_baseline_scicode.json and return a dict mapping model keys to config.
 
-    The scicode config format has a 'models' array, unlike corebench which uses a flat dict.
+    Format (same as corebench):
+    {
+      "openai/gpt-4.1-2025-04-14": {
+        "model_id": "openai/gpt-4.1_2025-04-14",
+        "short_name": "gpt-4.1-04-14",
+        "baseline_trace": "scicode_..._UPLOAD.json",
+        "reasoning_effort": "high",  // optional
+        "max_steps": 5
+      },
+      ...
+    }
     """
     if not path.exists():
         return {}
     data = json.loads(path.read_text(encoding="utf-8"))
 
-    # Handle scicode format: {"models": [...], "benchmark": "scicode", ...}
+    # Flat dict format (corebench style) - this is the expected format
+    if isinstance(data, dict) and "models" not in data:
+        return data
+
+    # Legacy format with "models" array - convert to flat dict
     if "models" in data and isinstance(data["models"], list):
         result = {}
         for model_entry in data["models"]:
             model_id = model_entry.get("model_id")
             if model_id:
                 result[model_id] = model_entry
-                # Also index by name for convenience
-                name = model_entry.get("name", "")
-                if name and name != model_id:
-                    result[name] = model_entry
         return result
-
-    # Fallback: assume flat dict format like corebench
-    if isinstance(data, dict):
-        return data
 
     return {}
 
@@ -134,30 +140,68 @@ def load_rubric_task_models(csv_path: Path) -> List[Tuple[str, str]]:
 
 
 def _extract_model_from_run_name(model_run: str) -> Optional[str]:
-    """Extract a model identifier from the model_run column.
+    """Extract a model config key from the model_run column.
+
+    Returns the key that matches model_to_baseline_scicode.json (e.g., "openai/gpt-4.1-2025-04-14").
 
     Examples:
-    - scicode_hal_generalist_agent_gpt4120250414_... -> gpt-4.1-2025-04-14
-    - scicode_scicode_tool_calling_agent_claudesonnet45_high_... -> claude-sonnet-4-20250514
-    - scicode_hal_generalist_agent_o4mini20250416_low_... -> o4-mini-2025-04-16
+    - scicode_hal_generalist_agent_gpt4120250414_... -> openai/gpt-4.1-2025-04-14
+    - scicode_scicode_tool_calling_agent_claudesonnet45_high_... -> anthropic/claude-sonnet-4-5-20250929-high
+    - scicode_hal_generalist_agent_o4mini20250416_low_... -> openai/o4-mini-2025-04-16-low
     """
-    # Known model patterns and their mappings
-    patterns = {
-        r"gpt4o[\-_]?2024[\-_]?11[\-_]?20": "gpt-4o-2024-11-20",
-        r"gpt[\-_]?4[\-_]?1[\-_]?2025[\-_]?04[\-_]?14|gpt4120250414": "gpt-4.1-2025-04-14",
-        r"o3[\-_]?mini[\-_]?2025[\-_]?01[\-_]?31|o3mini20250131": "o3-mini-2025-01-31",
-        r"o4[\-_]?mini[\-_]?2025[\-_]?04[\-_]?16|o4mini20250416": "o4-mini-2025-04-16",
-        r"claude[\-_]?sonnet[\-_]?4[\-_]?5|claudesonnet45": "claude-sonnet-4-20250514",
-        r"claude[\-_]?sonnet[\-_]?4[\-_]?20250514|claudesonnet420250514": "claude-sonnet-4-20250514",
-        r"claude[\-_]?3[\-_]?7[\-_]?sonnet|claude37sonnet": "claude-3-7-sonnet-20250219",
-        r"claude[\-_]?opus[\-_]?4[\-_]?1|claudeopus41": "claude-opus-4-1-20250514",
-        r"deepseek[\-_]?v3|DeepSeekV3": "deepseek-ai/DeepSeek-V3",
-    }
+    # Check for reasoning effort suffix
+    has_high = "_high_" in model_run.lower() or "_high" in model_run.lower()
+    has_low = "_low_" in model_run.lower() or "_low" in model_run.lower()
 
-    model_run_lower = model_run.lower()
-    for pattern, model_id in patterns.items():
-        if re.search(pattern, model_run_lower, re.IGNORECASE):
-            return model_id
+    # Known model patterns and their config keys (order matters - more specific first)
+    patterns = [
+        # GPT models
+        (r"gpt[\-_]?5|gpt5", "openai/gpt-5-0125"),
+        (r"gpt[\-_]?4[\-_]?1[\-_]?2025[\-_]?04[\-_]?14|gpt4120250414", "openai/gpt-4.1-2025-04-14"),
+        (r"gpt4o[\-_]?2024[\-_]?11[\-_]?20", "openai/gpt-4o-2024-11-20"),
+        # OpenAI reasoning models - check effort suffix
+        (r"o3[\-_]?2025[\-_]?04[\-_]?16|o320250416", "openai/o3-2025-04-16"),
+        (r"o4[\-_]?mini[\-_]?2025[\-_]?04[\-_]?16|o4mini20250416", None),  # Handle separately
+        # Claude models - check effort suffix
+        (r"claude[\-_]?opus[\-_]?4[\-_]?1|claudeopus41", None),  # Handle separately
+        (r"claude[\-_]?sonnet[\-_]?4[\-_]?5|claudesonnet45", None),  # Handle separately
+        (r"claude[\-_]?3[\-_]?7[\-_]?sonnet|claude37sonnet", None),  # Handle separately
+        # Other models
+        (r"deepseek[\-_]?v3|DeepSeekV3|deepseekaiDeepSeekV3", "deepseek/DeepSeek-V3"),
+        (r"gemini[\-_]?2[\-_]?0[\-_]?flash|gemini20flash", "google/gemini-2.0-flash"),
+    ]
+
+    for pattern, config_key in patterns:
+        if re.search(pattern, model_run, re.IGNORECASE):
+            if config_key is not None:
+                return config_key
+
+            # Handle models with effort suffixes
+            if "o4" in pattern and "mini" in pattern:
+                if has_high:
+                    return "openai/o4-mini-2025-04-16-high"
+                elif has_low:
+                    return "openai/o4-mini-2025-04-16-low"
+                else:
+                    return "openai/o4-mini-2025-04-16-low"  # Default to low
+
+            if "opus" in pattern:
+                if has_high:
+                    return "anthropic/claude-opus-4-1-20250514-high"
+                else:
+                    return "anthropic/claude-opus-4-1-20250514"
+
+            if "sonnet" in pattern and "4" in pattern and "5" in pattern:
+                if has_high:
+                    return "anthropic/claude-sonnet-4-5-20250929-high"
+                else:
+                    return "anthropic/claude-sonnet-4-5-20250929"
+
+            if "3" in pattern and "7" in pattern and "sonnet" in pattern:
+                if has_high:
+                    return "anthropic/claude-3-7-sonnet-20250219-high"
+                else:
+                    return "anthropic/claude-3-7-sonnet-20250219"
 
     return None
 
@@ -235,20 +279,30 @@ def load_fix_package(task_id: str, fixes_root: Path) -> Dict[str, Any]:
     return fix
 
 
-def list_available_fixes(fixes_root: Path) -> List[str]:
-    """List all task IDs that have fixes."""
+def list_available_fixes(fixes_root: Path, include_readme_only: bool = False) -> List[str]:
+    """List all task IDs that have actual fix files (not just READMEs).
+
+    Args:
+        fixes_root: Directory containing fix packages
+        include_readme_only: If True, include tasks with only README (no actual fixes)
+    """
     if not fixes_root.exists():
         return []
 
     task_ids = []
     for item in fixes_root.iterdir():
         if item.is_dir() and not item.name.startswith("."):
-            fix_files = [
+            # Actual fix files that modify the benchmark
+            actual_fix_files = [
                 "dependency_override.json", "instruction_override.json",
                 "evaluation_override.json", "env_override.json",
-                "input_override.json", "problem_statement.txt", "README.md",
+                "input_override.json", "problem_statement.txt",
             ]
-            if any((item / f).exists() for f in fix_files):
+            has_actual_fix = any((item / f).exists() for f in actual_fix_files)
+
+            if has_actual_fix:
+                task_ids.append(item.name)
+            elif include_readme_only and (item / "README.md").exists():
                 task_ids.append(item.name)
 
     return sorted(task_ids)
@@ -265,66 +319,277 @@ def load_scicode_dataset() -> List[Dict[str, Any]]:
         return []
 
 
-def apply_fix_to_task(task: Dict[str, Any], fix: Dict[str, Any]) -> Dict[str, Any]:
-    """Apply a fix to a task, modifying its prompt/instructions."""
+def apply_fix_to_task(task: Dict[str, Any], fix: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
+    """Apply a fix to a task, modifying function headers, dependencies, and test cases.
+
+    Returns:
+        Tuple of (modified_task, list of changes made)
+    """
     modified = json.loads(json.dumps(task))  # Deep copy
+    changes_made = []
+    task_id = str(task.get("problem_id", ""))
 
-    # Build clarification text
-    clarifications = []
-
-    # From instruction_override
+    # =============================================================
+    # 1. Apply instruction_override - Fix function headers
+    # =============================================================
     if fix.get("instruction_override"):
         instr = fix["instruction_override"]
-        if instr.get("clarifications"):
-            clarifications.extend(instr["clarifications"])
-        if instr.get("corrected_signature"):
-            clarifications.append(f"Corrected function signature: {instr['corrected_signature']}")
 
-    # From dependency_override
+        # Handle both "overrides" and "step_overrides" keys
+        overrides = instr.get("overrides", {})
+        step_overrides = instr.get("step_overrides", {})
+        overrides.update(step_overrides)
+
+        # Also check for step-specific keys at top level (e.g., "58.2": {...})
+        for key, value in instr.items():
+            if key not in ["task_id", "description", "overrides", "step_overrides", "notes", "clarifications", "problem_id", "reason"] and isinstance(value, dict):
+                overrides[key] = value
+
+        for step_key, step_fix in overrides.items():
+            # step_key is like "71.1" or "71.2"
+            parts = step_key.split(".")
+            if len(parts) == 2:
+                try:
+                    step_idx = int(parts[1]) - 1  # Convert to 0-indexed
+                except ValueError:
+                    continue
+
+                if 0 <= step_idx < len(modified.get("sub_steps", [])):
+                    step = modified["sub_steps"][step_idx]
+
+                    # Fix function header - method 1: original/fixed pair
+                    if step_fix.get("original_header") and step_fix.get("fixed_header"):
+                        original = step_fix["original_header"]
+                        fixed = step_fix["fixed_header"]
+                        old_header = step.get("function_header", "")
+
+                        if original in old_header:
+                            step["function_header"] = old_header.replace(original, fixed)
+                            changes_made.append(f"Step {step_key}: Fixed header '{original}' -> '{fixed}'")
+                        else:
+                            # Try more flexible matching (just the def line)
+                            lines = old_header.split("\n")
+                            for i, line in enumerate(lines):
+                                if line.strip().startswith("def ") and original.strip() in line:
+                                    lines[i] = line.replace(original.strip(), fixed.strip())
+                                    step["function_header"] = "\n".join(lines)
+                                    changes_made.append(f"Step {step_key}: Fixed header '{original}' -> '{fixed}'")
+                                    break
+
+                    # Fix function header - method 2: full replacement
+                    elif step_fix.get("function_header"):
+                        new_header = step_fix["function_header"]
+                        old_header = step.get("function_header", "")
+                        if old_header != new_header:
+                            step["function_header"] = new_header
+                            changes_made.append(f"Step {step_key}: Replaced function_header entirely")
+
+                    # Fix step description - method 1: fixed_description key
+                    if step_fix.get("fixed_description"):
+                        step["step_description_prompt"] = step_fix["fixed_description"]
+                        changes_made.append(f"Step {step_key}: Replaced step description")
+                    # Fix step description - method 2: step_description_prompt key (direct replacement)
+                    elif step_fix.get("step_description_prompt"):
+                        step["step_description_prompt"] = step_fix["step_description_prompt"]
+                        changes_made.append(f"Step {step_key}: Replaced step description")
+
+                    # Add clarification to step description if provided
+                    if step_fix.get("clarification"):
+                        clarification = step_fix["clarification"]
+                        step["step_description_prompt"] = (
+                            step.get("step_description_prompt", "") +
+                            f"\n\n**IMPORTANT**: {clarification}"
+                        )
+                        changes_made.append(f"Step {step_key}: Added clarification")
+
+                    # Add reason as clarification if provided
+                    if step_fix.get("reason") and not step_fix.get("clarification"):
+                        reason = step_fix["reason"]
+                        step["step_description_prompt"] = (
+                            step.get("step_description_prompt", "") +
+                            f"\n\n**NOTE**: {reason}"
+                        )
+                        changes_made.append(f"Step {step_key}: Added reason note")
+
+                    # Fix output description in docstring if provided
+                    if step_fix.get("corrected_output_description"):
+                        # This would require parsing the docstring - add as clarification for now
+                        pass
+
+    # =============================================================
+    # 2. Apply dependency_override - Fix required_dependencies
+    # =============================================================
     if fix.get("dependency_override"):
         dep = fix["dependency_override"]
+
+        if dep.get("fixed_dependencies"):
+            old_deps = modified.get("required_dependencies", "")
+            new_deps = dep["fixed_dependencies"]
+            modified["required_dependencies"] = new_deps
+
+            # Log what changed
+            old_imports = set(old_deps.strip().split("\n"))
+            new_imports = set(new_deps.strip().split("\n"))
+            added = new_imports - old_imports
+            removed = old_imports - new_imports
+
+            if removed:
+                changes_made.append(f"Dependencies: Removed {removed}")
+            if added:
+                changes_made.append(f"Dependencies: Added {added}")
+            if not added and not removed and old_deps != new_deps:
+                changes_made.append(f"Dependencies: Modified imports")
+
+        # Handle additional_imports (append to existing)
         if dep.get("additional_imports"):
-            imports = ", ".join(dep["additional_imports"])
-            clarifications.append(f"Additional allowed imports: {imports}")
+            old_deps = modified.get("required_dependencies", "")
+            for imp in dep["additional_imports"]:
+                if imp not in old_deps:
+                    modified["required_dependencies"] = old_deps + f"\n{imp}"
+                    changes_made.append(f"Dependencies: Added '{imp}'")
 
-    # From problem_statement.txt
+    # =============================================================
+    # 3. Apply evaluation_override - Fix test cases and add preambles
+    # =============================================================
+    if fix.get("evaluation_override"):
+        eval_fix = fix["evaluation_override"]
+
+        # Handle preamble - code to add to required_dependencies for compatibility
+        if eval_fix.get("preamble"):
+            preamble = eval_fix["preamble"]
+            old_deps = modified.get("required_dependencies", "")
+            if preamble not in old_deps:
+                modified["required_dependencies"] = old_deps + "\n" + preamble
+                changes_made.append(f"Evaluation: Added compatibility preamble")
+
+        # Handle apply_to_all_steps flag (for preamble that affects all steps)
+        if eval_fix.get("apply_to_all_steps") and eval_fix.get("preamble"):
+            changes_made.append(f"Evaluation: Preamble applies to all steps")
+
+        for step_key, test_fix in eval_fix.items():
+            # Skip non-step keys
+            if step_key in ["preamble", "apply_to_all_steps", "description", "notes", "reason"]:
+                continue
+
+            if not isinstance(test_fix, dict):
+                continue
+
+            parts = step_key.split(".")
+            if len(parts) == 2:
+                try:
+                    step_idx = int(parts[1]) - 1
+                except ValueError:
+                    continue
+
+                if 0 <= step_idx < len(modified.get("sub_steps", [])):
+                    step = modified["sub_steps"][step_idx]
+                    test_cases = step.get("test_cases", [])
+
+                    if test_fix.get("test_case_fix") == "replace_function_call":
+                        original_func = test_fix.get("original_function", "")
+                        corrected_func = test_fix.get("corrected_function", "")
+
+                        if original_func and corrected_func:
+                            new_test_cases = []
+                            for tc in test_cases:
+                                if original_func in tc:
+                                    new_tc = tc.replace(original_func, corrected_func)
+                                    new_test_cases.append(new_tc)
+                                    changes_made.append(
+                                        f"Step {step_key}: Fixed test case '{original_func}' -> '{corrected_func}'"
+                                    )
+                                else:
+                                    new_test_cases.append(tc)
+                            step["test_cases"] = new_test_cases
+
+                    # Handle direct test case replacement
+                    if test_fix.get("original_test") and test_fix.get("fixed_test"):
+                        original_test = test_fix["original_test"]
+                        fixed_test = test_fix["fixed_test"]
+                        new_test_cases = []
+                        for tc in test_cases:
+                            if original_test in tc:
+                                new_test_cases.append(tc.replace(original_test, fixed_test))
+                                changes_made.append(f"Step {step_key}: Replaced test case")
+                            else:
+                                new_test_cases.append(tc)
+                        step["test_cases"] = new_test_cases
+
+    # =============================================================
+    # 4. Apply env_override - Environment variables (for harness)
+    # =============================================================
+    if fix.get("env_override"):
+        # Store env overrides in a special field for the harness to read
+        modified["_env_override"] = fix["env_override"]
+        changes_made.append(f"Environment: Added overrides {list(fix['env_override'].keys())}")
+
+    # =============================================================
+    # 5. Apply input_override - Additional clarifications
+    # =============================================================
+    if fix.get("input_override"):
+        inp = fix["input_override"]
+        clarifications = inp.get("clarifications", [])
+
+        if clarifications:
+            clarification_text = "\n\n## IMPORTANT CLARIFICATIONS\n" + "\n".join(f"- {c}" for c in clarifications)
+
+            if "problem_description_main" in modified:
+                modified["problem_description_main"] += clarification_text
+            elif modified.get("sub_steps"):
+                modified["sub_steps"][0]["step_description_prompt"] = (
+                    modified["sub_steps"][0].get("step_description_prompt", "") + clarification_text
+                )
+            changes_made.append(f"Added {len(clarifications)} clarifications to prompt")
+
+        if inp.get("corrected_instructions"):
+            # Replace the main problem description
+            modified["problem_description_main"] = inp["corrected_instructions"]
+            changes_made.append("Replaced problem description with corrected instructions")
+
+    # =============================================================
+    # 6. Apply problem_statement.txt - Raw text addition
+    # =============================================================
     if fix.get("problem_statement"):
-        clarifications.append(fix["problem_statement"])
+        ps_text = f"\n\n## ADDITIONAL CONTEXT\n{fix['problem_statement']}"
+        if "problem_description_main" in modified:
+            modified["problem_description_main"] += ps_text
+        changes_made.append("Added problem statement context")
 
-    # Inject clarifications into the task
-    if clarifications:
-        clarification_text = "\n\n## CLARIFICATIONS\n" + "\n".join(f"- {c}" for c in clarifications)
-
-        # Modify the problem description or required_dependencies
-        if "problem_description" in modified:
-            modified["problem_description"] += clarification_text
-        elif "sub_steps" in modified and modified["sub_steps"]:
-            # Add to first sub-step's problem text
-            modified["sub_steps"][0]["problem_description_step"] = \
-                modified["sub_steps"][0].get("problem_description_step", "") + clarification_text
-
-    return modified
+    return modified, changes_made
 
 
 def create_filtered_dataset(
     tasks: List[Dict[str, Any]],
     fixes: Dict[str, Dict[str, Any]],
     task_ids: List[str],
-) -> List[Dict[str, Any]]:
-    """Create a filtered dataset with only the specified tasks, with fixes applied."""
+    verbose: bool = True,
+) -> Tuple[List[Dict[str, Any]], Dict[str, List[str]]]:
+    """Create a filtered dataset with only the specified tasks, with fixes applied.
+
+    Returns:
+        Tuple of (filtered_tasks, dict mapping task_id to list of changes made)
+    """
     filtered = []
+    all_changes: Dict[str, List[str]] = {}
 
     for task in tasks:
         problem_id = str(task.get("problem_id", ""))
         if problem_id in task_ids:
             if problem_id in fixes:
-                modified = apply_fix_to_task(task, fixes[problem_id])
-                log(f"Applied fix to task {problem_id}", "data")
+                modified, changes = apply_fix_to_task(task, fixes[problem_id])
+                all_changes[problem_id] = changes
+
+                if verbose and changes:
+                    log(f"Applied {len(changes)} fix(es) to task {problem_id}:", "fix")
+                    for change in changes:
+                        log(f"  - {change}", "fix")
+                elif verbose:
+                    log(f"No changes applied to task {problem_id} (fix had no applicable overrides)", "fix")
             else:
                 modified = task
             filtered.append(modified)
 
-    return filtered
+    return filtered, all_changes
 
 
 def run_hal_eval(
@@ -483,6 +748,11 @@ def main():
         "--model",
         help="Force a specific model for all tasks (overrides rubric CSV). Use model_id from model config.",
     )
+    parser.add_argument(
+        "--verify-fixes",
+        action="store_true",
+        help="Verify fixes are applied correctly without running HAL eval. Shows before/after for each fix.",
+    )
 
     args = parser.parse_args()
 
@@ -497,17 +767,36 @@ def main():
 
     # List fixes mode
     if args.list_fixes:
-        available = list_available_fixes(fixes_root)
-        print(f"\nAvailable fixes in {fixes_root}:\n")
-        for task_id in available:
+        # Get tasks with actual fixes
+        with_fixes = list_available_fixes(fixes_root, include_readme_only=False)
+        # Get all analyzed tasks (including README-only)
+        all_analyzed = list_available_fixes(fixes_root, include_readme_only=True)
+        readme_only = set(all_analyzed) - set(with_fixes)
+
+        print(f"\n{'='*60}")
+        print(f"FIXES AVAILABLE in {fixes_root.name}/")
+        print(f"{'='*60}\n")
+
+        print(f"Tasks with ACTUAL FIXES ({len(with_fixes)}):")
+        for task_id in with_fixes:
             fix = load_fix_package(task_id, fixes_root)
             types = []
             if fix.get("dependency_override"): types.append("dep")
             if fix.get("instruction_override"): types.append("instr")
             if fix.get("evaluation_override"): types.append("eval")
             if fix.get("problem_statement"): types.append("prompt")
-            print(f"  {task_id}: [{', '.join(types) or 'readme only'}]")
-        print(f"\nTotal: {len(available)} fixes")
+            if fix.get("env_override"): types.append("env")
+            if fix.get("input_override"): types.append("input")
+            print(f"  ✓ {task_id}: [{', '.join(types)}]")
+
+        if readme_only:
+            print(f"\nTasks analyzed - NO FIX NEEDED ({len(readme_only)}):")
+            for task_id in sorted(readme_only):
+                print(f"  ⊘ {task_id}: [readme only - not a benchmark issue]")
+
+        print(f"\n{'='*60}")
+        print(f"Summary: {len(with_fixes)} fixes to apply, {len(readme_only)} analyzed (no fix needed)")
+        print(f"{'='*60}\n")
         return
 
     # Show specific fix
@@ -526,6 +815,115 @@ def main():
                 print(f"{key}: {json.dumps(value, indent=2)}")
             else:
                 print(f"{key}: {value[:200] if isinstance(value, str) else value}")
+        return
+
+    # Verify fixes mode - test fix application without running HAL eval
+    if args.verify_fixes:
+        print(f"\n{'='*60}")
+        print("VERIFY FIXES MODE")
+        print(f"{'='*60}\n")
+
+        log("Loading SciCode dataset from HuggingFace...", "verify")
+        dataset = load_scicode_dataset()
+        if not dataset:
+            log("Failed to load dataset", "verify")
+            return
+        log(f"Loaded {len(dataset)} tasks", "verify")
+
+        # Get tasks with fixes
+        with_fixes = list_available_fixes(fixes_root, include_readme_only=False)
+        if args.task_ids:
+            with_fixes = [t for t in with_fixes if t in args.task_ids]
+
+        log(f"Verifying {len(with_fixes)} fixes...\n", "verify")
+
+        all_success = True
+        for task_id in with_fixes:
+            fix = load_fix_package(task_id, fixes_root)
+            if not fix:
+                continue
+
+            # Find original task
+            original_task = None
+            for task in dataset:
+                if str(task.get("problem_id")) == task_id:
+                    original_task = task
+                    break
+
+            if not original_task:
+                print(f"  ✗ Task {task_id}: NOT FOUND in dataset")
+                all_success = False
+                continue
+
+            # Apply fix
+            modified_task, changes = apply_fix_to_task(original_task, fix)
+
+            print(f"\n{'='*60}")
+            print(f"Task {task_id}")
+            print(f"{'='*60}")
+
+            if not changes:
+                print(f"  ⚠ NO CHANGES APPLIED (fix may not match dataset structure)")
+                all_success = False
+
+                # Debug: show what the fix contains vs what the task has
+                if fix.get("instruction_override"):
+                    instr = fix["instruction_override"]
+                    overrides = instr.get("overrides", {})
+                    for step_key, step_fix in overrides.items():
+                        if step_fix.get("original_header"):
+                            print(f"\n  Fix expects to find: '{step_fix['original_header']}'")
+                            parts = step_key.split(".")
+                            if len(parts) == 2:
+                                try:
+                                    step_idx = int(parts[1]) - 1
+                                    if 0 <= step_idx < len(original_task.get("sub_steps", [])):
+                                        actual = original_task["sub_steps"][step_idx].get("function_header", "")[:100]
+                                        print(f"  Actual in dataset: '{actual}...'")
+                                except:
+                                    pass
+            else:
+                print(f"  ✓ {len(changes)} change(s) applied:")
+                for change in changes:
+                    print(f"    - {change}")
+
+                # Show before/after for key fields
+                for i, step in enumerate(original_task.get("sub_steps", [])):
+                    step_num = f"{task_id}.{i+1}"
+                    orig_header = step.get("function_header", "")
+                    mod_header = modified_task["sub_steps"][i].get("function_header", "")
+
+                    if orig_header != mod_header:
+                        # Extract just the def line
+                        orig_def = next((l for l in orig_header.split("\n") if l.strip().startswith("def ")), "")
+                        mod_def = next((l for l in mod_header.split("\n") if l.strip().startswith("def ")), "")
+                        print(f"\n  Step {step_num} function_header:")
+                        print(f"    BEFORE: {orig_def}")
+                        print(f"    AFTER:  {mod_def}")
+
+                    orig_tests = step.get("test_cases", [])
+                    mod_tests = modified_task["sub_steps"][i].get("test_cases", [])
+                    if orig_tests != mod_tests:
+                        print(f"\n  Step {step_num} test_cases:")
+                        for j, (ot, mt) in enumerate(zip(orig_tests, mod_tests)):
+                            if ot != mt:
+                                print(f"    [{j}] BEFORE: {ot[:80]}...")
+                                print(f"    [{j}] AFTER:  {mt[:80]}...")
+
+                # Check dependencies
+                orig_deps = original_task.get("required_dependencies", "")
+                mod_deps = modified_task.get("required_dependencies", "")
+                if orig_deps != mod_deps:
+                    print(f"\n  required_dependencies:")
+                    print(f"    BEFORE: {orig_deps[:100]}...")
+                    print(f"    AFTER:  {mod_deps[:100]}...")
+
+        print(f"\n{'='*60}")
+        if all_success:
+            print("✓ All fixes verified successfully!")
+        else:
+            print("⚠ Some fixes had issues - review output above")
+        print(f"{'='*60}\n")
         return
 
     # Determine effective prefix
@@ -686,11 +1084,15 @@ def main():
             failed_runs.append((task_id, model_id, "no fix"))
             continue
 
-        filtered = create_filtered_dataset(dataset, {task_id: fix}, [task_id])
+        filtered, changes_applied = create_filtered_dataset(dataset, {task_id: fix}, [task_id])
         if not filtered:
             log(f"SKIP: Task {task_id} not found in dataset", "main")
             failed_runs.append((task_id, model_id, "task not in dataset"))
             continue
+
+        # Verify changes were applied
+        if task_id in changes_applied and not changes_applied[task_id]:
+            log(f"WARNING: No actual changes applied for task {task_id}", "fix")
 
         # Write temporary dataset file
         temp_dataset = Path(tempfile.mktemp(suffix=".json", prefix=f"scicode_{task_id}_"))
