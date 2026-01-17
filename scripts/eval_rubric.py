@@ -124,6 +124,12 @@ def main():
         action="store_true",
         help="Skip confirmation prompt",
     )
+    parser.add_argument(
+        "--parallel",
+        type=int,
+        default=5,
+        help="Number of parallel rubric evaluations (default: 5)",
+    )
 
     args = parser.parse_args()
 

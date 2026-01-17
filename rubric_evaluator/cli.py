@@ -130,6 +130,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Only evaluate tasks that appear in the trace's failed_tasks list.",
     )
+    parser.add_argument(
+        "--parallel",
+        type=int,
+        default=5,
+        help="Number of parallel rubric evaluations (default: 5).",
+    )
     return parser.parse_args()
 
 
@@ -953,13 +959,15 @@ def run(args: argparse.Namespace) -> None:
             print(f"❌ No rubric definitions found in {rubrics_dir}. Add *.txt files and retry.")
             return
 
-    batch_size = DEFAULT_RUBRIC_BATCH_SIZE
+    # Use --parallel arg, fall back to env var, then default
+    batch_size = getattr(args, 'parallel', None) or DEFAULT_RUBRIC_BATCH_SIZE
     env_batch = os.getenv("DOCENT_RUBRIC_BATCH_SIZE")
-    if env_batch:
+    if env_batch and not getattr(args, 'parallel', None):
         try:
             batch_size = max(1, int(env_batch))
         except ValueError:
             pass
+    batch_size = max(1, batch_size)
 
     output_dir = Path(args.output_dir).expanduser()
     if args.output_mode == "csv":
