@@ -239,18 +239,20 @@ python scripts/eval_rubric.py \
     -y
 
 python scripts/judge.py \
-      --pattern "scicode_*" \
-      --rubric-dir rubrics_output/scicode \
-      --model openai:gpt-5.2 \
-      --parallel 5 \
-      -y
+    --pattern "scicode_*" \
+    --rubric-dir rubrics_output/scicode \
+    --model openai:gpt-5.2 \
+    --parallel 5 \
+    -y
 
 
 python scripts/claude_fixer_scicode.py \
     --rubric-dir rubrics_output/scicode \
     --judge-csv judge_output/scicode_verdict.csv \
-    --trace-files traces/scicode_hal_generalist_agent_o4mini20250416_low_1745608137_UPLOAD.json \
     --benchmark scicode \
+    --tasks-per-batch 5 \
+    --parallel 4 \
+    --ife-only \
     --skip-existing
 
 python scripts/run_scicode_fixes.py \
@@ -360,4 +362,36 @@ python scripts/eval_rubric.py \
     --rubric rubric_templates/scicode.txt \
     --rubric-model openai:gpt-4o \
     -y
+```
+
+```bash
+# 1. Verify fixes work correctly first
+python scripts/run_scicode_fixes.py --verify-fixes
+
+# 2. List available fixes
+python scripts/run_scicode_fixes.py --list-fixes
+
+# 3. Dry run to see what would happen
+python scripts/run_scicode_fixes.py --dry-run
+
+# 4. Run fixes with a specific model
+python scripts/run_scicode_fixes.py --model openai/gpt-4.1-2025-04-14 --docker
+
+
+# 5. Run fixes using model that originally failed (from rubric CSV)
+python scripts/run_scicode_fixes.py \
+    --rubric-csv rubrics_output/scicode/scicode_scicode_tool_calling_agent_gpt4120250414_1745260672_UPLOAD.csv \
+    --docker
+
+# 6. Run specific tasks only
+python scripts/run_scicode_fixes.py \
+    --model openai/gpt-4.1-2025-04-14 \
+    --task-id 71 --task-id 28 \
+    --docker
+
+# Pipeline running
+python scripts/run_scicode_fixes.py\
+    --prefix scicode_lime_ \
+    --parallel 20 \
+    --docker
 ```
