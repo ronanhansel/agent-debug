@@ -528,24 +528,74 @@ def main():
                 print(f"{key}: {value[:200] if isinstance(value, str) else value}")
         return
 
-    # Determine tasks to process
-    if args.task_ids:
-        task_ids = args.task_ids
+    # Determine effective prefix
+    prefix = args.prefix or args.output_prefix or "fixed"
+    if not prefix.endswith("_"):
+        prefix = prefix + "_"
+
+    # Load model config
+    model_config_path = Path(args.model_config)
+    if not model_config_path.is_absolute():
+        model_config_path = REPO_ROOT / model_config_path
+    model_config = load_model_config(model_config_path)
+    if model_config:
+        log(f"Loaded {len(model_config)} model configs from {model_config_path.name}", "model")
     else:
-        task_ids = list_available_fixes(fixes_root)
+        log(f"WARNING: No model config found at {model_config_path}", "model")
 
-    if args.max_tasks:
-        task_ids = task_ids[:args.max_tasks]
+    # Build list of available fixes
+    available_fixes = set(list_available_fixes(fixes_root))
+    if args.task_ids:
+        # Filter to only requested task IDs
+        requested = set(args.task_ids)
+        available_fixes = available_fixes & requested
+        missing = requested - available_fixes
+        if missing:
+            log(f"WARN: Requested task(s) not found under {fixes_root}: {', '.join(sorted(missing))}", "main")
 
-    if not task_ids:
-        log("No tasks to process. Use --task-id or create fixes first.", "main")
+    if not available_fixes:
+        log("No fix directories found.", "main")
         return
 
-    log(f"Processing {len(task_ids)} tasks: {task_ids}", "main")
+    log(f"Found {len(available_fixes)} available fixes", "main")
+
+    # Build (task_id, model_id) pairs to run
+    task_model_pairs: List[Tuple[str, str]] = []
+
+    if args.model:
+        # Force a specific model for all fixes
+        for task_id in sorted(available_fixes):
+            task_model_pairs.append((task_id, args.model))
+        log(f"Forced model '{args.model}' for all {len(task_model_pairs)} tasks", "model")
+    elif args.rubric_csv:
+        # Load failed (task, model) pairs from rubric CSV
+        rubric_csv_path = Path(args.rubric_csv)
+        if not rubric_csv_path.is_absolute():
+            rubric_csv_path = REPO_ROOT / rubric_csv_path
+        all_failed_pairs = load_rubric_task_models(rubric_csv_path)
+        log(f"Loaded {len(all_failed_pairs)} failed (task, model) pairs from {rubric_csv_path.name}", "model")
+
+        # Filter to only tasks with fixes
+        for task_id, model_id in all_failed_pairs:
+            if task_id in available_fixes:
+                task_model_pairs.append((task_id, model_id))
+        log(f"Filtered to {len(task_model_pairs)} pairs with available fixes", "model")
+    else:
+        # Legacy mode: use all fixes with default model from agent_args
+        log("No --rubric-csv or --model specified, using legacy mode with agent_args", "model")
+        for task_id in sorted(available_fixes):
+            task_model_pairs.append((task_id, ""))  # Empty model = use agent_args
+
+    if args.max_tasks:
+        task_model_pairs = task_model_pairs[:args.max_tasks]
+
+    if not task_model_pairs:
+        log("No tasks to process after filtering.", "main")
+        return
 
     # Load fixes
-    fixes = {}
-    for task_id in task_ids:
+    fixes: Dict[str, Dict[str, Any]] = {}
+    for task_id in set(t[0] for t in task_model_pairs):
         fix = load_fix_package(task_id, fixes_root)
         if fix:
             fixes[task_id] = fix
@@ -562,8 +612,16 @@ def main():
         print("DRY RUN - Would apply the following fixes:")
         print("="*60)
 
-        for task_id, fix in fixes.items():
+        # Group by task
+        tasks_to_models: Dict[str, List[str]] = {}
+        for task_id, model_id in task_model_pairs:
+            tasks_to_models.setdefault(task_id, []).append(model_id)
+
+        for task_id in sorted(tasks_to_models.keys()):
+            models = tasks_to_models[task_id]
+            fix = fixes.get(task_id, {})
             print(f"\n--- Task {task_id} ---")
+            print(f"  Models: {models}")
             if fix.get("instruction_override"):
                 instr = fix["instruction_override"]
                 if instr.get("clarifications"):
@@ -578,8 +636,9 @@ def main():
                 print(f"  Problem statement addition: {fix['problem_statement'][:100]}...")
 
         print(f"\n{'='*60}")
-        print(f"Would run HAL eval with prefix: {args.output_prefix}")
-        print(f"Output trace: traces/{args.output_prefix}_*.json")
+        print(f"Would run HAL eval with prefix: {prefix}")
+        print(f"Docker: {args.docker}")
+        print(f"Total jobs: {len(task_model_pairs)}")
         return
 
     # Load SciCode dataset
@@ -591,51 +650,89 @@ def main():
 
     log(f"Loaded {len(dataset)} tasks from dataset", "data")
 
-    # Create filtered dataset with fixes applied
-    filtered = create_filtered_dataset(dataset, fixes, task_ids)
-    log(f"Created filtered dataset with {len(filtered)} tasks", "data")
-
-    if not filtered:
-        log("No matching tasks found in dataset", "main")
-        return
-
-    # Write temporary dataset file
-    temp_dataset = Path(tempfile.mktemp(suffix=".json", prefix="scicode_fixed_"))
-    temp_dataset.write_text(json.dumps(filtered, indent=2))
-    log(f"Wrote temporary dataset to {temp_dataset}", "data")
-
-    # Load agent args
-    agent_args = {"model_name": "gpt-4o"}
+    # Load fallback agent args (for legacy mode)
+    fallback_agent_args: Dict[str, Any] = {"model_name": "gpt-4o"}
     if args.agent_args:
         args_path = Path(args.agent_args)
         if not args_path.is_absolute():
             args_path = REPO_ROOT / args_path
         if args_path.exists():
-            agent_args = json.loads(args_path.read_text())
-            log(f"Loaded agent args: {list(agent_args.keys())}", "main")
+            fallback_agent_args = json.loads(args_path.read_text())
+            log(f"Loaded fallback agent args: {list(fallback_agent_args.keys())}", "main")
 
-    # Run HAL eval
-    success, message, trace_path = run_hal_eval(
-        agent_dir=agent_dir,
-        agent_args=agent_args,
-        dataset_path=temp_dataset,
-        output_prefix=args.output_prefix,
-        benchmark=args.benchmark,
-    )
+    # Run each (task, model) pair
+    generated_traces: List[Path] = []
+    failed_runs: List[Tuple[str, str, str]] = []
 
-    # Cleanup temp dataset
-    temp_dataset.unlink(missing_ok=True)
+    for i, (task_id, model_id) in enumerate(task_model_pairs):
+        log(f"\n=== Processing {i+1}/{len(task_model_pairs)}: task={task_id}, model={model_id or 'default'} ===", "main")
+
+        # Get agent args for this model
+        if model_id and model_config:
+            task_agent_args = get_agent_args_for_model(model_id, model_config)
+            if task_agent_args is None:
+                log(f"SKIP: Model '{model_id}' not found in config", "model")
+                failed_runs.append((task_id, model_id, "model not in config"))
+                continue
+        else:
+            task_agent_args = fallback_agent_args.copy()
+
+        log(f"Using model: {task_agent_args.get('model_name')} (effort={task_agent_args.get('reasoning_effort', 'N/A')})", "model")
+
+        # Create filtered dataset with just this task
+        fix = fixes.get(task_id)
+        if not fix:
+            log(f"SKIP: No fix found for task {task_id}", "main")
+            failed_runs.append((task_id, model_id, "no fix"))
+            continue
+
+        filtered = create_filtered_dataset(dataset, {task_id: fix}, [task_id])
+        if not filtered:
+            log(f"SKIP: Task {task_id} not found in dataset", "main")
+            failed_runs.append((task_id, model_id, "task not in dataset"))
+            continue
+
+        # Write temporary dataset file
+        temp_dataset = Path(tempfile.mktemp(suffix=".json", prefix=f"scicode_{task_id}_"))
+        temp_dataset.write_text(json.dumps(filtered, indent=2))
+
+        try:
+            success, message, trace_path = run_hal_eval(
+                agent_dir=agent_dir,
+                agent_args=task_agent_args,
+                dataset_path=temp_dataset,
+                output_prefix=prefix,
+                benchmark=args.benchmark,
+                docker=args.docker,
+                task_id=task_id,
+            )
+
+            if success and trace_path:
+                generated_traces.append(trace_path)
+                log(f"SUCCESS: {trace_path}", "main")
+            else:
+                log(f"FAILED: {message}", "main")
+                failed_runs.append((task_id, model_id, message))
+        finally:
+            temp_dataset.unlink(missing_ok=True)
 
     # Summary
     print(f"\n{'='*60}")
-    print("RESULT")
+    print("SUMMARY")
     print("="*60)
-    if success:
-        print(f"✓ SUCCESS: {message}")
-        if trace_path:
-            print(f"  Trace: {trace_path}")
-    else:
-        print(f"✗ FAILED: {message}")
+    print(f"Total jobs: {len(task_model_pairs)}")
+    print(f"Successful: {len(generated_traces)}")
+    print(f"Failed: {len(failed_runs)}")
+
+    if generated_traces:
+        print(f"\nGenerated traces:")
+        for trace in generated_traces:
+            print(f"  - {trace}")
+
+    if failed_runs:
+        print(f"\nFailed runs:")
+        for task_id, model_id, reason in failed_runs:
+            print(f"  - {task_id} ({model_id}): {reason}")
 
 
 if __name__ == "__main__":

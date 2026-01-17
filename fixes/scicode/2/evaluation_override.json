@@ -1,0 +1,6 @@
+{
+  "description": "Add scipy.integrate.simps compatibility shim for deprecated API",
+  "preamble": "# Compatibility shim for scipy.integrate.simps (deprecated in SciPy 1.14, removed in 1.17)\nimport scipy.integrate\nif not hasattr(scipy.integrate, 'simps'):\n    scipy.integrate.simps = scipy.integrate.simpson\n",
+  "apply_to_all_steps": true,
+  "notes": "The benchmark's required_dependencies explicitly requires 'from scipy.integrate import simps'. In SciPy 1.14+, simps was deprecated and in 1.17+ it was removed, replaced by simpson. This shim ensures backward compatibility for solutions using the benchmark-specified import."
+}
