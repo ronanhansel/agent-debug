@@ -269,8 +269,20 @@ class LocalRubricEvaluation:
     def explanation(self) -> str:
         if not self.output:
             return ""
+        # Try standard explanation field first
         explanation = self.output.get("explanation")
-        return explanation if isinstance(explanation, str) else ""
+        if isinstance(explanation, str) and explanation.strip():
+            return explanation
+        # Build explanation from custom schema fields (scicode rubric)
+        parts = []
+        for field in ("existence_reasoning", "causation_reasoning", "evidence"):
+            val = self.output.get(field)
+            if isinstance(val, str) and val.strip():
+                parts.append(f"{field}: {val.strip()}")
+        if parts:
+            return " | ".join(parts)
+        # Fallback: serialize entire output as explanation
+        return str(self.output)
 
 
 @dataclass
