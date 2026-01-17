@@ -1,0 +1,10 @@
+task_id,criteria,grade,correct,explanation,model_run
+2,scicode,,,,scicode_potato_openai_gpt-5
+12,scicode,,,,scicode_potato_openai_gpt-5
+35,scicode,,,,scicode_potato_openai_gpt-5
+63,scicode,,,,scicode_potato_openai_gpt-5
+28,scicode,,0,,scicode_potato_openai_gpt-5
+52,scicode,,0,,scicode_potato_openai_gpt-5
+58,scicode,,0,,scicode_potato_openai_gpt-5
+80,scicode,,0,,scicode_potato_openai_gpt-5
+71,scicode,,0,,scicode_potato_openai_gpt-5

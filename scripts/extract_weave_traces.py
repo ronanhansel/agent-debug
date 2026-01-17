@@ -549,12 +549,13 @@ def main() -> None:
 
         all_calls = fetch_calls(args.project, args.prefix, client, include_costs=args.include_costs)
 
-    for prefix in args.prefix:
+    for i, prefix in enumerate(args.prefix):
         log(f"Processing prefix: {prefix}")
         local_paths = sorted(TRACES_DIR.glob(f"{prefix}*_UPLOAD.json"))
-        extra_for_prefix = [p for p in extra_paths if _matches_prefix(p, prefix)]
+        # Positional matching: i-th prefix gets i-th merge-input file
+        extra_for_prefix = [extra_paths[i]] if i < len(extra_paths) else []
         if extra_for_prefix:
-            log(f"Extra merge files for {prefix}: {[p.name for p in extra_for_prefix]}")
+            log(f"Merge-input file for {prefix}: {[p.name for p in extra_for_prefix]}")
         merged_by_name = {p.name: p for p in local_paths}
         for path in extra_for_prefix:
             merged_by_name[path.name] = path

@@ -657,6 +657,9 @@ def run_hal_eval(
     # Use pricing_key for cost tracking (config key), model_name is for API calls (model_id)
     effective_pricing_key = pricing_key or str(agent_args.get("model_name", ""))
     env["HAL_PRICING_MODEL_NAME"] = effective_pricing_key  # Use assignment, not setdefault
+    # Set weave project name based on prefix (e.g., scicode_lime_scicode)
+    weave_project = f"{output_prefix.rstrip('_')}_{benchmark}"
+    env["HAL_WEAVE_PROJECT"] = weave_project
 
     log(f"Running HAL eval with run_id: {run_id}", "hal")
     log(f"Model (API): {agent_args.get('model_name')} | Pricing key: {effective_pricing_key}", "hal")
@@ -807,6 +810,11 @@ def main():
         "--verify-fixes",
         action="store_true",
         help="Verify fixes are applied correctly without running HAL eval. Shows before/after for each fix.",
+    )
+    parser.add_argument(
+        "--merge-traces",
+        action="store_true",
+        help="Merge existing trace files by model (no HAL runs). Looks for traces with the given prefix.",
     )
 
     args = parser.parse_args()
@@ -978,6 +986,136 @@ def main():
             print("✓ All fixes verified successfully!")
         else:
             print("⚠ Some fixes had issues - review output above")
+        print(f"{'='*60}\n")
+        return
+
+    # Merge traces mode - combine existing traces by model
+    if args.merge_traces:
+        prefix = args.prefix or args.output_prefix or "fixed"
+        if not prefix.endswith("_"):
+            prefix = prefix + "_"
+
+        print(f"\n{'='*60}")
+        print(f"MERGE TRACES MODE - prefix: {prefix}")
+        print(f"{'='*60}\n")
+
+        # Find all trace files with the prefix (exclude already merged files)
+        trace_pattern = f"{prefix}*_UPLOAD.json"
+        all_trace_files = list(TRACES_DIR.glob(trace_pattern))
+        trace_files = [f for f in all_trace_files if "_MERGED_" not in f.name]
+
+        if not trace_files:
+            log(f"No trace files found matching {trace_pattern} in {TRACES_DIR}", "merge")
+            return
+
+        log(f"Found {len(trace_files)} trace files (excluding merged)", "merge")
+
+        # Group traces by model
+        # Filename format: prefix_prefix_model_task_benchmark_timestamp_UPLOAD.json
+        # Example: scicode_potato__scicode_potato_openai_gpt-4_1_2025-04-14_28_scicode_20260117_123734_UPLOAD.json
+        model_traces: Dict[str, List[Path]] = {}
+
+        for trace_file in trace_files:
+            name = trace_file.name
+            # Extract model from filename - look for known model patterns
+            model_key = None
+
+            if "gpt-4_1_2025-04-14" in name or "gpt-4.1-2025-04-14" in name:
+                model_key = "openai/gpt-4.1-2025-04-14"
+            elif "gpt-5" in name:
+                model_key = "openai/gpt-5"
+            elif "o3_2025-04-16" in name or "o3-2025-04-16" in name:
+                model_key = "openai/o3-2025-04-16"
+            elif "o4-mini" in name and "_high_" in name:
+                model_key = "openai/o4-mini-2025-04-16-high"
+            elif "o4-mini" in name and "_low_" in name:
+                model_key = "openai/o4-mini-2025-04-16-low"
+            elif "o4-mini" in name:
+                model_key = "openai/o4-mini-2025-04-16"
+
+            if model_key:
+                model_traces.setdefault(model_key, []).append(trace_file)
+            else:
+                log(f"Could not determine model for: {name}", "merge")
+
+        log(f"Grouped into {len(model_traces)} models", "merge")
+
+        # Merge traces for each model
+        for model_key, traces in sorted(model_traces.items()):
+            log(f"Merging {len(traces)} traces for {model_key}", "merge")
+
+            # Collect all successful and failed tasks across all traces
+            all_successful: Set[str] = set()
+            all_failed: Set[str] = set()
+            merged_config: Dict[str, Any] = {}
+            merged_raw_eval: Dict[str, Any] = {"details": {}}
+            total_cost = 0.0
+
+            for trace_file in traces:
+                try:
+                    data = json.loads(trace_file.read_text())
+
+                    # Collect successful/failed task IDs from results
+                    if "results" in data:
+                        results = data["results"]
+                        for task_id in results.get("successful_tasks", []):
+                            all_successful.add(str(task_id))
+                            # If task was previously marked as failed, remove it (success overrides)
+                            all_failed.discard(str(task_id))
+                        for task_id in results.get("failed_tasks", []):
+                            # Only add to failed if not already successful
+                            if str(task_id) not in all_successful:
+                                all_failed.add(str(task_id))
+                        total_cost += results.get("total_cost", 0)
+
+                    # Merge raw_eval_results details
+                    if "raw_eval_results" in data and "details" in data["raw_eval_results"]:
+                        for task_id, details in data["raw_eval_results"]["details"].items():
+                            merged_raw_eval["details"][task_id] = details
+
+                    # Keep config from first file
+                    if not merged_config and "config" in data:
+                        merged_config = data["config"]
+
+                except Exception as e:
+                    log(f"Error reading {trace_file.name}: {e}", "merge")
+
+            # Calculate merged accuracy
+            total_tasks = len(all_successful) + len(all_failed)
+            accuracy = len(all_successful) / total_tasks if total_tasks > 0 else 0.0
+
+            # Create merged trace with proper structure
+            merged_trace = {
+                "config": merged_config,
+                "results": {
+                    "accuracy": accuracy,
+                    "subtask_accuracy": 0.0,  # Would need per-step data to calculate
+                    "successful_tasks": sorted(all_successful),
+                    "failed_tasks": sorted(all_failed),
+                    "total_cost": total_cost,
+                    "latencies": {},
+                },
+                "raw_eval_results": merged_raw_eval,
+                "raw_logging_results": [],
+                "total_usage": {},
+                "total_cost": total_cost,
+            }
+
+            # Save merged trace
+            # Format: {prefix}{model}_MERGED_{benchmark}_{timestamp}_UPLOAD.json
+            model_slug = model_key.replace("/", "_").replace("-", "_")
+            benchmark = merged_config.get("benchmark_name", "scicode")
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            merged_filename = f"{prefix}{model_slug}_MERGED_{benchmark}_{timestamp}_UPLOAD.json"
+            merged_path = TRACES_DIR / merged_filename
+
+            merged_path.write_text(json.dumps(merged_trace, indent=2))
+            log(f"Saved: {merged_path.name}", "merge")
+            log(f"  Tasks: {len(all_successful)} successful, {len(all_failed)} failed ({total_tasks} total)", "merge")
+            log(f"  Accuracy: {accuracy:.1%}", "merge")
+
+        print(f"\n{'='*60}")
+        print(f"Merged {len(model_traces)} model traces")
         print(f"{'='*60}\n")
         return
 
