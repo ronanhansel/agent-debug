@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -135,6 +136,30 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=4,
         help="Number of parallel rubric evaluations (default: 4).",
+    )
+    parser.add_argument(
+        "--max-batch-messages",
+        type=int,
+        default=0,
+        help="Max total messages per batch (0=disabled, use --parallel instead). "
+             "Dynamically adjusts batch size so total messages don't exceed this limit.",
+    )
+    parser.add_argument(
+        "--inter-batch-delay",
+        type=float,
+        default=0,
+        help="Seconds to wait between batches (default: 0).",
+    )
+    parser.add_argument(
+        "--retries",
+        type=int,
+        default=3,
+        help="Number of retries per batch on failure (default: 3).",
+    )
+    parser.add_argument(
+        "--sort-by-messages",
+        action="store_true",
+        help="Sort tasks from least to most messages before processing.",
     )
     return parser.parse_args()
 
@@ -716,10 +741,46 @@ def build_docent_agent_runs(
     return agent_runs
 
 
+def _create_dynamic_batches(
+    agent_runs: Sequence["AgentRun"],
+    max_batch_messages: int,
+) -> list[list["AgentRun"]]:
+    """Create batches where total message count doesn't exceed max_batch_messages."""
+    batches: list[list["AgentRun"]] = []
+    current_batch: list["AgentRun"] = []
+    current_count = 0
+
+    for run in agent_runs:
+        msg_count = run.metadata.get("message_count", 0)
+        # If single run exceeds limit, it gets its own batch
+        if msg_count >= max_batch_messages:
+            if current_batch:
+                batches.append(current_batch)
+                current_batch = []
+                current_count = 0
+            batches.append([run])
+        elif current_count + msg_count > max_batch_messages:
+            # Start new batch
+            batches.append(current_batch)
+            current_batch = [run]
+            current_count = msg_count
+        else:
+            current_batch.append(run)
+            current_count += msg_count
+
+    if current_batch:
+        batches.append(current_batch)
+
+    return batches
+
+
 async def evaluate_environmental_barrier(
     agent_runs: Sequence["AgentRun"],
     rubric: "Rubric",
     batch_size: int = DEFAULT_RUBRIC_BATCH_SIZE,
+    max_batch_messages: int = 0,
+    inter_batch_delay: float = 0,
+    retries: int = 3,
     json_mode: bool = False,
 ) -> list[LocalRubricEvaluation]:
     if evaluate_rubric is None:
@@ -729,24 +790,72 @@ async def evaluate_environmental_barrier(
         batch_size = 1
 
     evaluations: list[LocalRubricEvaluation] = []
-    for start in range(0, len(agent_runs), batch_size):
-        batch = list(agent_runs[start : start + batch_size])
+
+    # Use dynamic batching if max_batch_messages is set
+    if max_batch_messages > 0:
+        batches = _create_dynamic_batches(agent_runs, max_batch_messages)
+    else:
+        # Fixed-size batching
+        batches = [
+            list(agent_runs[start : start + batch_size])
+            for start in range(0, len(agent_runs), batch_size)
+        ]
+
+    for batch_idx, batch in enumerate(batches):
+        batch_msg_count = sum(r.metadata.get("message_count", 0) for r in batch)
+        print(f"  Processing batch {batch_idx + 1}/{len(batches)}: {len(batch)} tasks ({batch_msg_count} messages)...")
         response_format = {"type": "json_object"} if json_mode else None
-        outputs = await evaluate_rubric(batch, rubric, response_format=response_format)
-        for agent_run, output in zip(batch, outputs):
-            error = None
-            if output is None:
-                error = "Rubric evaluation returned no valid output."
-            task_id = str(agent_run.metadata.get("task_id") or agent_run.id)
-            evaluations.append(
-                LocalRubricEvaluation(
-                    task_id=task_id,
-                    rubric_id=rubric.id,
-                    rubric_version=rubric.version,
-                    output=output,
-                    error=error,
+
+        # Retry logic with exponential backoff
+        outputs = None
+        last_error = None
+        for attempt in range(retries):
+            try:
+                outputs = await evaluate_rubric(batch, rubric, response_format=response_format)
+                break
+            except Exception as e:
+                last_error = e
+                wait_time = 2 ** attempt  # 1, 2, 4 seconds
+                print(f"    ⚠️  Attempt {attempt + 1}/{retries} failed: {e}")
+                if attempt < retries - 1:
+                    print(f"    Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+
+        if outputs is None:
+            print(f"    ❌ Batch failed after {retries} attempts: {last_error}")
+            # Mark all tasks in batch as failed
+            for agent_run in batch:
+                task_id = str(agent_run.metadata.get("task_id") or agent_run.id)
+                evaluations.append(
+                    LocalRubricEvaluation(
+                        task_id=task_id,
+                        rubric_id=rubric.id,
+                        rubric_version=rubric.version,
+                        output=None,
+                        error=f"Batch failed after {retries} attempts: {last_error}",
+                    )
                 )
-            )
+        else:
+            for agent_run, output in zip(batch, outputs):
+                error = None
+                if output is None:
+                    error = "Rubric evaluation returned no valid output."
+                task_id = str(agent_run.metadata.get("task_id") or agent_run.id)
+                evaluations.append(
+                    LocalRubricEvaluation(
+                        task_id=task_id,
+                        rubric_id=rubric.id,
+                        rubric_version=rubric.version,
+                        output=output,
+                        error=error,
+                    )
+                )
+
+        # Delay between batches
+        if inter_batch_delay > 0 and batch_idx < len(batches) - 1:
+            print(f"    Waiting {inter_batch_delay}s before next batch...")
+            time.sleep(inter_batch_delay)
+
     return evaluations
 
 
@@ -929,6 +1038,11 @@ def run(args: argparse.Namespace) -> None:
         print("❌ No agent runs could be constructed for rubric evaluation.")
         return
 
+    # Sort by message count if requested
+    if getattr(args, 'sort_by_messages', False):
+        agent_runs = sorted(agent_runs, key=lambda r: r.metadata.get("message_count", 0))
+        print(f"📊 Sorted {len(agent_runs)} tasks by message count (least to most)")
+
     effort_override = args.reasoning_effort.lower() if args.reasoning_effort else None
 
     try:
@@ -981,6 +1095,11 @@ def run(args: argparse.Namespace) -> None:
             pass
     batch_size = max(1, batch_size)
 
+    # Get max_batch_messages for dynamic batching
+    max_batch_messages = getattr(args, 'max_batch_messages', 0) or 0
+    inter_batch_delay = getattr(args, 'inter_batch_delay', 0) or 0
+    retries = getattr(args, 'retries', 3) or 3
+
     output_dir = Path(args.output_dir).expanduser()
     if args.output_mode == "csv":
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -989,10 +1108,16 @@ def run(args: argparse.Namespace) -> None:
         rubric = build_rubric_from_definition(definition, model_option)
         output_path = default_rubric_output_path(definition.rubric_id, output_dir, trace_label)
 
-        print(
-            f"\n🧪 Running rubric '{definition.rubric_id}' on {len(agent_runs)} agent runs "
-            f"with {model_option.provider}:{model_option.model_name} (batch_size={batch_size})..."
-        )
+        if max_batch_messages > 0:
+            print(
+                f"\n🧪 Running rubric '{definition.rubric_id}' on {len(agent_runs)} agent runs "
+                f"with {model_option.provider}:{model_option.model_name} (max_batch_messages={max_batch_messages})..."
+            )
+        else:
+            print(
+                f"\n🧪 Running rubric '{definition.rubric_id}' on {len(agent_runs)} agent runs "
+                f"with {model_option.provider}:{model_option.model_name} (batch_size={batch_size})..."
+            )
 
         try:
             grading_results = asyncio.run(
@@ -1000,6 +1125,9 @@ def run(args: argparse.Namespace) -> None:
                     agent_runs,
                     rubric,
                     batch_size=batch_size,
+                    max_batch_messages=max_batch_messages,
+                    inter_batch_delay=inter_batch_delay,
+                    retries=retries,
                     json_mode=use_json_mode,
                 ),
             )

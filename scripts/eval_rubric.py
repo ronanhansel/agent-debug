@@ -41,7 +41,10 @@ See PIPELINE_README.md for full documentation.
 from __future__ import annotations
 
 import argparse
+import re
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 # Add repo root to path
@@ -60,8 +63,10 @@ def main():
     parser.add_argument(
         "--trace-file",
         type=str,
+        action="append",
         required=True,
-        help="Path to trace JSON file to evaluate",
+        dest="trace_files",
+        help="Path to trace JSON file to evaluate (can be specified multiple times)",
     )
 
     # Rubric configuration
@@ -130,14 +135,53 @@ def main():
         default=4,
         help="Number of parallel rubric evaluations (default: 4)",
     )
+    parser.add_argument(
+        "--max-batch-messages",
+        type=int,
+        default=0,
+        help="Max total messages per batch (0=disabled). Dynamically adjusts batch size.",
+    )
+    parser.add_argument(
+        "--inter-batch-delay",
+        type=float,
+        default=0,
+        help="Seconds to wait between batches (default: 0).",
+    )
+    parser.add_argument(
+        "--retries",
+        type=int,
+        default=3,
+        help="Number of retries per batch on failure (default: 3).",
+    )
+    parser.add_argument(
+        "--sort-by-messages",
+        action="store_true",
+        help="Sort tasks from least to most messages before processing.",
+    )
+    parser.add_argument(
+        "--inbetween",
+        type=str,
+        help="Bash command to execute after each trace file (e.g., 'TMUX= ./deploy_llm.sh')",
+    )
+    parser.add_argument(
+        "--sleep",
+        type=str,
+        help="Sleep duration before and after inbetween command (e.g., '5s', '2m')",
+    )
 
     args = parser.parse_args()
 
-    # Resolve trace path
-    trace_path = Path(args.trace_file)
-    if not trace_path.is_absolute():
-        trace_path = REPO_ROOT / trace_path
-    args.trace_file = str(trace_path)
+    # Parse sleep duration
+    sleep_seconds = 0
+    if args.sleep:
+        match = re.match(r'^(\d+)(s|m)?$', args.sleep)
+        if match:
+            value = int(match.group(1))
+            unit = match.group(2) or 's'
+            sleep_seconds = value * 60 if unit == 'm' else value
+        else:
+            print(f"Invalid sleep format: {args.sleep}. Use e.g., '5s' or '2m'")
+            sys.exit(1)
 
     # Set trace_dir (required by CLI but not used when trace_file is specified)
     args.trace_dir = str(REPO_ROOT / "traces")
@@ -161,8 +205,32 @@ def main():
         output_dir = REPO_ROOT / output_dir
     args.output_dir = str(output_dir)
 
-    # Run the evaluator
-    rubric_cli.run(args)
+    # Process each trace file independently
+    for i, trace_file in enumerate(args.trace_files):
+        trace_path = Path(trace_file)
+        if not trace_path.is_absolute():
+            trace_path = REPO_ROOT / trace_path
+        args.trace_file = str(trace_path)
+
+        print(f"\n{'='*60}")
+        print(f"Processing: {trace_path.name}")
+        print(f"{'='*60}\n")
+
+        # Run the evaluator for this trace
+        rubric_cli.run(args)
+
+        # Execute inbetween command after each trace file
+        if args.inbetween:
+            if sleep_seconds:
+                print(f"Sleeping for {sleep_seconds}s before inbetween command...")
+                time.sleep(sleep_seconds)
+            print(f"\n{'='*60}")
+            print(f"Running inbetween command: {args.inbetween}")
+            print(f"{'='*60}\n")
+            subprocess.run(args.inbetween, shell=True, check=True)
+            if sleep_seconds:
+                print(f"Sleeping for {sleep_seconds}s after inbetween command...")
+                time.sleep(sleep_seconds)
 
 
 if __name__ == "__main__":
