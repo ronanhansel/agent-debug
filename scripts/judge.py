@@ -2,15 +2,13 @@
 """
 Judge script for aggregating rubric evaluations across multiple model runs.
 
-Reads rubric CSV outputs, groups by task_id, and uses an LLM to make a final
-verdict on whether each task satisfies the rubric based on all evaluations.
+Uses docent for LLM calls with caching and retry/backoff.
 
 Usage:
     python scripts/judge.py \
         --pattern "scicode_*" \
         --rubric-dir rubrics_output/scicode \
         --model openai:gpt-5.2 \
-        --output judge_output/scicode_verdict.csv \
         --parallel 5 \
         -y
 
@@ -27,18 +25,18 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import csv
 import json
 import os
 import re
 import sys
 import time
-import threading
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from fnmatch import fnmatch
 from pathlib import Path
+from typing import Any
 
 # Add repo root to path
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -49,6 +47,30 @@ try:
     dotenv.load_dotenv()
 except ImportError:
     pass
+
+# Set environment BEFORE importing docent
+os.environ.setdefault("ENV_RESOLUTION_STRATEGY", "os_environ")
+
+
+def _ensure_llm_cache_path() -> None:
+    """Docent expects LLM_CACHE_PATH; default to .llm_cache if not provided."""
+    if os.getenv("LLM_CACHE_PATH"):
+        return
+    default_cache = Path(".llm_cache")
+    default_cache.mkdir(parents=True, exist_ok=True)
+    os.environ["LLM_CACHE_PATH"] = str(default_cache.resolve())
+
+
+_ensure_llm_cache_path()
+
+# Docent imports (after env setup)
+try:
+    from docent_core._llm_util.prod_llms import LLMManager
+    from docent_core._llm_util.providers.preferences import ModelOption
+    DOCENT_AVAILABLE = True
+except ImportError as e:
+    DOCENT_AVAILABLE = False
+    print(f"Warning: docent not available ({e}), falling back to OpenAI client")
 
 try:
     from openai import OpenAI
@@ -73,7 +95,7 @@ class TaskEvaluation:
 class JudgeVerdict:
     """Final verdict from the judge for a task."""
     task_id: str
-    final_grade: float
+    final_grade: int  # Binary: 0 or 1
     satisfies_rubric: bool
     reasoning: str
     num_evaluations: int
@@ -210,7 +232,6 @@ def parse_judge_response(response: str) -> dict:
 
     # Try to extract JSON from the response
     try:
-        # First try direct parse
         parsed = json.loads(response)
     except json.JSONDecodeError:
         pass
@@ -234,7 +255,6 @@ def parse_judge_response(response: str) -> dict:
                 pass
 
     if not parsed:
-        # Return default if parsing fails
         return {
             "final_grade": 0,
             "satisfies_rubric": False,
@@ -252,7 +272,90 @@ def parse_judge_response(response: str) -> dict:
     }
 
 
-def judge_task(
+async def judge_tasks_with_docent(
+    task_ids: list[str],
+    evaluations: dict[str, list[TaskEvaluation]],
+    model_option: "ModelOption",
+    parallel: int = 5,
+    retries: int = 3,
+) -> list[JudgeVerdict]:
+    """Judge tasks using docent LLMManager with caching."""
+    from tqdm.auto import tqdm
+
+    # Build all prompts
+    prompts = []
+    task_id_order = []
+    for task_id in task_ids:
+        evals = evaluations[task_id]
+        prompt = build_judge_prompt(task_id, evals)
+        prompts.append([
+            {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ])
+        task_id_order.append(task_id)
+
+    # Create LLMManager with caching
+    llm_manager = LLMManager(
+        model_options=[model_option],
+        use_cache=True,
+    )
+
+    print(f"Calling {model_option.model_name} (temperature=0) with {parallel} concurrent requests...")
+
+    # Call LLM with parallelism
+    outputs = await llm_manager.get_completions(
+        inputs=prompts,
+        max_new_tokens=4096,
+        temperature=0.0,  # Deterministic
+        max_concurrency=parallel,
+        timeout=300.0,  # 5 minute timeout per request
+        response_format={"type": "json_object"},
+    )
+
+    # Process results
+    verdicts = []
+    for i, (task_id, output) in enumerate(zip(task_id_order, outputs)):
+        evals = evaluations[task_id]
+
+        if output.did_error or not output.completions:
+            error_msg = str(output.errors[0]) if output.errors else "Unknown error"
+            print(f"  ERROR: Task {task_id} failed: {error_msg}")
+            verdict = JudgeVerdict(
+                task_id=task_id,
+                final_grade=0,
+                satisfies_rubric=False,
+                reasoning=f"LLM call failed: {error_msg}",
+                num_evaluations=len(evals),
+                model_runs=[ev.model_run for ev in evals],
+            )
+        else:
+            content = output.completions[0].text or ""
+            parsed = parse_judge_response(content)
+
+            verdict = JudgeVerdict(
+                task_id=task_id,
+                final_grade=int(parsed.get("final_grade", 0)),
+                satisfies_rubric=bool(parsed.get("satisfies_rubric", False)),
+                reasoning=str(parsed.get("reasoning", "")),
+                num_evaluations=len(evals),
+                model_runs=[ev.model_run for ev in evals],
+            )
+
+        # Log result (full output, no truncation)
+        status = "IFE CONFIRMED" if verdict.satisfies_rubric else "NO IFE"
+        print(f"\n{'='*60}")
+        print(f"[{i+1}/{len(task_ids)}] Task {task_id}")
+        print(f"{'='*60}")
+        print(f"Grade: {verdict.final_grade} ({status})")
+        if verdict.reasoning:
+            print(f"Reasoning:\n{verdict.reasoning}")
+
+        verdicts.append(verdict)
+
+    return verdicts
+
+
+def judge_task_openai(
     client: OpenAI,
     task_id: str,
     evals: list[TaskEvaluation],
@@ -260,7 +363,7 @@ def judge_task(
     reasoning_effort: str | None = None,
     retries: int = 3,
 ) -> JudgeVerdict:
-    """Use LLM to judge a single task based on all its evaluations."""
+    """Fallback: Use OpenAI client directly (no caching)."""
     prompt = build_judge_prompt(task_id, evals)
 
     messages = [
@@ -268,14 +371,13 @@ def judge_task(
         {"role": "user", "content": prompt},
     ]
 
-    # Build request kwargs
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "model": model,
         "messages": messages,
+        "temperature": 0,  # Deterministic
         "response_format": {"type": "json_object"},
     }
 
-    # Add reasoning effort for reasoning models
     if reasoning_effort:
         kwargs["reasoning_effort"] = reasoning_effort
 
@@ -302,10 +404,9 @@ def judge_task(
                 print(f"    Retrying in {wait_time}s...")
                 time.sleep(wait_time)
 
-    # Return error verdict if all retries failed
     return JudgeVerdict(
         task_id=task_id,
-        final_grade=0.0,
+        final_grade=0,
         satisfies_rubric=False,
         reasoning=f"Failed after {retries} attempts: {last_error}",
         num_evaluations=len(evals),
@@ -330,7 +431,7 @@ def write_verdicts_csv(verdicts: list[JudgeVerdict], output_path: Path) -> None:
         for v in verdicts:
             writer.writerow([
                 v.task_id,
-                v.final_grade,  # Binary: 0 or 1
+                v.final_grade,
                 "1" if v.satisfies_rubric else "0",
                 v.num_evaluations,
                 ";".join(v.model_runs),
@@ -393,16 +494,10 @@ def main():
         help="Number of retries per task on failure (default: 3)",
     )
     parser.add_argument(
-        "--delay",
-        type=float,
-        default=0,
-        help="Delay in seconds between API calls (default: 0)",
-    )
-    parser.add_argument(
         "--parallel",
         type=int,
-        default=1,
-        help="Number of parallel tasks to judge at once (default: 1)",
+        default=5,
+        help="Number of parallel tasks to judge at once (default: 5)",
     )
     parser.add_argument(
         "--yes", "-y",
@@ -413,6 +508,11 @@ def main():
         "--dry-run",
         action="store_true",
         help="Preview prompts without making API calls",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable docent caching (use OpenAI client directly)",
     )
 
     args = parser.parse_args()
@@ -449,14 +549,9 @@ def main():
     # Parse model
     provider, model_name = parse_model_string(args.model)
     print(f"\nUsing model: {provider}:{model_name}")
+    print(f"Temperature: 0 (deterministic)")
     if args.reasoning_effort:
         print(f"Reasoning effort: {args.reasoning_effort}")
-
-    # Create OpenAI client (works with LiteLLM proxy via OPENAI_BASE_URL)
-    base_url = os.getenv("OPENAI_BASE_URL", "http://localhost:4000/v1")
-    api_key = os.getenv("OPENAI_API_KEY", "sk-1234")
-    client = OpenAI(base_url=base_url, api_key=api_key)
-    print(f"API base URL: {base_url}")
 
     # Confirm
     if not args.yes:
@@ -473,13 +568,13 @@ def main():
     else:
         output_path = REPO_ROOT / "judge_output" / f"{rubric_dir.name}_verdict.csv"
 
-    # Dry run mode - just preview prompts
+    # Dry run mode
     if args.dry_run:
         print("\n" + "="*60)
         print("DRY RUN MODE - Previewing prompts (no API calls)")
         print("="*60)
 
-        for i, task_id in enumerate(task_ids, 1):
+        for i, task_id in enumerate(task_ids[:3], 1):  # Show first 3 only
             evals = evaluations[task_id]
             prompt = build_judge_prompt(task_id, evals)
 
@@ -488,88 +583,65 @@ def main():
             print(f"Evaluations: {len(evals)} from models: {[e.model_run for e in evals]}")
             print("="*60)
             print("\n--- SYSTEM PROMPT ---")
-            print(JUDGE_SYSTEM_PROMPT[:500] + "..." if len(JUDGE_SYSTEM_PROMPT) > 500 else JUDGE_SYSTEM_PROMPT)
+            print(JUDGE_SYSTEM_PROMPT[:800] + "...")
             print("\n--- USER PROMPT ---")
-            print(prompt[:2000] + "..." if len(prompt) > 2000 else prompt)
-            print(f"\n[Prompt length: {len(prompt)} chars]")
+            print(prompt[:1500] + "..." if len(prompt) > 1500 else prompt)
 
         print(f"\n{'='*60}")
-        print(f"DRY RUN COMPLETE - Would judge {len(task_ids)} tasks")
+        print(f"DRY RUN COMPLETE - Would judge {len(task_ids)} tasks with {args.parallel} parallel workers")
         print("="*60)
         return
 
-    # Thread-safe counter and lock for progress
-    completed_count = [0]
-    print_lock = threading.Lock()
+    # Run judge
+    use_docent = DOCENT_AVAILABLE and not args.no_cache
 
-    def judge_task_wrapper(task_id: str, task_idx: int) -> JudgeVerdict:
-        """Wrapper for parallel execution with logging."""
-        evals = evaluations[task_id]
-
-        with print_lock:
-            print(f"[{task_idx}/{len(task_ids)}] Starting: task {task_id} ({len(evals)} evaluations)")
-
-        verdict = judge_task(
-            client=client,
-            task_id=task_id,
-            evals=evals,
-            model=model_name,
+    if use_docent:
+        print(f"\nUsing docent with caching (parallel={args.parallel})...")
+        model_option = ModelOption(
+            provider=provider,
+            model_name=model_name,
             reasoning_effort=args.reasoning_effort,
-            retries=args.retries,
         )
-
-        with print_lock:
-            completed_count[0] += 1
-            status = "IFE CONFIRMED" if verdict.satisfies_rubric else "NO IFE"
-            grade_display = int(verdict.final_grade) if verdict.final_grade in (0, 1, 0.0, 1.0) else verdict.final_grade
-            print(f"[{completed_count[0]}/{len(task_ids)}] Done: task {task_id} -> {status} (grade: {grade_display})")
-            if verdict.reasoning:
-                reasoning_preview = verdict.reasoning.replace("\n", " ")
-                print(f"    Reasoning: {reasoning_preview}...")
-
-        # Delay between tasks (per-thread)
-        if args.delay > 0:
-            time.sleep(args.delay)
-
-        return verdict
-
-    # Run judge with parallelism
-    print(f"\nJudging {len(task_ids)} tasks with {args.parallel} parallel workers...")
-    print("=" * 60)
-
-    verdicts = []
-    if args.parallel > 1:
-        with ThreadPoolExecutor(max_workers=args.parallel) as executor:
-            futures = {
-                executor.submit(judge_task_wrapper, task_id, i): task_id
-                for i, task_id in enumerate(task_ids, 1)
-            }
-            for future in as_completed(futures):
-                task_id = futures[future]
-                try:
-                    verdict = future.result()
-                    verdicts.append(verdict)
-                except Exception as e:
-                    with print_lock:
-                        print(f"ERROR: Task {task_id} failed: {e}")
-                    verdicts.append(JudgeVerdict(
-                        task_id=task_id,
-                        final_grade=0,
-                        satisfies_rubric=False,
-                        reasoning=f"Execution error: {e}",
-                        num_evaluations=len(evaluations[task_id]),
-                        model_runs=[ev.model_run for ev in evaluations[task_id]],
-                    ))
+        verdicts = asyncio.run(judge_tasks_with_docent(
+            task_ids=task_ids,
+            evaluations=evaluations,
+            model_option=model_option,
+            parallel=args.parallel,
+            retries=args.retries,
+        ))
     else:
-        # Sequential execution
+        print(f"\nUsing OpenAI client directly (no caching)...")
+        base_url = os.getenv("OPENAI_BASE_URL", "http://localhost:4000/v1")
+        api_key = os.getenv("OPENAI_API_KEY", "sk-1234")
+        client = OpenAI(base_url=base_url, api_key=api_key)
+        print(f"API base URL: {base_url}")
+
+        verdicts = []
         for i, task_id in enumerate(task_ids, 1):
-            verdict = judge_task_wrapper(task_id, i)
+            evals = evaluations[task_id]
+            print(f"\n[{i}/{len(task_ids)}] Judging task {task_id} ({len(evals)} evaluations)...")
+
+            verdict = judge_task_openai(
+                client=client,
+                task_id=task_id,
+                evals=evals,
+                model=model_name,
+                reasoning_effort=args.reasoning_effort,
+                retries=args.retries,
+            )
             verdicts.append(verdict)
+
+            # Log result (full output, no truncation)
+            status = "IFE CONFIRMED" if verdict.satisfies_rubric else "NO IFE"
+            print(f"{'='*60}")
+            print(f"Grade: {verdict.final_grade} ({status})")
+            if verdict.reasoning:
+                print(f"Reasoning:\n{verdict.reasoning}")
 
     # Write output
     write_verdicts_csv(verdicts, output_path)
 
-    # Sort verdicts by task_id for consistent output
+    # Sort verdicts by task_id
     verdicts.sort(key=lambda v: v.task_id)
 
     # Summary

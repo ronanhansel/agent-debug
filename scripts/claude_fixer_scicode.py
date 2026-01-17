@@ -186,14 +186,13 @@ def load_all_rubric_evaluations(rubric_dir: Path, task_id: str) -> List[Dict[str
     return evaluations
 
 
-def build_claude_prompt(
+def build_claude_prompt_single(
     task_id: str,
     evaluations: List[Dict[str, Any]],
     judge_verdict: Optional[Dict[str, Any]],
     conversations: Dict[str, str],
-    benchmark: str,
 ) -> str:
-    """Build the prompt for Claude Code CLI."""
+    """Build prompt section for a single task."""
 
     # Format evaluations section
     eval_sections = []
@@ -201,7 +200,7 @@ def build_claude_prompt(
         eval_sections.append(f"""
 ### Evaluation {i} (from {ev.get('model_run', 'unknown')})
 - **Grade**: {ev.get('grade', 'N/A')} (1.0 = IFE detected, 0.0 = no IFE)
-- **Explanation**: {ev.get('explanation', 'N/A')[:3000]}
+- **Explanation**: {ev.get('explanation', 'N/A')[:2000]}
 """)
     evaluations_text = "\n".join(eval_sections) if eval_sections else "No evaluations available."
 
@@ -212,157 +211,118 @@ def build_claude_prompt(
 **Final Grade**: {judge_verdict.get('final_grade', 'N/A')}
 **Satisfies Rubric (has IFE)**: {judge_verdict.get('satisfies_rubric', False)}
 **Judge Reasoning**: {judge_verdict.get('reasoning', 'N/A')}
-**Number of Evaluations Considered**: {judge_verdict.get('num_evaluations', 0)}
 """
 
-    # Format conversations section
+    # Format conversations (abbreviated)
     conv_sections = []
-    for model, conv in conversations.items():
-        conv_sections.append(f"### Model: {model}\n```\n{conv[:10000]}\n```")
-    conversations_text = "\n\n".join(conv_sections) if conv_sections else "No conversation logs available."
+    for model, conv in list(conversations.items())[:3]:  # Max 3 models per task
+        conv_sections.append(f"#### {model}\n```\n{conv[:5000]}\n```")
+    conversations_text = "\n".join(conv_sections) if conv_sections else "No logs."
 
-    prompt = f'''You are diagnosing and fixing an Intrinsic Formation Error (IFE) in a SciCode benchmark task.
+    return f"""
+---
+## TASK: {task_id}
+---
+
+### Rubric Evaluations
+{evaluations_text}
+
+### Judge Verdict
+{judge_text}
+
+### Model Conversation Logs (abbreviated)
+{conversations_text}
+"""
+
+
+def build_claude_prompt_batch(
+    tasks_data: List[Dict[str, Any]],
+    benchmark: str,
+) -> str:
+    """Build the prompt for Claude Code CLI with multiple tasks."""
+
+    task_ids = [t['task_id'] for t in tasks_data]
+    task_sections = []
+    for t in tasks_data:
+        section = build_claude_prompt_single(
+            task_id=t['task_id'],
+            evaluations=t['evaluations'],
+            judge_verdict=t['judge_verdict'],
+            conversations=t['conversations'],
+        )
+        task_sections.append(section)
+
+    tasks_text = "\n".join(task_sections)
+
+    prompt = f'''You are diagnosing and fixing Intrinsic Formation Errors (IFEs) in SciCode benchmark tasks.
+
+**YOU HAVE {len(task_ids)} TASKS TO PROCESS: {", ".join(task_ids)}**
+
+Process each task sequentially, creating fixes as needed. You only need to read the HAL harness files ONCE at the start.
 
 ## CRITICAL CONSTRAINTS - READ CAREFULLY
 
 1. **FIX INTRINSIC FORMATION ERRORS ONLY** - Do NOT make the scientific problem easier
 2. **PRESERVE SCIENTIFIC RIGOR** - The task should remain as challenging as intended
-3. **NO NERFING** - Do not:
-   - Simplify the scientific concepts or equations
-   - Give hints about the solution approach
-   - Reduce numerical precision requirements
-   - Pre-compute results for the agent
-   - Remove required scientific understanding
-4. **VALID FIXES INCLUDE**:
-   - Fixing contradictory dependency constraints (e.g., whitelist too restrictive)
-   - Clarifying ambiguous function signatures or expected outputs
-   - Fixing parsing/regex issues in the evaluation harness
-   - Correcting inconsistent instructions across problem steps
-   - Ensuring test cases match the stated requirements
-5. **INVALID FIXES** (DO NOT DO):
-   - Adding solution hints
-   - Simplifying the physics/math/chemistry
-   - Pre-importing modules the agent should determine
-   - Reducing the scope of scientific calculation
+3. **NO NERFING** - Do not simplify scientific concepts, give hints, reduce precision, or pre-compute results
+4. **VALID FIXES**: Dependency constraints, ambiguous signatures, parsing issues, inconsistent instructions
+5. **INVALID FIXES**: Solution hints, simplified physics/math, pre-importing modules
 
-## TASK INFORMATION
+## HAL HARNESS STRUCTURE - READ ONCE AT START
 
-**Task ID**: {task_id}
-**Benchmark**: {benchmark}
+**FIRST, read these files to understand the benchmark:**
+- `hal-harness/hal/benchmarks/scicode.py` - Main benchmark class
+- `hal-harness/hal/benchmarks/SciCode/` - Evaluation utilities
 
-## RUBRIC EVALUATIONS FROM MULTIPLE MODELS
+**How Evaluation Works:**
+1. Agent produces code for each sub-step (e.g., task 11 has 11.1, 11.2, etc.)
+2. HAL writes code to temp files, appending test cases from HuggingFace dataset
+3. Test cases compare agent output against stored targets
+4. Task passes if ALL sub-steps pass ALL test cases
 
-The following evaluations analyzed traces from different AI models attempting this task.
-Each evaluation grades whether an Intrinsic Formation Error exists (1.0 = definite IFE, 0.0 = no IFE).
-
-{evaluations_text}
-
-## JUDGE VERDICT (Aggregated Analysis)
-
-{judge_text}
-
-## MODEL CONVERSATION LOGS
-
-The following shows how different models attempted this task:
-
-{conversations_text}
-
-## YOUR MISSION
-
-1. **DIAGNOSE**: Analyze the evaluations and conversation logs to understand:
-   - What specific IFE exists (contradictory constraints, parsing issues, etc.)?
-   - Is there consensus across evaluations?
-   - Is this truly an IFE or a capability issue?
-
-2. **INVESTIGATE**:
-   - Look at the SciCode task definition if available
-   - Check the dependency constraints vs. required functionality
-   - Understand what the correct setup should be
-
-3. **DETERMINE FIX TYPE**:
-
-   **Type A - Dependency Fix** (dependency_override.json):
-   - Expand allowed dependencies to include required modules (e.g., scipy.constants)
-   - Fix conda/pip package specifications
-
-   **Type B - Instruction Fix** (instruction_override.json):
-   - Clarify ambiguous function signatures
-   - Fix inconsistent step requirements
-   - Correct misleading wording
-
-   **Type C - Evaluation Fix** (evaluation_override.json):
-   - Fix parsing regex patterns
-   - Adjust output format expectations
-   - Correct test case assertions
-
-   **Type D - No Fix Needed**:
-   - The failure is actually a capability issue
-   - The evaluations incorrectly identified an IFE
-
-4. **CREATE FIX** (if needed):
-   Create the fix in: fixes/{benchmark}/{task_id}/
-
-   Write the appropriate override file and a README.md explaining:
-   - What IFE was identified
-   - What fix was applied
-   - Why this fix is appropriate and doesn't nerf the task
-
-5. **DOCUMENT**:
-   - Explain your diagnosis
-   - Justify why this fix is appropriate
-   - Confirm the fix does NOT simplify the science
-
-## DIRECTORY STRUCTURE
-
-```
-fixes/
-└── {benchmark}/
-    └── {task_id}/
-        ├── dependency_override.json   # Additional allowed dependencies
-        ├── instruction_override.json  # Clarified instructions
-        ├── evaluation_override.json   # Evaluation harness fixes
-        └── README.md                  # Explanation of the fix
+**To inspect a specific task, run:**
+```python
+from datasets import load_dataset
+dataset = load_dataset("SciCode1/SciCode", split="test")
+task = [t for t in dataset if t['problem_id'] == 'TASK_ID'][0]
+print(task['sub_steps'])  # See sub-steps, test_cases, required_dependencies
 ```
 
-## OVERRIDE FILE FORMATS
+**Common IFE Sources:**
+- `required_dependencies` whitelist missing necessary modules (e.g., scipy.constants)
+- Test assertions too strict (floating point tolerance)
+- Ambiguous function signatures between steps
 
-### dependency_override.json
-```json
-{{
-  "additional_imports": ["scipy.constants", "scipy.special"],
-  "pip_packages": ["sympy>=1.12"],
-  "conda_packages": ["r-base"],
-  "rationale": "scipy.constants needed for physical constants but was not in allowed list"
-}}
-```
+**Additional Context (if needed):**
+- Trace files with full agent conversations are in `traces/` directory
+- Trace file names match the rubric CSV names (e.g., `scicode_hal_generalist_agent_gpt4120250414_*.json`)
+- You can read these for detailed agent interactions if the rubric explanations aren't sufficient
 
-### instruction_override.json
-```json
-{{
-  "clarifications": [
-    "The function should return values in SI units",
-    "Use numpy arrays for vector operations"
-  ],
-  "corrected_signature": "def calculate_energy(n: int, l: int) -> float:",
-  "rationale": "Original signature was inconsistent with the problem description"
-}}
-```
+## FIX OUTPUT FORMAT
 
-### evaluation_override.json
-```json
-{{
-  "code_fence_pattern": "```(?:python|py)?\\\\s*\\\\n(.*?)\\\\n```",
-  "output_tolerance": 1e-6,
-  "rationale": "Original regex too strict, rejected valid code blocks"
-}}
-```
+For each task that needs a fix, create: `fixes/{benchmark}/TASK_ID/`
+- `dependency_override.json` - Additional allowed dependencies
+- `instruction_override.json` - Clarified instructions
+- `evaluation_override.json` - Evaluation harness fixes
+- `README.md` - Explanation of the fix
 
-## BEGIN ANALYSIS
+If NO fix needed (capability issue, not IFE), create README.md explaining why.
 
-Start by analyzing the evaluations and conversation logs.
-Then diagnose the specific IFE and create an appropriate fix (or determine no fix is needed).
+## TASKS TO PROCESS
 
-Remember: Your goal is to make the evaluation FAIR, not EASY. The science must remain challenging.
+{tasks_text}
+
+## BEGIN
+
+1. First, read `hal-harness/hal/benchmarks/scicode.py` to understand evaluation
+2. For each task above:
+   a. Load task from HuggingFace to see `required_dependencies` and `test_cases`
+   b. Analyze the rubric evaluations and conversation logs
+   c. Determine if IFE exists or if it's a capability issue
+   d. Create appropriate fix (or document why no fix needed)
+3. Create fixes in `fixes/{benchmark}/TASK_ID/` directories
+
+Remember: Make evaluation FAIR, not EASY. Science must remain challenging.
 '''
 
     return prompt
@@ -503,6 +463,72 @@ def run_claude_code(
         return result.returncode
 
 
+def process_task_batch(
+    task_ids: List[str],
+    rubric_dir: Path,
+    judge_verdicts: Dict[str, Dict[str, Any]],
+    trace_files: List[Path],
+    benchmark: str,
+    batch_id: int = 0,
+    quiet: bool = False,
+) -> List[Tuple[str, bool, str]]:
+    """Process a batch of tasks in a single Claude session. Returns list of (task_id, success, message)."""
+
+    try:
+        # Gather data for all tasks in batch
+        tasks_data = []
+        for task_id in task_ids:
+            evaluations = load_all_rubric_evaluations(rubric_dir, task_id)
+            judge_verdict = judge_verdicts.get(task_id)
+            conversations = load_task_conversations(trace_files, task_id)
+
+            tasks_data.append({
+                'task_id': task_id,
+                'evaluations': evaluations,
+                'judge_verdict': judge_verdict,
+                'conversations': conversations,
+            })
+
+            # Create fix directory for each task
+            fix_dir = FIXES_DIR / benchmark / task_id
+            fix_dir.mkdir(parents=True, exist_ok=True)
+
+        # Build batch prompt
+        prompt = build_claude_prompt_batch(
+            tasks_data=tasks_data,
+            benchmark=benchmark,
+        )
+
+        # Save prompt to first task's directory
+        batch_fix_dir = FIXES_DIR / benchmark / task_ids[0]
+        (batch_fix_dir / "claude_prompt_batch.txt").write_text(prompt)
+
+        if not quiet:
+            log(f"Batch {batch_id}: Starting {len(task_ids)} tasks: {', '.join(task_ids)}")
+
+        # Run Claude Code for entire batch
+        exit_code = run_claude_code(
+            prompt=prompt,
+            task_id=f"batch_{batch_id}_{'-'.join(task_ids[:3])}",
+            working_dir=REPO_ROOT,
+            fix_dir=batch_fix_dir,
+            quiet=quiet,
+        )
+
+        if exit_code == 0:
+            if not quiet:
+                log(f"Batch {batch_id}: Completed all {len(task_ids)} tasks")
+            return [(tid, True, "Batch completed successfully") for tid in task_ids]
+        else:
+            if not quiet:
+                log(f"Batch {batch_id}: Failed with exit code {exit_code}")
+            return [(tid, False, f"Batch failed with code {exit_code}") for tid in task_ids]
+
+    except Exception as e:
+        log(f"Batch {batch_id}: Exception - {e}")
+        return [(tid, False, str(e)) for tid in task_ids]
+
+
 def process_single_task(
     task_id: str,
     rubric_dir: Path,
@@ -511,59 +537,17 @@ def process_single_task(
     benchmark: str,
     quiet: bool = False,
 ) -> Tuple[str, bool, str]:
-    """Process a single task. Returns (task_id, success, message)."""
-
-    try:
-        # Load all evaluations for this task
-        evaluations = load_all_rubric_evaluations(rubric_dir, task_id)
-
-        # Get judge verdict
-        judge_verdict = judge_verdicts.get(task_id)
-
-        # Load conversations
-        conversations = load_task_conversations(trace_files, task_id)
-
-        # Create fix directory
-        fix_dir = FIXES_DIR / benchmark / task_id
-        fix_dir.mkdir(parents=True, exist_ok=True)
-
-        # Build prompt
-        prompt = build_claude_prompt(
-            task_id=task_id,
-            evaluations=evaluations,
-            judge_verdict=judge_verdict,
-            conversations=conversations,
-            benchmark=benchmark,
-        )
-
-        # Save prompt for reference
-        (fix_dir / "claude_prompt.txt").write_text(prompt)
-
-        if not quiet:
-            log_progress(task_id, "started")
-
-        # Run Claude Code
-        exit_code = run_claude_code(
-            prompt=prompt,
-            task_id=task_id,
-            working_dir=REPO_ROOT,
-            fix_dir=fix_dir,
-            quiet=quiet,
-        )
-
-        if exit_code == 0:
-            if not quiet:
-                log_progress(task_id, "completed")
-            return (task_id, True, "Fix created successfully")
-        else:
-            if not quiet:
-                log_progress(task_id, "failed")
-            return (task_id, False, f"Claude Code exited with code {exit_code}")
-
-    except Exception as e:
-        if not quiet:
-            log_progress(task_id, "failed")
-        return (task_id, False, str(e))
+    """Process a single task (legacy, wraps batch function)."""
+    results = process_task_batch(
+        task_ids=[task_id],
+        rubric_dir=rubric_dir,
+        judge_verdicts=judge_verdicts,
+        trace_files=trace_files,
+        benchmark=benchmark,
+        batch_id=0,
+        quiet=quiet,
+    )
+    return results[0] if results else (task_id, False, "No result")
 
 
 def main():
@@ -586,8 +570,8 @@ def main():
         "--trace-files",
         type=str,
         nargs="+",
-        required=True,
-        help="Trace files to extract conversations from",
+        default=[],
+        help="Trace files to extract conversations from (optional, provides additional context)",
     )
     parser.add_argument(
         "--benchmark",
@@ -624,6 +608,12 @@ def main():
         help="Number of parallel Claude Code sessions (default: 1)",
     )
     parser.add_argument(
+        "--tasks-per-batch",
+        type=int,
+        default=5,
+        help="Number of tasks per Claude session (default: 5). Each Claude instance processes this many tasks sequentially.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Preview prompts without running Claude Code",
@@ -636,7 +626,11 @@ def main():
     if not rubric_dir.is_absolute():
         rubric_dir = REPO_ROOT / rubric_dir
 
-    trace_files = [Path(f) if Path(f).is_absolute() else REPO_ROOT / f for f in args.trace_files]
+    trace_files = [Path(f) if Path(f).is_absolute() else REPO_ROOT / f for f in args.trace_files] if args.trace_files else []
+    if trace_files:
+        log(f"Using {len(trace_files)} trace files for conversation context")
+    else:
+        log("No trace files provided - using rubric evaluations only")
 
     # Load judge verdicts if provided
     judge_verdicts = {}
@@ -678,72 +672,98 @@ def main():
 
     log(f"Processing {len(task_ids)} tasks")
 
+    # Create batches
+    tasks_per_batch = args.tasks_per_batch
+    batches = [task_ids[i:i + tasks_per_batch] for i in range(0, len(task_ids), tasks_per_batch)]
+    num_batches = len(batches)
+
+    log(f"Created {num_batches} batches of up to {tasks_per_batch} tasks each")
+
     if args.dry_run:
         print("\n" + "="*60)
-        print("DRY RUN MODE - Previewing prompts")
+        print("DRY RUN MODE - Previewing batch prompts")
         print("="*60)
 
-        for task_id in task_ids[:3]:  # Preview first 3
+        # Preview first batch
+        preview_batch = batches[0] if batches else []
+        tasks_data = []
+        for task_id in preview_batch:
             evaluations = load_all_rubric_evaluations(rubric_dir, task_id)
             judge_verdict = judge_verdicts.get(task_id)
             conversations = load_task_conversations(trace_files, task_id)
+            tasks_data.append({
+                'task_id': task_id,
+                'evaluations': evaluations,
+                'judge_verdict': judge_verdict,
+                'conversations': conversations,
+            })
 
-            prompt = build_claude_prompt(
-                task_id=task_id,
-                evaluations=evaluations,
-                judge_verdict=judge_verdict,
-                conversations=conversations,
-                benchmark=args.benchmark,
-            )
-
-            print(f"\n{'='*60}")
-            print(f"Task: {task_id}")
-            print(f"Evaluations: {len(evaluations)}")
-            print(f"Judge verdict: {'Yes' if judge_verdict else 'No'}")
-            print(f"Conversations: {len(conversations)} models")
-            print(f"Prompt length: {len(prompt)} chars")
-            print("="*60)
-            print(prompt[:3000] + "..." if len(prompt) > 3000 else prompt)
+        prompt = build_claude_prompt_batch(
+            tasks_data=tasks_data,
+            benchmark=args.benchmark,
+        )
 
         print(f"\n{'='*60}")
-        print(f"DRY RUN COMPLETE - Would process {len(task_ids)} tasks")
+        print(f"BATCH 1 of {num_batches}")
+        print(f"Tasks: {', '.join(preview_batch)}")
+        print(f"Prompt length: {len(prompt)} chars")
+        print("="*60)
+        print(prompt[:5000] + "..." if len(prompt) > 5000 else prompt)
+
+        print(f"\n{'='*60}")
+        print(f"DRY RUN SUMMARY")
+        print(f"  Total tasks: {len(task_ids)}")
+        print(f"  Batches: {num_batches}")
+        print(f"  Tasks per batch: {tasks_per_batch}")
+        print(f"  Parallel sessions: {args.parallel}")
+        print(f"  Total Claude sessions: {num_batches}")
+        print("="*60)
         return
 
-    # Process tasks
+    # Process batches
     global _total_count
     _total_count = len(task_ids)
 
     if args.parallel > 1:
-        log(f"Running {args.parallel} parallel sessions")
+        log(f"Running {args.parallel} parallel Claude sessions, {tasks_per_batch} tasks each")
         with ThreadPoolExecutor(max_workers=args.parallel) as executor:
             futures = {
                 executor.submit(
-                    process_single_task,
-                    task_id,
+                    process_task_batch,
+                    batch,
                     rubric_dir,
                     judge_verdicts,
                     trace_files,
                     args.benchmark,
+                    batch_idx,
                     quiet=True,
-                ): task_id
-                for task_id in task_ids
+                ): batch_idx
+                for batch_idx, batch in enumerate(batches)
             }
 
-            results = []
+            all_results = []
             for future in as_completed(futures):
-                results.append(future.result())
+                batch_results = future.result()
+                all_results.extend(batch_results)
 
         # Summary
-        successful = sum(1 for _, success, _ in results if success)
-        log(f"\nCompleted: {successful}/{len(results)} tasks successful")
+        successful = sum(1 for _, success, _ in all_results if success)
+        log(f"\nCompleted: {successful}/{len(all_results)} tasks successful")
     else:
-        for task_id in task_ids:
-            process_single_task(
-                task_id=task_id,
+        # Sequential batch processing
+        for batch_idx, batch in enumerate(batches):
+            log(f"\n{'='*60}")
+            log(f"BATCH {batch_idx + 1}/{num_batches}")
+            log(f"Tasks: {', '.join(batch)}")
+            log(f"{'='*60}")
+
+            process_task_batch(
+                task_ids=batch,
                 rubric_dir=rubric_dir,
                 judge_verdicts=judge_verdicts,
                 trace_files=trace_files,
                 benchmark=args.benchmark,
+                batch_id=batch_idx,
                 quiet=False,
             )
 
