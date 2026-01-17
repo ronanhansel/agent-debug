@@ -1,206 +1,74 @@
-RUBRIC: Intrinsic Formation Error Detection (SciCode Benchmark)
+RUBRIC: Intrinsic Input & Formation Deficiencies (SciCode Benchmark)
 
-PURPOSE:
-Identify failures caused by INTRINSIC FORMATION ERRORS in the benchmark itself—defects in problem construction, definitions, or testing apparatus that render tasks unsolvable regardless of agent capability. These are fundamental flaws where a perfect agent following instructions precisely would still fail.
+PURPOSE
 
-CRITICAL DISTINCTION:
-- Intrinsic Formation Error (score=1): The benchmark problem is MALFORMED, making success mechanically impossible
-- Agent Capability Issue (score=0): The agent COULD have succeeded with better reasoning, implementation, or approach
+You are evaluating whether a task failure stems from an INTRINSIC DEFICIENCY in the benchmark itself—a flaw in the problem description, dependencies, templates, or evaluation apparatus—rather than from the agent's reasoning or implementation errors. Your task is to read the full agent trace carefully and render an independent judgment. The categories below are guidance, not an exhaustive checklist. Trust your analysis of the evidence.
 
-================================================================================
-CATEGORY 1: SYNTACTIC & ENCODING CORRUPTION ("The Invisible Wall")
-================================================================================
+EVALUATION STRUCTURE
 
-This covers fatal errors caused by non-standard text encoding in problem descriptions or code templates.
+For each evaluation, you must answer TWO distinct questions:
 
-PRIMARY INDICATOR - Unicode Minus Trap:
-- Mathematical operators encoded as Unicode characters instead of ASCII
-- U+2212 (MINUS SIGN) or U+2013 (EN DASH) instead of U+002D (HYPHEN-MINUS)
-- Example: "1e−9" appears valid but triggers SyntaxError in Python
-- These characters are visually indistinguishable from standard operators
-- Agent cannot fix if embedded in "immutable" benchmark-provided context
+Question 1 - EXISTENCE: Does an intrinsic formation deficiency exist in this task? Examine the problem description, provided code templates, dependency specifications, and evaluation context. Is there a structural flaw that would impede ANY agent, regardless of capability?
 
-SCORE=1 IF:
-- Error traces show SyntaxError on what appears to be valid numeric literals
-- Agent correctly copies benchmark-provided code that contains hidden Unicode
-- Failure occurs in benchmark-provided templates, not agent-written code
+Question 2 - CAUSATION: Did the agent fail BECAUSE of this deficiency? Even if a deficiency exists, the agent may have failed for unrelated reasons—bugs in their logic, misreading instructions, or poor implementation choices. Establish whether the identified deficiency was the proximate cause of failure, or merely present but incidental.
 
-SCORE=0 IF:
-- Agent introduced the encoding error in their own code
-- Agent could have detected and fixed the encoding issue
-- Error is in agent-generated code, not benchmark-provided content
+Your final score reflects BOTH conditions: score=1 only when a deficiency EXISTS and CAUSED the failure. If the deficiency exists but the agent failed for other reasons, or if no deficiency exists, score=0.
 
-================================================================================
-CATEGORY 2: CONTEXTUAL DISCONTINUITY ("The Amnesia Flaw")
-================================================================================
+GUIDING PRINCIPLES
 
-Failures where the testing harness fails to persist necessary state between sub-tasks in multi-step problems.
+The following represent general directions for identifying formation deficiencies. These are not rigid categories but conceptual lenses through which to examine failures. Real cases may blend multiple issues or present novel patterns not described here.
 
-PRIMARY INDICATORS:
-- NameError for classes/functions that were correctly defined in previous steps
-- Example: Step 1 defines "class Block", Step 2 gets "NameError: 'Block' is not defined"
-- The agent's Step 1 code was CORRECT and would work in isolation
-- The harness fails to inject prior successful outputs into subsequent steps
+Methodological Constraint Conflicts
 
-SCORE=1 IF:
-- Agent correctly implements Step N, but Step N+1 cannot access Step N's definitions
-- Error is "X is not defined" where X was correctly defined in a prior step
-- The benchmark structure requires sequential step dependencies
-- Harness demonstrably fails to maintain execution context
+Consider whether the problem description mandates a specific algorithmic approach, scientific method, or computational technique that the execution environment cannot support. The deficiency lies in the contradiction between what the instructions demand and what the system permits. This might manifest as explicit instructions to use stochastic methods when randomness is blocked, requirements for specific optimization algorithms when those libraries are unavailable, or mandates for hardware-accelerated computation in CPU-only environments. The key question is whether the problem itself creates an impossible situation by requiring a path that leads to inevitable failure. When examining the trace, look for evidence that the agent attempted to follow instructions faithfully but encountered systematic barriers. However, be cautious: if alternative approaches exist that satisfy the problem's intent without violating constraints, this may be an agent capability issue rather than a formation deficiency.
 
-SCORE=0 IF:
-- Agent failed to correctly implement the prior step
-- Agent's code has actual bugs or errors
-- Agent could have worked around by re-defining needed components
-- The "missing" definition was never correctly created
+Deprecated or Obsolete Specifications
 
-================================================================================
-CATEGORY 3: MATHEMATICAL AMBIGUITY & UNDERSPECIFICATION
-================================================================================
+Examine whether the problem text, sub-steps, or expected interfaces reference function names, API signatures, or library behaviors that were valid in previous software versions but have since been removed or fundamentally altered. The deficiency occurs when the "correct" solution as defined by the prompt is technically impossible to execute in the current environment. This places agents in a double-bind: following the instructions precisely produces runtime errors, while deviating from instructions means not solving the stated problem. Look for AttributeError, ImportError, or similar exceptions that arise from the agent correctly implementing what the prompt requested. However, distinguish this from cases where the agent simply used outdated approaches on their own initiative—the deficiency must originate from the problem specification itself.
 
-Problems where prompts lack necessary mathematical constraints to reach the expected result.
+Template and Scaffolding Misalignment
 
-PRIMARY INDICATORS:
+Investigate whether code templates, starter files, or structural scaffolding provided by the benchmark inadvertently prevent correct solutions from being recognized. This includes entry point guards that are ignored by the evaluation harness, function signatures that don't match the grading system's expectations, or structural patterns that cause solution code to be invisible to automated testing. The deficiency is that the benchmark's own provided materials mislead agents about where and how to place their solutions. When analyzing traces, look for cases where the agent's logic appears correct but the evaluation system fails to execute or recognize it due to template-induced structural issues. Be careful to distinguish this from agents who misunderstand how to use provided templates correctly.
 
-A) "Guess the Bracket" Problem:
-- Root-finding required without specifying search interval [a, b]
-- Agent gets convergence errors or wrong roots
-- Multiple valid mathematical solutions exist, but only one is "correct"
-- Example: "Find root of f(x)" without bounds → brentq fails or finds wrong root
+Implicit Syntactic and Environmental Assumptions
 
-B) Tensor/Shape Ambiguity:
-- Vector/matrix operations without defined input/output shapes
-- Broadcasting errors due to unspecified dimensions
-- Example: "Compute dot product" without specifying if inputs are row or column vectors
+Consider whether the problem formulation assumes a computational context that differs from the actual execution environment, without making these constraints explicit. This might involve modern language features that the evaluation parser rejects, numerical precision requirements that don't match available libraries, or encoding assumptions that cause invisible syntax errors. The deficiency is the gap between implied and actual constraints—the problem suggests one reality while the environment enforces another. Look for SyntaxError or similar exceptions on code that would be valid in standard contexts. However, verify that these issues originate from benchmark-provided content rather than agent-introduced code, as agents may independently introduce syntax errors.
 
-C) Hidden Parameters:
-- Numerical methods require tolerances, iterations, or seeds not specified
-- "Correct" answer depends on arbitrary parameter choices by benchmark authors
+Logical Underspecification
 
-SCORE=1 IF:
-- Problem objectively lacks information needed to derive the expected answer
-- Multiple mathematically valid solutions exist but only one passes tests
-- Agent's solution is mathematically correct but fails due to hidden assumptions
-- No reasonable interpretation of the problem leads to the expected answer
+Assess whether the problem provides sufficient information to derive the expected answer. Scientific and mathematical problems often have multiple valid solutions, and deficiencies arise when the problem fails to constrain which solution is expected. This includes root-finding without specified intervals, optimization without defined convergence criteria, or transformations without specified conventions for orientation or ordering. The key indicator is when an agent produces a mathematically or scientifically valid result that the grading system rejects. However, apply this carefully: standard conventions, contextual clues, and reasonable inference often resolve apparent ambiguities. The deficiency must be genuine underspecification, not merely implicit specification that a capable agent could infer.
 
-SCORE=0 IF:
-- The necessary constraints ARE specified (even if implicitly)
-- Agent misread or ignored provided specifications
-- Standard conventions would resolve the ambiguity
-- Agent could have inferred constraints from context or examples
+State and Context Persistence
 
-================================================================================
-CATEGORY 4: ENVIRONMENTAL CONTRADICTION ("The Double Bind")
-================================================================================
+In multi-step problems, examine whether the evaluation harness correctly maintains state between sub-tasks. Deficiencies occur when correctly-implemented earlier steps are not properly injected into later steps, causing NameError or similar exceptions for definitions that were successfully created. The agent's earlier code must be demonstrably correct for this to constitute a formation deficiency—if earlier steps contained bugs, the failure cascade is an agent capability issue. Look for patterns where the trace shows successful step completion followed by mysterious absence of those results in subsequent steps.
 
-Direct conflicts between explicit task instructions and execution environment constraints.
-
-PRIMARY INDICATORS:
-- Instructions say "use library X" but sandbox blocks library X
-- Required operations are explicitly forbidden by the execution environment
-- Example: "import scipy.integrate to solve ODE" but scipy is not allowed
-- Agent fails if they disobey (wrong approach) AND fails if they obey (permission error)
-
-SCORE=1 IF:
-- Task explicitly instructs use of a blocked resource
-- No alternative approach can satisfy BOTH the instructions AND environment
-- The instruction-environment conflict is unresolvable
-
-SCORE=0 IF:
-- Alternative approaches exist that satisfy both constraints
-- The "blocked" resource has permitted alternatives
-- Agent could have found a workaround (different library, manual implementation)
-- The instruction is a suggestion, not a requirement
-
-================================================================================
 EVALUATION PROCESS
-================================================================================
 
-1. IDENTIFY the specific failure point in the transcript
-2. CLASSIFY which category (if any) the failure matches
-3. VERIFY the failure is in benchmark construction, NOT agent implementation
-4. CHECK if any agent could have succeeded with a different approach
-5. APPLY the scoring criteria for the specific category
+Read the complete agent trace with fresh eyes. Do not assume the categories above are exhaustive or that every failure fits neatly into one. Your analysis should:
 
-KEY QUESTION: "Is this a flaw in the PROBLEM or a flaw in the SOLUTION?"
-- Problem flaw (malformed benchmark) → score=1
-- Solution flaw (agent mistake) → score=0
+First, understand what the agent was trying to accomplish and how they approached the problem. Identify the specific point of failure and the immediate cause of that failure.
 
-================================================================================
-COMMON MISCLASSIFICATIONS TO AVOID
-================================================================================
+Second, examine whether the failure's root cause lies in the benchmark's construction. Is there evidence of contradiction, omission, or misalignment in the problem materials themselves? Would a perfect agent, executing flawlessly, still encounter this barrier?
 
-FALSE POSITIVES (incorrectly scoring 1):
-- Agent writes buggy code and blames the benchmark
-- Agent misreads clear instructions
-- Agent doesn't try obvious alternatives
-- Error messages are confusing but problem is solvable
+Third, even if you identify a potential deficiency, critically evaluate whether it actually caused this failure. The agent may have made independent errors that would have caused failure regardless. The deficiency must be the proximate cause, not merely a contributing factor or incidental observation.
 
-FALSE NEGATIVES (incorrectly scoring 0):
-- Unicode errors in benchmark-provided code snippets
-- Harness genuinely loses state between steps
-- Problem genuinely lacks required mathematical constraints
-- Instructions genuinely conflict with environment restrictions
+Fourth, consider the counterfactual: if this specific deficiency were corrected, would the agent have succeeded? If the agent would still have failed due to their own errors, the deficiency—while real—did not cause this particular failure.
 
-================================================================================
-EXAMPLES
-================================================================================
+SCORING
 
-Example 1 (score=1 - Syntactic Corruption):
-Benchmark provides: "tolerance = 1e−9"  (with Unicode minus U+2212)
-Agent copies exactly as provided
-Error: SyntaxError: invalid syntax
-Agent cannot fix benchmark-provided code → FORMATION ERROR → score=1
+Score=1 when BOTH conditions are met: an intrinsic formation deficiency EXISTS in the benchmark materials, AND that deficiency CAUSED the agent's failure. The agent, following instructions correctly, encountered a barrier that no amount of capability could overcome.
 
-Example 2 (score=0 - Agent Error):
-Agent writes: tolerance = 1e-9 (correct ASCII)
-Agent makes logic error in algorithm
-Test fails due to wrong result
-Agent's implementation error → CAPABILITY ISSUE → score=0
+Score=0 when EITHER condition fails: no formation deficiency exists (the problem is well-formed and solvable), OR a deficiency exists but the agent failed for independent reasons (bugs, misunderstandings, poor choices) that would have caused failure regardless.
 
-Example 3 (score=1 - Contextual Discontinuity):
-Step 1: Agent correctly defines "class Lattice" with all methods
-Step 2: Harness runs test, gets "NameError: 'Lattice' is not defined"
-Agent's code was correct, harness failed to persist → FORMATION ERROR → score=1
-
-Example 4 (score=0 - Agent's Prior Step Failed):
-Step 1: Agent's "class Lattice" has syntax error, never executed
-Step 2: "NameError: 'Lattice' is not defined"
-Agent's Step 1 was buggy → CAPABILITY ISSUE → score=0
-
-Example 5 (score=1 - Mathematical Underspecification):
-Problem: "Find the root of f(x) = x^3 - 2x + 1"
-Agent uses brentq with reasonable bracket, finds root at x ≈ 0.618
-Test expects root at x ≈ -1.618 (different valid root)
-No bracket specified in problem → FORMATION ERROR → score=1
-
-Example 6 (score=0 - Agent Ignored Constraints):
-Problem: "Find the positive root of f(x) = x^2 - 4"
-Agent finds x = -2
-Problem specified "positive" → CAPABILITY ISSUE → score=0
-
-Example 7 (score=1 - Environmental Contradiction):
-Instruction: "Use scipy.optimize.minimize to find the minimum"
-Agent: from scipy.optimize import minimize
-Error: "Import of scipy is not allowed in this environment"
-No alternative can satisfy explicit instruction → FORMATION ERROR → score=1
-
-Example 8 (score=0 - Alternative Exists):
-Instruction: "You may use scipy for optimization"
-Agent tries scipy, gets blocked
-Agent could use numpy or manual gradient descent instead
-Alternative approaches exist → CAPABILITY ISSUE → score=0
-
-================================================================================
 JSON RESPONSE REQUIREMENTS
-================================================================================
 
 Respond with ONLY a JSON object containing:
 - "score": 0 or 1
-- "category": One of ["syntactic_corruption", "contextual_discontinuity", "mathematical_ambiguity", "environmental_contradiction", "none"]
-- "explanation": Detailed explanation citing specific transcript evidence
-- "cross_model_reasoning": How cross-model evidence informed the decision
-- "formation_error_evidence": Specific evidence of benchmark malformation (if score=1)
-- "agent_alternative": What the agent could have done differently (if score=0)
+- "deficiency_exists": true or false (does a formation deficiency exist, regardless of causation?)
+- "deficiency_caused_failure": true or false (did that deficiency cause this specific failure?)
+- "deficiency_type": Brief label for the type of deficiency if one exists, or "none"
+- "existence_reasoning": Your analysis of whether and what deficiency exists in the benchmark
+- "causation_reasoning": Your analysis of whether the deficiency caused the failure, or what else caused it
+- "evidence": Specific quotes or references from the trace supporting your conclusion
 
-Do not include any text outside the JSON object. Escape newlines as \n within strings.
+Do not include any text outside the JSON object.

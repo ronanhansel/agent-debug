@@ -53,20 +53,15 @@ from rubric_evaluator import cli as rubric_cli
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Rubric evaluation using Docent (same as 'python main.py evaluate')"
+        description="Rubric evaluation using Docent. Input: trace file. Output: CSV with same name."
     )
 
     # Trace selection
     parser.add_argument(
         "--trace-file",
         type=str,
-        help="Path to a single trace JSON file. If omitted, uses newest in --trace-dir.",
-    )
-    parser.add_argument(
-        "--trace-dir",
-        type=str,
-        default="traces",
-        help="Directory to scan for trace JSON files (default: traces/)",
+        required=True,
+        help="Path to trace JSON file to evaluate",
     )
 
     # Rubric configuration
@@ -84,7 +79,7 @@ def main():
     parser.add_argument(
         "--rubric-model",
         type=str,
-        help="Override rubric model as provider:model (e.g., openai:gpt-4o, azure_openai:o3-mini)",
+        help="Model as provider:model (e.g., openai:gpt-4o, azure_openai:o3-mini)",
     )
     parser.add_argument(
         "--reasoning-effort",
@@ -122,7 +117,7 @@ def main():
     parser.add_argument(
         "--json-mode",
         action="store_true",
-        help="Request JSON-mode completions (OpenAI/Azure only)",
+        help="Force JSON-mode (auto-enabled for OpenAI/Azure)",
     )
     parser.add_argument(
         "--yes", "-y",
@@ -132,29 +127,29 @@ def main():
 
     args = parser.parse_args()
 
-    # Resolve paths relative to repo root
-    if args.trace_file:
-        trace_path = Path(args.trace_file)
-        if not trace_path.is_absolute():
-            trace_path = REPO_ROOT / trace_path
-        args.trace_file = str(trace_path)
+    # Resolve trace path
+    trace_path = Path(args.trace_file)
+    if not trace_path.is_absolute():
+        trace_path = REPO_ROOT / trace_path
+    args.trace_file = str(trace_path)
 
-    trace_dir = Path(args.trace_dir)
-    if not trace_dir.is_absolute():
-        trace_dir = REPO_ROOT / trace_dir
-    args.trace_dir = str(trace_dir)
+    # Set trace_dir (required by CLI but not used when trace_file is specified)
+    args.trace_dir = str(REPO_ROOT / "traces")
 
+    # Resolve rubric path
     if args.rubric:
         rubric_path = Path(args.rubric)
         if not rubric_path.is_absolute():
             rubric_path = REPO_ROOT / rubric_path
         args.rubric = str(rubric_path)
 
+    # Resolve rubrics directory
     rubrics_dir = Path(args.rubrics_dir)
     if not rubrics_dir.is_absolute():
         rubrics_dir = REPO_ROOT / rubrics_dir
     args.rubrics_dir = str(rubrics_dir)
 
+    # Resolve output directory
     output_dir = Path(args.output_dir)
     if not output_dir.is_absolute():
         output_dir = REPO_ROOT / output_dir

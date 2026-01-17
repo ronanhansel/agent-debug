@@ -92,8 +92,7 @@ def parse_args() -> argparse.Namespace:
         "--json-mode",
         action="store_true",
         help=(
-            "Request JSON-mode completions (response_format=json_object). Only supported for OpenAI/Azure deployments "
-            "that enable structured output."
+            "Force JSON-mode completions. Auto-enabled for OpenAI/Azure providers."
         ),
     )
     parser.add_argument(
@@ -927,9 +926,15 @@ def run(args: argparse.Namespace) -> None:
         print("   Set the missing environment variables (see docs.transluce.org self-hosting env vars).")
         return
 
-    if args.json_mode and model_option.provider not in {"openai", "azure_openai"}:
-        print("❌ JSON mode is only supported for OpenAI or Azure OpenAI providers.")
-        return
+    # Auto-enable JSON mode for supported providers (OpenAI/Azure)
+    use_json_mode = args.json_mode
+    if model_option.provider in {"openai", "azure_openai"}:
+        if not use_json_mode:
+            print("📋 Auto-enabling JSON mode for structured output (OpenAI/Azure).")
+        use_json_mode = True
+    elif args.json_mode:
+        print("⚠️  JSON mode requested but not supported for this provider. Using prompt-based JSON.")
+        use_json_mode = False
 
     # Load rubric(s) - either single file or directory
     if hasattr(args, 'rubric') and args.rubric:
@@ -975,7 +980,7 @@ def run(args: argparse.Namespace) -> None:
                     agent_runs,
                     rubric,
                     batch_size=batch_size,
-                    json_mode=args.json_mode,
+                    json_mode=use_json_mode,
                 ),
             )
         except Exception as exc:  # pragma: no cover - depends on provider availability
