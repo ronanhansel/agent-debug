@@ -5,7 +5,7 @@ Apply SciCode fix packages and re-run HAL evaluations.
 This script:
 1. Loads fixes from fixes/scicode/<task_id>/
 2. Creates a modified dataset with instruction clarifications injected
-3. Runs HAL evaluation for fixed tasks only
+3. Runs HAL evaluation for fixed tasks only (filtered by model failures)
 4. Outputs traces with a configurable prefix
 
 Usage:
@@ -17,7 +17,19 @@ Usage:
         --task-id 11 --task-id 12 \
         --dry-run
 
-    # Actually run fixes
+    # Run fixes for all failed tasks that have fixes (recommended)
+    python scripts/run_scicode_fixes.py \
+        --prefix iter1_ \
+        --rubric-csv rubrics_output/scicode/scicode_combined.csv \
+        --docker
+
+    # Force a specific model for all tasks
+    python scripts/run_scicode_fixes.py \
+        --prefix iter1_ \
+        --model gpt-4o-2024-11-20 \
+        --docker
+
+    # Actually run fixes (legacy mode - all fixes, default model)
     python scripts/run_scicode_fixes.py \
         --agent-dir hal-harness/agents/scicode_tool_calling_agent \
         --agent-args agent_args.json \
@@ -28,26 +40,172 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXES_DIR = REPO_ROOT / "fixes"
 TRACES_DIR = REPO_ROOT / "traces"
 HAL_HARNESS = REPO_ROOT / "hal-harness"
+DEFAULT_MODEL_CONFIG = REPO_ROOT / "model_to_baseline_scicode.json"
 
 
 def log(msg: str, prefix: str = "main") -> None:
     ts = datetime.now().strftime("%H:%M:%S")
     print(f"[{ts}] [{prefix}] {msg}", flush=True)
+
+
+def _slugify(value: str, fallback: str) -> str:
+    """Keep readable identifiers for run_ids / filenames."""
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_")
+    return slug or fallback
+
+
+def load_model_config(path: Path) -> Dict[str, Dict[str, Any]]:
+    """Load model_to_baseline_scicode.json and return a dict mapping model_id to config.
+
+    The scicode config format has a 'models' array, unlike corebench which uses a flat dict.
+    """
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+
+    # Handle scicode format: {"models": [...], "benchmark": "scicode", ...}
+    if "models" in data and isinstance(data["models"], list):
+        result = {}
+        for model_entry in data["models"]:
+            model_id = model_entry.get("model_id")
+            if model_id:
+                result[model_id] = model_entry
+                # Also index by name for convenience
+                name = model_entry.get("name", "")
+                if name and name != model_id:
+                    result[name] = model_entry
+        return result
+
+    # Fallback: assume flat dict format like corebench
+    if isinstance(data, dict):
+        return data
+
+    return {}
+
+
+def load_rubric_task_models(csv_path: Path) -> List[Tuple[str, str]]:
+    """Load rubric CSV and return list of (task_id, model_id) pairs for failed tasks.
+
+    CSV format: task_id,criteria,grade,correct,explanation,model_run
+    We extract failed tasks (correct=0) and parse model_id from model_run column.
+    """
+    task_model_pairs: List[Tuple[str, str]] = []
+    seen: Set[Tuple[str, str]] = set()
+
+    if not csv_path.exists():
+        return task_model_pairs
+
+    with csv_path.open("r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            task_id = row.get("task_id", "").strip()
+            correct = row.get("correct", "").strip()
+            model_run = row.get("model_run", "").strip()
+
+            # Only include failed tasks (correct=0)
+            if task_id and correct == "0" and model_run:
+                # Extract model_id from model_run
+                # Format examples:
+                # - scicode_hal_generalist_agent_gpt4120250414_1745597325_UPLOAD
+                # - scicode_scicode_tool_calling_agent_claudesonnet45_high_1759429729_UPLOAD
+                model_id = _extract_model_from_run_name(model_run)
+                if model_id and (task_id, model_id) not in seen:
+                    task_model_pairs.append((task_id, model_id))
+                    seen.add((task_id, model_id))
+
+    return task_model_pairs
+
+
+def _extract_model_from_run_name(model_run: str) -> Optional[str]:
+    """Extract a model identifier from the model_run column.
+
+    Examples:
+    - scicode_hal_generalist_agent_gpt4120250414_... -> gpt-4.1-2025-04-14
+    - scicode_scicode_tool_calling_agent_claudesonnet45_high_... -> claude-sonnet-4-20250514
+    - scicode_hal_generalist_agent_o4mini20250416_low_... -> o4-mini-2025-04-16
+    """
+    # Known model patterns and their mappings
+    patterns = {
+        r"gpt4o[\-_]?2024[\-_]?11[\-_]?20": "gpt-4o-2024-11-20",
+        r"gpt[\-_]?4[\-_]?1[\-_]?2025[\-_]?04[\-_]?14|gpt4120250414": "gpt-4.1-2025-04-14",
+        r"o3[\-_]?mini[\-_]?2025[\-_]?01[\-_]?31|o3mini20250131": "o3-mini-2025-01-31",
+        r"o4[\-_]?mini[\-_]?2025[\-_]?04[\-_]?16|o4mini20250416": "o4-mini-2025-04-16",
+        r"claude[\-_]?sonnet[\-_]?4[\-_]?5|claudesonnet45": "claude-sonnet-4-20250514",
+        r"claude[\-_]?sonnet[\-_]?4[\-_]?20250514|claudesonnet420250514": "claude-sonnet-4-20250514",
+        r"claude[\-_]?3[\-_]?7[\-_]?sonnet|claude37sonnet": "claude-3-7-sonnet-20250219",
+        r"claude[\-_]?opus[\-_]?4[\-_]?1|claudeopus41": "claude-opus-4-1-20250514",
+        r"deepseek[\-_]?v3|DeepSeekV3": "deepseek-ai/DeepSeek-V3",
+    }
+
+    model_run_lower = model_run.lower()
+    for pattern, model_id in patterns.items():
+        if re.search(pattern, model_run_lower, re.IGNORECASE):
+            return model_id
+
+    return None
+
+
+def get_agent_args_for_model(
+    model_key: str,
+    model_config: Dict[str, Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Get the agent_args for a specific model.
+
+    Args:
+        model_key: The model name/key to look up
+        model_config: The model config dict
+
+    Returns:
+        Agent args dict with model_name, reasoning_effort, etc.
+        Returns None if model not found in config.
+    """
+    if not model_key:
+        return None
+
+    # Direct lookup
+    model_entry = model_config.get(model_key)
+
+    # Try matching by model_id
+    if not model_entry:
+        for key, entry in model_config.items():
+            if entry.get("model_id") == model_key:
+                model_entry = entry
+                break
+
+    if not model_entry:
+        return None
+
+    # Build agent_args from model config
+    model_id = model_entry.get("model_id")
+    if not model_id:
+        return None
+
+    agent_args: Dict[str, Any] = {
+        "model_name": model_id,
+    }
+    if "reasoning_effort" in model_entry:
+        agent_args["reasoning_effort"] = model_entry["reasoning_effort"]
+    if "max_steps" in model_entry:
+        agent_args["max_steps"] = model_entry["max_steps"]
+
+    return agent_args
 
 
 def load_fix_package(task_id: str, fixes_root: Path) -> Dict[str, Any]:
@@ -175,10 +333,19 @@ def run_hal_eval(
     dataset_path: Path,
     output_prefix: str,
     benchmark: str = "scicode",
+    docker: bool = False,
+    task_id: Optional[str] = None,
 ) -> Tuple[bool, str, Optional[Path]]:
     """Run HAL evaluation with a custom dataset."""
 
-    run_id = f"{output_prefix}_{int(time.time())}"
+    # Build run_id with model info for better traceability
+    model_name = str(agent_args.get("model_name", "model"))
+    model_slug = _slugify(model_name.replace("/", "_"), "model")
+    effort = str(agent_args.get("reasoning_effort") or "").strip().lower()
+    effort_part = f"_{_slugify(effort, '')}" if effort else ""
+    task_part = f"_{task_id}" if task_id else ""
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    run_id = f"{output_prefix}{model_slug}{effort_part}{task_part}_{benchmark}_{timestamp}"
 
     cmd = [
         sys.executable, "-m", "hal.cli",
@@ -189,6 +356,9 @@ def run_hal_eval(
         "--run_id", run_id,
         "--max_concurrent", "1",
     ]
+
+    if docker:
+        cmd.append("--docker")
 
     for key, value in agent_args.items():
         if isinstance(value, (dict, list)):
@@ -267,6 +437,10 @@ def main():
         help="Prefix for output traces (default: fixed).",
     )
     parser.add_argument(
+        "--prefix",
+        help="Prefix for run IDs and output files (e.g., 'iter1_'). Takes precedence over --output-prefix.",
+    )
+    parser.add_argument(
         "--task-id",
         dest="task_ids",
         action="append",
@@ -290,6 +464,24 @@ def main():
     parser.add_argument(
         "--show-fix",
         help="Show details of a specific fix and exit.",
+    )
+    parser.add_argument(
+        "--docker",
+        action="store_true",
+        help="Run HAL evaluation with --docker flag.",
+    )
+    parser.add_argument(
+        "--rubric-csv",
+        help="Path to rubric CSV to determine which model failed for each task.",
+    )
+    parser.add_argument(
+        "--model-config",
+        default=str(DEFAULT_MODEL_CONFIG),
+        help="Path to model_to_baseline_scicode.json mapping model names to configs.",
+    )
+    parser.add_argument(
+        "--model",
+        help="Force a specific model for all tasks (overrides rubric CSV). Use model_id from model config.",
     )
 
     args = parser.parse_args()
