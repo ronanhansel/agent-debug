@@ -71,13 +71,19 @@ The primary rubric evaluation uses **Docent** for:
 ```bash
 # Evaluate with a specific rubric
 python scripts/eval_rubric.py \
-    --trace-file traces/scicode_hal_generalist_agent_gpt4120250414_1745597325_UPLOAD.json \
+    --trace-file traces/scicode_hal_generalist_agent_o4mini20250416_low_1745608137_UPLOAD.json \
+    --trace-file traces/scicode_scicode_tool_calling_agent_claudeopus41_1755801688_UPLOAD.json \
+    --trace-file traces/scicode_scicode-tool_calling_agent_claudeopus4120250514_1754678715_UPLOAD.json \
+    --trace-file traces/scicode_scicode_tool_calling_agent_claude37sonnet20250219_high_1753770104_UPLOAD.json \
+    --trace-file traces/scicode_scicode_tool_calling_agent_claudesonnet45_high_1759429729_UPLOAD.json \
+    --trace-file traces/scicode_scicode_tool_calling_agent_deepseekaiDeepSeekV3_1745349011_UPLOAD.json \
+    --trace-file traces/scicode_hal_generalist_agent_claude37sonnet20250219_high_1748947217_UPLOAD.json \
     --rubric rubric_templates/scicode.txt \
-    --rubric-model openai:gpt-4o \
-    --output-mode stdout \
-    --max-tasks 5 \
+    --rubric-model openai:gpt-5.2 \
     -y
 ```
+
+`--parallel`
 
 ### Batch Evaluation
 
