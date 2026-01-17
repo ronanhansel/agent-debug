@@ -133,8 +133,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--parallel",
         type=int,
-        default=5,
-        help="Number of parallel rubric evaluations (default: 5).",
+        default=4,
+        help="Number of parallel rubric evaluations (default: 4).",
     )
     return parser.parse_args()
 
