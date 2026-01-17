@@ -76,28 +76,40 @@ class JudgeVerdict:
     model_runs: list[str]
 
 
-JUDGE_SYSTEM_PROMPT = """You are an expert judge analyzing rubric evaluations from multiple AI model runs.
+JUDGE_SYSTEM_PROMPT = """You are an expert judge analyzing rubric evaluations from multiple AI agent runs on scientific coding benchmarks.
 
-Your task is to determine whether a specific task satisfies the rubric criteria based on evaluations from different models.
+Your task is to determine whether a specific task has "Intrinsic Formation Errors" (IFEs) based on evaluations from different model runs.
 
-The rubric evaluates "formational errors" - issues with the evaluation setup, environment, or infrastructure that prevent fair assessment of an agent's capabilities. These are NOT about the agent's coding ability, but about external barriers.
+## What are Intrinsic Formation Errors?
+IFEs are defects in the benchmark/evaluation setup itself - NOT failures in agent reasoning or coding ability. Examples include:
+- Contradictory or impossible task requirements (e.g., dependency restrictions that conflict with required functionality)
+- Parsing/regex issues in the evaluation harness that reject valid solutions
+- Ambiguous or inconsistent instructions across task steps
+- Missing dependencies, broken test infrastructure, or environment issues
+- Evaluation criteria that don't match the stated task requirements
 
+## What are NOT Intrinsic Formation Errors?
+- Agent making coding mistakes or logic errors
+- Agent misunderstanding a clear task requirement
+- Agent producing incorrect numerical results
+- Agent failing to follow clear formatting instructions that were explicitly stated
+
+## Your Task
 For each task, you will see evaluations from multiple model runs. Each evaluation includes:
-- The grade (0-1 scale, where higher means more formational errors detected)
-- Whether it was marked correct
-- The explanation of what issues were found
+- The grade (0-1 scale, where 1.0 = clear IFE detected, 0.0 = no IFE)
+- Whether the task was marked correct/failed
+- The explanation analyzing the trace for formation deficiencies
 
-Your job is to:
-1. Analyze all evaluations for consistency and validity
-2. Consider the explanations and reasoning from each evaluation
-3. Determine a final verdict on whether formational errors exist for this task
-4. Provide your reasoning
+Analyze all evaluations and determine:
+1. Do the evaluations consistently identify the same formation issue?
+2. Is the identified issue truly a benchmark defect (IFE) or an agent capability failure?
+3. Would fixing the benchmark (not the agent) resolve this failure mode?
 
 Respond in JSON format:
 {
-    "final_grade": <float 0-1>,
-    "satisfies_rubric": <boolean - true if formational errors exist>,
-    "reasoning": "<your detailed reasoning>"
+    "final_grade": <float 0-1, where 1.0 = definite IFE, 0.0 = no IFE>,
+    "satisfies_rubric": <boolean - true if IFE exists and benchmark should be fixed>,
+    "reasoning": "<your analysis of the evaluations and final determination>"
 }
 """
 
@@ -344,6 +356,11 @@ def main():
         action="store_true",
         help="Skip confirmation prompt",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview prompts without making API calls",
+    )
 
     args = parser.parse_args()
 
@@ -402,6 +419,31 @@ def main():
             output_path = REPO_ROOT / output_path
     else:
         output_path = REPO_ROOT / "judge_output" / f"{rubric_dir.name}_verdict.csv"
+
+    # Dry run mode - just preview prompts
+    if args.dry_run:
+        print("\n" + "="*60)
+        print("DRY RUN MODE - Previewing prompts (no API calls)")
+        print("="*60)
+
+        for i, task_id in enumerate(task_ids, 1):
+            evals = evaluations[task_id]
+            prompt = build_judge_prompt(task_id, evals)
+
+            print(f"\n{'='*60}")
+            print(f"[{i}/{len(task_ids)}] Task: {task_id}")
+            print(f"Evaluations: {len(evals)} from models: {[e.model_run for e in evals]}")
+            print("="*60)
+            print("\n--- SYSTEM PROMPT ---")
+            print(JUDGE_SYSTEM_PROMPT[:500] + "..." if len(JUDGE_SYSTEM_PROMPT) > 500 else JUDGE_SYSTEM_PROMPT)
+            print("\n--- USER PROMPT ---")
+            print(prompt[:2000] + "..." if len(prompt) > 2000 else prompt)
+            print(f"\n[Prompt length: {len(prompt)} chars]")
+
+        print(f"\n{'='*60}")
+        print(f"DRY RUN COMPLETE - Would judge {len(task_ids)} tasks")
+        print("="*60)
+        return
 
     # Run judge
     verdicts = []

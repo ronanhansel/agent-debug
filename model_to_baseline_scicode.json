@@ -1,0 +1,35 @@
+{
+  "models": [
+    {
+      "name": "Claude Sonnet 4 (claude-sonnet-4-20250514)",
+      "model_id": "claude-sonnet-4-20250514",
+      "provider": "anthropic"
+    },
+    {
+      "name": "GPT-4o (gpt-4o-2024-11-20)",
+      "model_id": "gpt-4o-2024-11-20",
+      "provider": "openai"
+    },
+    {
+      "name": "GPT-4.1 (gpt-4.1-2025-04-14)",
+      "model_id": "gpt-4.1-2025-04-14",
+      "provider": "openai"
+    },
+    {
+      "name": "o3-mini (o3-mini-2025-01-31)",
+      "model_id": "o3-mini-2025-01-31",
+      "provider": "openai",
+      "reasoning_effort": "medium"
+    },
+    {
+      "name": "o4-mini (o4-mini-2025-04-16)",
+      "model_id": "o4-mini-2025-04-16",
+      "provider": "openai",
+      "reasoning_effort": "medium"
+    }
+  ],
+  "benchmark": "scicode",
+  "agent_dir": "hal-harness/agents/scicode_tool_calling_agent",
+  "max_concurrent": 1,
+  "output_dir": "results/scicode"
+}
