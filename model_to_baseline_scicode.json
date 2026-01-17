@@ -25,12 +25,5 @@
     "baseline_trace": "scicode_scicode_tool_calling_agent_o4mini20250416_low_1745286980_UPLOAD.json",
     "reasoning_effort": "low",
     "max_steps": 5
-  },
-  "openai/gpt-5-2025-08-07": {
-    "model_id": "openai/gpt-5_2025-08-07",
-    "short_name": "gpt-5-08-07",
-    "baseline_trace": "scicode_scicode_tool_calling_agent_gpt5_1754600998_UPLOAD.json",
-    "reasoning_effort": "low",
-    "max_steps": 5
   }
 }

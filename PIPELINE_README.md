@@ -221,13 +221,11 @@ Respond with valid JSON:
 ```bash
 # 1. Evaluate failed tasks with SciCode rubric
 python scripts/eval_rubric.py \
-    --trace-file traces/scicode_hal_generalist_agent_o4mini20250416_low_1745608137_UPLOAD.json \
-    --trace-file traces/scicode_scicode_tool_calling_agent_claudeopus41_1755801688_UPLOAD.json \
-    --trace-file traces/scicode_scicode-tool_calling_agent_claudeopus4120250514_1754678715_UPLOAD.json \
-    --trace-file traces/scicode_scicode_tool_calling_agent_claude37sonnet20250219_high_1753770104_UPLOAD.json \
-    --trace-file traces/scicode_scicode_tool_calling_agent_claudesonnet45_high_1759429729_UPLOAD.json \
-    --trace-file traces/scicode_scicode_tool_calling_agent_deepseekaiDeepSeekV3_1745349011_UPLOAD.json \
-    --trace-file traces/scicode_hal_generalist_agent_claude37sonnet20250219_high_1748947217_UPLOAD.json \
+    --trace-file traces/scicode_potato_openai_gpt-4_1.json \
+    --trace-file traces/scicode_potato_openai_gpt-5.json \
+    --trace-file traces/scicode_potato_openai_o3_2025.json \
+    --trace-file traces/scicode_potato_openai_o4-mini_2025-04-16_high.json \
+    --trace-file traces/scicode_potato_openai_o4-mini_2025-04-16_low.json \
     --rubric rubric_templates/scicode.txt \
     --rubric-model openai:gpt-5.2 \
     --inbetween "TMUX= ./deploy_llm.sh" \
@@ -239,7 +237,7 @@ python scripts/eval_rubric.py \
     -y
 
 python scripts/judge.py \
-    --pattern "scicode_*" \
+    --pattern "scicode_potato_*" \
     --rubric-dir rubrics_output/scicode \
     --model openai:gpt-5.2 \
     --parallel 5 \
@@ -333,7 +331,18 @@ unset OPENAI_BASE_URL
 Run Weave extraction first:
 
 ```bash
-python scripts/pipeline.py extract --prefix <prefix> --project hal-agent-debug
+python scripts/extract_weave_traces.py \
+  --project ronanhansel-hanoi-university-of-science-and-technology/scicode_potato_scicode \
+  --prefix scicode_potato_openai_gpt-4_1 \
+  --prefix scicode_potato_openai_gpt-5 \
+  --prefix scicode_potato_openai_o3_2025 \
+  --prefix scicode_potato_openai_o4-mini_2025-04-16_high \
+  --prefix scicode_potato_openai_o4-mini_2025-04-16_low \
+  --merge-input traces/scicode_potato_openai_gpt_4.1_2025_04_14_MERGED_scicode_20260117_142658_UPLOAD.json \
+  --merge-input traces/scicode_potato_openai_gpt_5_MERGED_scicode_20260117_142658_UPLOAD.json \
+  --merge-input traces/scicode_potato_openai_o3_2025_04_16_MERGED_scicode_20260117_142658_UPLOAD.json \
+  --merge-input traces/scicode_potato_openai_o4_mini_2025_04_16_high_MERGED_scicode_20260117_142658_UPLOAD.json \
+  --merge-input traces/scicode_potato_openai_o4_mini_2025_04_16_low_MERGED_scicode_20260117_142658_UPLOAD.json
 ```
 
 ## Key Files
@@ -391,7 +400,7 @@ python scripts/run_scicode_fixes.py \
 
 # Pipeline running
 python scripts/run_scicode_fixes.py\
-    --prefix scicode_lime_ \
+    --prefix scicode_potato_ \
     --parallel 20 \
     --docker
 ```
