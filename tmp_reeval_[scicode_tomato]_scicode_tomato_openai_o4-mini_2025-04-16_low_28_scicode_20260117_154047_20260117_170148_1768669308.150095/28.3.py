@@ -1,0 +1,125 @@
+import numpy as np
+from scipy.integrate import simpson
+
+def propagate_gaussian_beam(E0, x, y, z, wavelength):
+    k = 2 * np.pi / wavelength
+    dx = x[1] - x[0]
+    dy = y[1] - y[0]
+    Nx, Ny = len(x), len(y)
+    fx = np.fft.fftfreq(Nx, dx)
+    fy = np.fft.fftfreq(Ny, dy)
+    FX, FY = np.meshgrid(fx, fy, indexing='ij')
+    H = np.exp(1j * k * z * np.sqrt(1 - (wavelength * FX)**2 - (wavelength * FY)**2))
+    E0_fft = np.fft.fft2(E0)
+    E_fft = E0_fft * H
+    return np.fft.ifft2(E_fft)
+def gaussian_beam_through_lens(wavelength, w0, R0, Mf1, z, Mp2, L1, s):
+    q_initial = 1.0 / (1.0 / R0 - 1j * wavelength / (np.pi * w0**2))
+    q0 = Mp2 * q_initial
+    def M_fs(d):
+        return np.array([[1.0, d], [0.0, 1.0]], dtype=float)
+    M_s = M_fs(s)
+    M_L1 = M_fs(L1)
+    M_pre = np.dot(np.dot(M_L1, Mf1), M_s)
+    wz = np.zeros_like(z, dtype=float)
+    for idx, zi in enumerate(z):
+        M_z = M_fs(zi)
+        M_tot = np.dot(M_z, M_pre)
+        A, B = M_tot[0, 0], M_tot[0, 1]
+        C, D = M_tot[1, 0], M_tot[1, 1]
+        q_z = (A * q0 + B) / (C * q0 + D)
+        wz[idx] = np.sqrt(-wavelength / (np.pi * np.imag(1.0 / q_z)))
+    return wz
+def Gussian_Lens_transmission(N, Ld, z, L, w0, R0, Mf1, Mp2, L1, s):
+    z = np.atleast_1d(z).astype(float)
+    x = np.linspace(-L/2, L/2, N)
+    y = x.copy()
+    X, Y = np.meshgrid(x, y, indexing='ij')
+    E0 = np.exp(-(X**2 + Y**2) / (w0**2))
+    E_lens_pre = propagate_gaussian_beam(E0, x, y, s, Ld)
+    f = -1.0 / Mf1[1, 0]
+    k = 2.0 * np.pi / Ld
+    phase_lens = np.exp(-1j * k * (X**2 + Y**2) / (2.0 * f))
+    E_lens_post = E_lens_pre * phase_lens
+    Wz = np.zeros(z.shape, dtype=float)
+    for idx, zi in enumerate(z):
+        E_z = propagate_gaussian_beam(E_lens_post, x, y, zi, Ld)
+        I_z = np.abs(E_z)**2
+        P_y = simpson(I_z, x, axis=0)
+        P_tot = simpson(P_y, y)
+        Mx = simpson((X**2) * I_z, x, axis=0)
+        My = simpson((Y**2) * I_z, x, axis=0)
+        M_tot = simpson(Mx + My, y)
+        Wz[idx] = np.sqrt(2.0 * (M_tot / P_tot))
+    idx_focus = int(np.argmin(Wz))
+    focus_depth = float(z[idx_focus])
+    E_focus = propagate_gaussian_beam(E_lens_post, x, y, focus_depth, Ld)
+    Intensity = np.abs(E_focus)**2
+    return Wz, focus_depth, Intensity
+
+from scicode.parse.parse import process_hdf5_to_tuple
+targets = process_hdf5_to_tuple('28.3', 4)
+target = targets[0]
+
+from scicode.compare.cmp import cmp_tuple_or_list
+Ld = 1.064e-3  # Wavelength in mm
+w0 = 0.2  # Initial waist size in mm
+R0 = 1.0e30  # Initial curvature radius
+Mf1 = np.array([[1, 0], [-1/50, 1]])  # Free space propagation matrix
+L1 = 150  # Distance in mm
+z = np.linspace(0, 300, 1000)  # Array of distances in mm
+s = 0
+# User input for beam quality index
+Mp2 = 1
+N = 800  
+L = 16*10**-3
+assert cmp_tuple_or_list(Gussian_Lens_transmission(N, Ld, z, L,w0,R0, Mf1, Mp2, L1, s), target)
+target = targets[1]
+
+from scicode.compare.cmp import cmp_tuple_or_list
+Ld= 1.064e-3  # Wavelength in mm
+w0 = 0.2  # Initial waist size in mm
+R0 = 1.0e30  # Initial curvature radius
+Mf1 = np.array([[1, 0], [-1/50, 1]])  # Free space propagation matrix
+L1 = 180  # Distance in mm
+z = np.linspace(0, 300, 1000)  # Array of distances in mm
+s = 100 # initial waist position
+# User input for beam quality index
+Mp2 = 1.5
+N = 800  
+L = 16*10**-3
+assert cmp_tuple_or_list(Gussian_Lens_transmission(N, Ld, z, L,w0,R0, Mf1, Mp2, L1, s), target)
+target = targets[2]
+
+from scicode.compare.cmp import cmp_tuple_or_list
+Ld = 1.064e-3  # Wavelength in mm
+w0 = 0.2  # Initial waist size in mm
+R0 = 1.0e30  # Initial curvature radius
+Mf1 = np.array([[1, 0], [-1/50, 1]])  # Free space propagation matrix
+L1 = 180  # Distance in mm
+z = np.linspace(0, 300, 1000)  # Array of distances in mm
+s = 150 # initial waist position
+# User input for beam quality index
+Mp2 = 1.5
+N = 800  
+L = 16*10**-3
+assert cmp_tuple_or_list(Gussian_Lens_transmission(N, Ld, z, L,w0,R0, Mf1, Mp2, L1, s), target)
+target = targets[3]
+
+Ld = 1.064e-3  # Wavelength in mm
+w0 = 0.2  # Initial waist size in mm
+R0 = 1.0e30  # Initial curvature radius
+Mf1 = np.array([[1, 0], [-1/50, 1]])  # Free space propagation matrix
+L1 = 180  # Distance in mm
+z = np.linspace(0, 300, 1000)  # Array of distances in mm
+s = 150 # initial waist position
+# User input for beam quality index
+Mp2 = 1.5
+N = 800  
+L = 16*10**-3
+Wz, _, _ = Gussian_Lens_transmission(N, Ld, z, L,w0,R0, Mf1, Mp2, L1, s)
+scalingfactor = max(z)/len(z)
+LensWz = Wz[round(L1/scalingfactor)]
+BeforeLensWz = Wz[round((L1-5)/scalingfactor)]
+AfterLensWz = Wz[round((L1+5)/scalingfactor)]
+assert (LensWz>BeforeLensWz, LensWz>AfterLensWz) == target

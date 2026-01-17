@@ -553,20 +553,29 @@ def main():
     if args.reasoning_effort:
         print(f"Reasoning effort: {args.reasoning_effort}")
 
+    # Determine output path early to show user
+    if args.output:
+        output_path = Path(args.output)
+        if not output_path.is_absolute():
+            output_path = REPO_ROOT / output_path
+    else:
+        # Extract prefix from pattern: keep only letters, numbers, and underscores
+        # e.g., "scicode_potato_*" -> "scicode_potato"
+        pattern_prefix = re.sub(r'[^a-zA-Z0-9_]', '', args.pattern.split('*')[0].split('?')[0])
+        pattern_prefix = pattern_prefix.rstrip('_')  # Remove trailing underscore
+        if pattern_prefix:
+            output_path = REPO_ROOT / "judge_output" / f"{pattern_prefix}_verdict.csv"
+        else:
+            output_path = REPO_ROOT / "judge_output" / f"{rubric_dir.name}_verdict.csv"
+
+    print(f"Output: {output_path}")
+
     # Confirm
     if not args.yes:
         response = input(f"\nJudge {len(task_ids)} tasks? [y/N]: ").strip().lower()
         if response not in ("y", "yes"):
             print("Aborted.")
             sys.exit(0)
-
-    # Determine output path
-    if args.output:
-        output_path = Path(args.output)
-        if not output_path.is_absolute():
-            output_path = REPO_ROOT / output_path
-    else:
-        output_path = REPO_ROOT / "judge_output" / f"{rubric_dir.name}_verdict.csv"
 
     # Dry run mode
     if args.dry_run:

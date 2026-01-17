@@ -461,13 +461,14 @@ def apply_fix_to_task(task: Dict[str, Any], fix: Dict[str, Any]) -> Tuple[Dict[s
     if fix.get("evaluation_override"):
         eval_fix = fix["evaluation_override"]
 
-        # Handle preamble - code to add to required_dependencies for compatibility
+        # Handle preamble - code to PREPEND to required_dependencies for compatibility
+        # Must be prepended so shims run BEFORE the original imports
         if eval_fix.get("preamble"):
             preamble = eval_fix["preamble"]
             old_deps = modified.get("required_dependencies", "")
             if preamble not in old_deps:
-                modified["required_dependencies"] = old_deps + "\n" + preamble
-                changes_made.append(f"Evaluation: Added compatibility preamble")
+                modified["required_dependencies"] = preamble + "\n" + old_deps
+                changes_made.append(f"Evaluation: Prepended compatibility preamble")
 
         # Handle apply_to_all_steps flag (for preamble that affects all steps)
         if eval_fix.get("apply_to_all_steps") and eval_fix.get("preamble"):
