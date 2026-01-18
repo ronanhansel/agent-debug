@@ -1,0 +1,5 @@
+{
+  "HAL_NETWORK_ACCESS": "true",
+  "HAL_TIMEOUT_SECONDS": 1200,
+  "notes": "OGGM may require network access to download climate data (CRU/ERA5) even when using local glacier data. Extended timeout for potential downloads."
+}

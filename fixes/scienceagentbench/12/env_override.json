@@ -1,0 +1,8 @@
+{
+  "HAL_PIP_PACKAGES": "DeepPurpose git+https://github.com/bp-kelley/descriptastorus",
+  "HAL_PRE_INSTALL_COMMANDS": [
+    "pip install rdkit-pypi",
+    "pip install torch --upgrade"
+  ],
+  "notes": "DeepPurpose requires descriptastorus and compatible rdkit/torch versions. The standard pip install may not set up all dependencies correctly. This ensures proper installation order."
+}

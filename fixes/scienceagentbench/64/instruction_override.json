@@ -1,0 +1,9 @@
+{
+  "clarifications": [
+    "The glacier data is provided locally in 'benchmark/datasets/ocean_glacier/per_glacier/RGI60-11/RGI60-11.00/RGI60-11.00001.tar.gz' - extract and use this data.",
+    "Configure OGGM working directory using oggm.cfg.PATHS['working_dir'] to point to a local directory before any workflow calls.",
+    "The tar.gz file contains pre-computed glacier directory data that should be extracted to the OGGM working directory.",
+    "Initialize OGGM cfg before any operations: oggm.cfg.initialize(logging_level='WARNING')"
+  ],
+  "additional_context": "OGGM may still require internet access for climate data (CRU, ERA5). Ensure the Docker container has network access or use cached climate data if available."
+}

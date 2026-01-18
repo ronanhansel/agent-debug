@@ -1,0 +1,8 @@
+{
+  "task_id": "64",
+  "ife_detected": true,
+  "ife_type": "configuration_unclear",
+  "fix_applied": true,
+  "fix_types": ["instruction_override", "env_override"],
+  "notes": "OGGM default behavior downloads from internet; task provides local data but doesn't explain configuration. Extended timeout for potential network operations."
+}

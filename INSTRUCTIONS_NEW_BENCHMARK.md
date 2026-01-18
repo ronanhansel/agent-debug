@@ -229,17 +229,26 @@ Uses Claude Code CLI (claude -p) to diagnose and fix Intrinsic Formation Errors 
 in <Benchmark Name> tasks WITHOUT nerfing the problems.
 
 Usage:
-    # List tasks with IFEs detected
-    python scripts/claude_fixer_<benchmark_name>.py --list-ife-tasks
+    # Process all IFE tasks from rubrics (requires judge verdict)
+    python scripts/claude_fixer_<benchmark_name>.py \
+        --rubric-dir rubrics_output/<benchmark_name> \
+        --judge-csv judge_output/<benchmark_name>_verdict.csv \
+        --trace-files traces/<benchmark_name>_*.json \
+        --ife-only \
+        --tasks-per-batch 5 \
+        --parallel 4
 
-    # Fix a specific task
-    python scripts/claude_fixer_<benchmark_name>.py --task-id <id>
+    # Process specific tasks
+    python scripts/claude_fixer_<benchmark_name>.py \
+        --rubric-dir rubrics_output/<benchmark_name> \
+        --task-ids task_1 task_2 task_3 \
+        --tasks-per-batch 3
 
-    # Fix all tasks with Grade=1 in judge verdict
-    python scripts/claude_fixer_<benchmark_name>.py --all-ife
-
-    # Batch mode (multiple tasks per Claude session)
-    python scripts/claude_fixer_<benchmark_name>.py --all-ife --batch
+    # Dry run to preview what would be processed
+    python scripts/claude_fixer_<benchmark_name>.py \
+        --rubric-dir rubrics_output/<benchmark_name> \
+        --ife-only \
+        --dry-run
 """
 
 from __future__ import annotations
@@ -250,29 +259,31 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TRACES_DIR = REPO_ROOT / "traces"
 FIXES_DIR = REPO_ROOT / "fixes"
-RUBRICS_OUTPUT_DIR = REPO_ROOT / "rubrics_output" / "<benchmark_name>"
-JUDGE_OUTPUT = REPO_ROOT / "judge_output" / "<benchmark_name>_verdict.csv"
 BENCHMARK = "<benchmark_name>"
 
-# === COPY UTILITY FUNCTIONS FROM claude_fixer_scicode.py or claude_fixer_scienceagentbench.py ===
+# Thread-safe progress tracking
+_progress_lock = Lock()
+_completed_count = 0
+_total_count = 0
+
+# === COPY UTILITY FUNCTIONS FROM claude_fixer_scicode.py ===
 # - log(), log_progress()
 # - has_existing_fix()
+# - load_rubric_results()
 # - load_judge_verdicts()
-# - load_all_rubric_evaluations()
 # - load_task_conversations()  # Adapt to benchmark's trace structure
-# - get_ife_tasks()
 # - format_stream_json()
 # - run_claude_code()
-# - process_task()
-# - process_batch()
+# - process_task_batch()
 
 def build_claude_prompt_batch(tasks_data: List[Dict[str, Any]]) -> str:
     """Build the prompt for Claude Code CLI with multiple tasks."""
@@ -427,17 +438,77 @@ Remember: Make evaluation FAIR, not EASY. Be THOROUGH in diagnosis.
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Claude Code CLI-based <Benchmark Name> Fixer")
-    parser.add_argument("--task-id", action="append", dest="task_ids", help="Task ID(s) to process")
-    parser.add_argument("--all-ife", action="store_true", help="Process all tasks with IFE detected")
-    parser.add_argument("--list-ife-tasks", action="store_true", help="List tasks with IFE detected")
-    parser.add_argument("--skip-existing", action="store_true", help="Skip tasks with existing fixes")
-    parser.add_argument("--batch", action="store_true", help="Process all tasks in single session")
-    parser.add_argument("--quiet", action="store_true", help="Minimal output")
+    global _total_count, _completed_count
+
+    parser = argparse.ArgumentParser(
+        description="Use Claude Code to diagnose and fix <Benchmark Name> IFEs"
+    )
+
+    # Required arguments
+    parser.add_argument(
+        "--rubric-dir", type=str, required=True,
+        help="Directory containing rubric CSV outputs (e.g., rubrics_output/<benchmark>)"
+    )
+
+    # Optional arguments
+    parser.add_argument(
+        "--judge-csv", type=str,
+        help="Path to judge verdict CSV (optional)"
+    )
+    parser.add_argument(
+        "--trace-files", type=str, nargs="+", default=[],
+        help="Trace files to extract conversations from (optional, provides additional context)"
+    )
+    parser.add_argument(
+        "--benchmark", type=str, default="<benchmark_name>",
+        help="Benchmark name (default: <benchmark_name>)"
+    )
+    parser.add_argument(
+        "--task-ids", type=str, nargs="+",
+        help="Specific task IDs to process (default: all with IFEs)"
+    )
+    parser.add_argument(
+        "--max-tasks", type=int,
+        help="Maximum number of tasks to process"
+    )
+    parser.add_argument(
+        "--min-grade", type=float, default=0.5,
+        help="Minimum rubric grade to consider as IFE (default: 0.5)"
+    )
+    parser.add_argument(
+        "--skip-existing", action="store_true",
+        help="Skip tasks that already have fixes"
+    )
+    parser.add_argument(
+        "--parallel", type=int, default=1,
+        help="Number of parallel Claude Code sessions (default: 1)"
+    )
+    parser.add_argument(
+        "--tasks-per-batch", type=int, default=5,
+        help="Number of tasks per Claude session (default: 5)"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Preview prompts without running Claude Code"
+    )
+    parser.add_argument(
+        "--ife-only", action="store_true",
+        help="Only process tasks with judge verdict = 1 (confirmed IFEs). Requires --judge-csv."
+    )
+    parser.add_argument(
+        "--prefix", type=str, default="inspect",
+        help="Prefix for logging output (default: inspect)"
+    )
 
     args = parser.parse_args()
 
     # Implementation follows pattern from claude_fixer_scicode.py
+    # 1. Load rubric results from --rubric-dir
+    # 2. Load judge verdicts from --judge-csv (if provided)
+    # 3. Load trace conversations from --trace-files (if provided)
+    # 4. Filter tasks based on --ife-only, --task-ids, --min-grade
+    # 5. Group tasks into batches of --tasks-per-batch
+    # 6. Process batches in parallel with --parallel workers
     # ...
 
 if __name__ == "__main__":
@@ -445,13 +516,30 @@ if __name__ == "__main__":
 ```
 
 **Key customizations needed:**
-1. Update `BENCHMARK`, `RUBRICS_OUTPUT_DIR`, `JUDGE_OUTPUT` constants
-2. Adapt `load_task_conversations()` to the benchmark's trace structure
+1. Update `BENCHMARK` constant
+2. Adapt `load_task_conversations()` to the benchmark's trace structure (different benchmarks store task IDs in different places)
 3. Customize `build_claude_prompt_batch()` with:
    - Benchmark-specific harness files to read
    - Evaluation process description
    - Known IFE patterns from trace analysis
    - Fix format specific to the benchmark
+
+**CLI Arguments Reference:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `--rubric-dir` | Yes | Directory containing rubric CSV outputs |
+| `--judge-csv` | No | Path to judge verdict CSV for IFE filtering |
+| `--trace-files` | No | Trace files to extract conversations from |
+| `--benchmark` | No | Benchmark name (default: from script) |
+| `--task-ids` | No | Specific task IDs to process |
+| `--max-tasks` | No | Maximum number of tasks to process |
+| `--min-grade` | No | Minimum rubric grade for IFE (default: 0.5) |
+| `--skip-existing` | No | Skip tasks that already have fixes |
+| `--parallel` | No | Number of parallel Claude sessions (default: 1) |
+| `--tasks-per-batch` | No | Tasks per Claude session (default: 5) |
+| `--dry-run` | No | Preview without running Claude Code |
+| `--ife-only` | No | Only process confirmed IFEs (requires --judge-csv) |
+| `--prefix` | No | Logging prefix (default: "inspect") |
 
 ---
 
@@ -869,11 +957,28 @@ python scripts/judge.py \
 ### 9.3 Test Fixer Script
 
 ```bash
-# List IFE tasks
-python scripts/claude_fixer_<benchmark>.py --list-ife-tasks
+# Dry run to see what tasks would be processed
+python scripts/claude_fixer_<benchmark>.py \
+    --rubric-dir rubrics_output/<benchmark> \
+    --judge-csv judge_output/<benchmark>_verdict.csv \
+    --ife-only \
+    --dry-run
 
-# Test with one task
-python scripts/claude_fixer_<benchmark>.py --task-id <some_id>
+# Test with specific tasks
+python scripts/claude_fixer_<benchmark>.py \
+    --rubric-dir rubrics_output/<benchmark> \
+    --task-ids task_1 task_2 \
+    --tasks-per-batch 2
+
+# Full run with all IFE tasks (parallel processing)
+python scripts/claude_fixer_<benchmark>.py \
+    --rubric-dir rubrics_output/<benchmark> \
+    --judge-csv judge_output/<benchmark>_verdict.csv \
+    --trace-files traces/<benchmark>_*.json \
+    --ife-only \
+    --tasks-per-batch 5 \
+    --parallel 4 \
+    --skip-existing
 ```
 
 ### 9.4 Test Fix Runner Script
@@ -906,7 +1011,8 @@ python scripts/run_<benchmark>_fixes.py --task-id <some_id> --prefix fixed_
 
 ### Fixer Script Setup
 - [ ] Created `scripts/claude_fixer_<benchmark>.py` with:
-  - [ ] Correct constants (BENCHMARK, paths)
+  - [ ] Correct `BENCHMARK` constant
+  - [ ] Standard CLI interface (--rubric-dir, --judge-csv, --trace-files, --task-ids, --ife-only, --parallel, --tasks-per-batch, --dry-run, etc.)
   - [ ] Adapted trace loading for benchmark structure
   - [ ] Customized prompt with benchmark-specific context
   - [ ] Thorough error analysis checklist in prompt

@@ -1,0 +1,5 @@
+{
+  "HAL_CONDA_CHANNELS": "conda-forge",
+  "HAL_PIP_PACKAGES": "deepchem rdkit matplotlib dgl",
+  "notes": "Task requires DeepChem for graph convolutional network training and RDKit for molecular visualization. The sandbox blocks both deepchem and rdkit imports. The Docker already has rdkit pre-installed and has special handling for deepchem (adds dgl), but the agent cannot generate correct code without being able to test imports. TensorFlow/CUDA warnings in logs are benign."
+}

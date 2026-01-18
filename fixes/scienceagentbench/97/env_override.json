@@ -1,0 +1,5 @@
+{
+  "HAL_PIP_PACKAGES": "deepchem dgl pymatgen",
+  "HAL_DGL_CUDA_URL": "https://data.dgl.ai/wheels/torch-2.3/cu121/repo.html",
+  "notes": "DeepChem requires DGL for CGCNN models. The Docker harness already handles this when pipreqs detects deepchem import, but this override ensures explicit installation. pymatgen is often needed for crystal structure handling."
+}

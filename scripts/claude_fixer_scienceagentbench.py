@@ -13,20 +13,41 @@ This script:
 Key principle: Fix INTRINSIC FORMATION ERRORS only, never simplify the science.
 
 Usage:
-    # List tasks with IFEs detected
-    python scripts/claude_fixer_scienceagentbench.py --list-ife-tasks
+    # Dry run - preview what would be processed
+    python scripts/claude_fixer_scienceagentbench.py \
+        --rubric-dir rubrics_output/scienceagentbench \
+        --judge-csv judge_output/scienceagentbench_verdict.csv \
+        --ife-only \
+        --dry-run
 
-    # Fix a specific task
-    python scripts/claude_fixer_scienceagentbench.py --task-id 74
+    # Fix all IFE tasks with traces for context
+    python scripts/claude_fixer_scienceagentbench.py \
+        --rubric-dir rubrics_output/scienceagentbench \
+        --judge-csv judge_output/scienceagentbench_verdict.csv \
+        --trace-files traces/scienceagentbench_*.json \
+        --ife-only \
+        --tasks-per-batch 5
 
-    # Fix all tasks with Grade=1 in judge verdict
-    python scripts/claude_fixer_scienceagentbench.py --all-ife
+    # Parallel processing
+    python scripts/claude_fixer_scienceagentbench.py \
+        --rubric-dir rubrics_output/scienceagentbench \
+        --judge-csv judge_output/scienceagentbench_verdict.csv \
+        --trace-files traces/scienceagentbench_*.json \
+        --ife-only \
+        --tasks-per-batch 5 \
+        --parallel 4
 
-    # Batch mode (multiple tasks per Claude session)
-    python scripts/claude_fixer_scienceagentbench.py --task-id 74 --task-id 43 --task-id 2 --batch
+    # Fix specific tasks
+    python scripts/claude_fixer_scienceagentbench.py \
+        --rubric-dir rubrics_output/scienceagentbench \
+        --task-ids 74 43 2
 
     # Skip existing fixes
-    python scripts/claude_fixer_scienceagentbench.py --all-ife --skip-existing
+    python scripts/claude_fixer_scienceagentbench.py \
+        --rubric-dir rubrics_output/scienceagentbench \
+        --judge-csv judge_output/scienceagentbench_verdict.csv \
+        --ife-only \
+        --skip-existing
 """
 
 from __future__ import annotations
@@ -44,10 +65,7 @@ from threading import Lock
 from typing import Any, Dict, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-TRACES_DIR = REPO_ROOT / "traces"
 FIXES_DIR = REPO_ROOT / "fixes"
-RUBRICS_OUTPUT_DIR = REPO_ROOT / "rubrics_output" / "scienceagentbench"
-JUDGE_OUTPUT = REPO_ROOT / "judge_output" / "scienceagentbench_verdict.csv"
 BENCHMARK = "scienceagentbench"
 
 # Thread-safe progress tracking
@@ -89,82 +107,6 @@ def has_existing_fix(task_id: str) -> bool:
     fix_files = ["env_override.json", "evaluation_override.json", "README.md"]
     return any((fix_dir / f).exists() for f in fix_files)
 
-
-def load_judge_verdicts() -> Dict[str, Dict[str, Any]]:
-    """Load judge verdicts by task_id."""
-    results = {}
-    if not JUDGE_OUTPUT.exists():
-        return results
-    with JUDGE_OUTPUT.open() as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            task_id = row.get("task_id", "")
-            results[task_id] = {
-                "final_grade": float(row.get("final_grade", 0)),
-                "satisfies_rubric": row.get("satisfies_rubric", "0") == "1",
-                "reasoning": row.get("reasoning", ""),
-                "num_evaluations": int(row.get("num_evaluations", 0)),
-                "model_runs": row.get("model_runs", "").split(";"),
-            }
-    return results
-
-
-def load_all_rubric_evaluations(task_id: str) -> List[Dict[str, Any]]:
-    """Load all rubric evaluations for a task from all CSV files in the rubric directory."""
-    evaluations = []
-    for csv_file in RUBRICS_OUTPUT_DIR.glob("*.csv"):
-        with csv_file.open() as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                if row.get("task_id") == task_id:
-                    evaluations.append({
-                        "source": csv_file.stem,
-                        "grade": row.get("grade", ""),
-                        "explanation": row.get("explanation", ""),
-                        "model_run": row.get("model_run", ""),
-                    })
-    return evaluations
-
-
-def load_task_conversations(task_id: str) -> Dict[str, str]:
-    """Load conversations for a task from trace files."""
-    conversations = {}
-
-    for trace_path in TRACES_DIR.glob(f"{BENCHMARK}_*.json"):
-        if not trace_path.exists():
-            continue
-
-        try:
-            data = json.loads(trace_path.read_text())
-        except:
-            continue
-
-        # Extract model name
-        model_name = data.get("config", {}).get("agent_args", {}).get("model_name", trace_path.stem[:30])
-        model_name = model_name.replace("openai/", "").replace("-2025", "")
-
-        # Get eval results for this task
-        raw_eval = data.get("raw_eval_results", {}).get("eval_result", {})
-        task_result = raw_eval.get(task_id, {})
-
-        if task_result:
-            lines = []
-            lines.append(f"Success Rate: {task_result.get('success_rate', 'N/A')}")
-            lines.append(f"Valid Program: {task_result.get('valid_program', 'N/A')}")
-            lines.append(f"CodeBERT Score: {task_result.get('codebert_score', 'N/A')}")
-            log_info = task_result.get('log_info', '')
-            if log_info:
-                lines.append(f"Log Info: {str(log_info)[:2000]}")
-
-            conversations[model_name] = "\n".join(lines)
-
-    return conversations
-
-
-def get_ife_tasks() -> List[str]:
-    """Get list of task IDs with IFE detected (Grade=1)."""
-    verdicts = load_judge_verdicts()
-    return [task_id for task_id, v in verdicts.items() if v.get("final_grade", 0) >= 1.0]
 
 
 def build_claude_prompt_single(
@@ -551,112 +493,168 @@ def run_claude_code(
         return result.returncode
 
 
-def process_task(task_id: str, skip_existing: bool = False, quiet: bool = False) -> bool:
-    """Process a single task."""
-    if skip_existing and has_existing_fix(task_id):
-        log_progress(task_id, "skipped")
-        return True
 
-    log_progress(task_id, "started")
+def process_task_batch(
+    task_ids: List[str],
+    rubric_dir: Path,
+    judge_verdicts: Dict[str, Dict[str, Any]],
+    trace_files: List[Path],
+    benchmark: str,
+    batch_id: int = 0,
+    quiet: bool = False,
+) -> List[Tuple[str, bool, str]]:
+    """Process a batch of tasks in a single Claude session. Returns list of (task_id, success, message)."""
 
-    # Gather context
-    evaluations = load_all_rubric_evaluations(task_id)
-    verdicts = load_judge_verdicts()
-    judge_verdict = verdicts.get(task_id)
-    conversations = load_task_conversations(task_id)
+    try:
+        # Gather data for all tasks in batch
+        tasks_data = []
+        for task_id in task_ids:
+            evaluations = load_all_rubric_evaluations(rubric_dir, task_id)
+            judge_verdict = judge_verdicts.get(task_id)
+            conversations = load_task_conversations_from_files(trace_files, task_id)
 
-    # Build prompt
-    tasks_data = [{
-        'task_id': task_id,
-        'evaluations': evaluations,
-        'judge_verdict': judge_verdict,
-        'conversations': conversations,
-    }]
-    prompt = build_claude_prompt_batch(tasks_data)
+            tasks_data.append({
+                'task_id': task_id,
+                'evaluations': evaluations,
+                'judge_verdict': judge_verdict,
+                'conversations': conversations,
+            })
 
-    # Create fix directory
-    fix_dir = FIXES_DIR / BENCHMARK / task_id
-    fix_dir.mkdir(parents=True, exist_ok=True)
+            # Create fix directory for each task
+            fix_dir = FIXES_DIR / benchmark / task_id
+            fix_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save prompt for reference
-    (fix_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
+        # Build batch prompt
+        prompt = build_claude_prompt_batch(tasks_data)
 
-    # Run Claude Code
-    result = run_claude_code(prompt, task_id, REPO_ROOT, fix_dir, quiet=quiet)
+        # Save prompt to first task's directory
+        batch_fix_dir = FIXES_DIR / benchmark / task_ids[0]
+        (batch_fix_dir / "claude_prompt_batch.txt").write_text(prompt)
 
-    if result == 0:
-        log_progress(task_id, "completed")
-        return True
-    else:
-        log_progress(task_id, "failed")
-        return False
+        if not quiet:
+            log(f"Batch {batch_id}: Starting {len(task_ids)} tasks: {', '.join(task_ids)}")
+
+        # Run Claude Code for entire batch
+        exit_code = run_claude_code(
+            prompt=prompt,
+            task_id=f"batch_{batch_id}_{'-'.join(task_ids[:3])}",
+            working_dir=REPO_ROOT,
+            fix_dir=batch_fix_dir,
+            quiet=quiet,
+        )
+
+        if exit_code == 0:
+            if not quiet:
+                log(f"Batch {batch_id}: Completed all {len(task_ids)} tasks")
+            return [(tid, True, "Batch completed successfully") for tid in task_ids]
+        else:
+            if not quiet:
+                log(f"Batch {batch_id}: Failed with exit code {exit_code}")
+            return [(tid, False, f"Batch failed with code {exit_code}") for tid in task_ids]
+
+    except Exception as e:
+        log(f"Batch {batch_id}: Exception - {e}")
+        return [(tid, False, str(e)) for tid in task_ids]
 
 
-def process_batch(task_ids: List[str], skip_existing: bool = False) -> bool:
-    """Process multiple tasks in a single Claude session."""
+def load_all_rubric_evaluations(rubric_dir: Path, task_id: str) -> List[Dict[str, Any]]:
+    """Load all rubric evaluations for a task from all CSV files in the rubric directory."""
+    evaluations = []
+    for csv_file in rubric_dir.glob("*.csv"):
+        with csv_file.open() as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                if row.get("task_id") == task_id:
+                    evaluations.append({
+                        "source": csv_file.stem,
+                        "grade": row.get("grade", ""),
+                        "explanation": row.get("explanation", ""),
+                        "model_run": row.get("model_run", ""),
+                    })
+    return evaluations
 
-    # Filter tasks
-    if skip_existing:
-        task_ids = [t for t in task_ids if not has_existing_fix(t)]
 
-    if not task_ids:
-        log("No tasks to process (all have existing fixes)")
-        return True
+def load_task_conversations_from_files(trace_files: List[Path], task_id: str) -> Dict[str, str]:
+    """Load conversations for a task from provided trace files."""
+    conversations = {}
 
-    log(f"Processing batch of {len(task_ids)} tasks: {', '.join(task_ids)}")
+    for trace_path in trace_files:
+        if not trace_path.exists():
+            continue
 
-    # Gather context for all tasks
-    tasks_data = []
-    verdicts = load_judge_verdicts()
+        try:
+            data = json.loads(trace_path.read_text())
+        except:
+            continue
 
-    for task_id in task_ids:
-        evaluations = load_all_rubric_evaluations(task_id)
-        judge_verdict = verdicts.get(task_id)
-        conversations = load_task_conversations(task_id)
+        # Extract model name
+        model_name = data.get("config", {}).get("agent_args", {}).get("model_name", trace_path.stem[:30])
+        model_name = model_name.replace("openai/", "").replace("-2025", "")
 
-        tasks_data.append({
-            'task_id': task_id,
-            'evaluations': evaluations,
-            'judge_verdict': judge_verdict,
-            'conversations': conversations,
-        })
+        # Get eval results for this task
+        raw_eval = data.get("raw_eval_results", {}).get("eval_result", {})
+        task_result = raw_eval.get(task_id, {})
 
-    # Build combined prompt
-    prompt = build_claude_prompt_batch(tasks_data)
+        if task_result:
+            # Format the result
+            lines = []
+            if isinstance(task_result, dict):
+                for key, value in task_result.items():
+                    if isinstance(value, str) and len(value) > 500:
+                        value = value[:500] + "..."
+                    lines.append(f"{key}: {value}")
+            conversations[model_name] = "\n".join(lines)
 
-    # Create fix directory for batch
-    batch_id = "_".join(task_ids[:3]) + (f"_and_{len(task_ids)-3}_more" if len(task_ids) > 3 else "")
-    fix_dir = FIXES_DIR / BENCHMARK / f"_batch_{batch_id}"
-    fix_dir.mkdir(parents=True, exist_ok=True)
-
-    # Save prompt for reference
-    (fix_dir / "prompt.txt").write_text(prompt, encoding="utf-8")
-
-    # Run Claude Code
-    result = run_claude_code(prompt, batch_id, REPO_ROOT, fix_dir)
-
-    return result == 0
+    return conversations
 
 
 def main():
+    global _total_count, _completed_count
+
     parser = argparse.ArgumentParser(
-        description="Claude Code CLI-based ScienceAgentBench Fixer"
+        description="Use Claude Code to diagnose and fix ScienceAgentBench IFEs"
+    )
+
+    parser.add_argument(
+        "--rubric-dir",
+        type=str,
+        required=True,
+        help="Directory containing rubric CSV outputs (e.g., rubrics_output/scienceagentbench)",
     )
     parser.add_argument(
-        "--task-id",
-        action="append",
-        dest="task_ids",
-        help="Task ID(s) to process (can be repeated)",
+        "--judge-csv",
+        type=str,
+        help="Path to judge verdict CSV (optional)",
     )
     parser.add_argument(
-        "--all-ife",
-        action="store_true",
-        help="Process all tasks with IFE detected (Grade=1)",
+        "--trace-files",
+        type=str,
+        nargs="+",
+        default=[],
+        help="Trace files to extract conversations from (optional, provides additional context)",
     )
     parser.add_argument(
-        "--list-ife-tasks",
-        action="store_true",
-        help="List tasks with IFE detected and exit",
+        "--benchmark",
+        type=str,
+        default="scienceagentbench",
+        help="Benchmark name (default: scienceagentbench)",
+    )
+    parser.add_argument(
+        "--task-ids",
+        type=str,
+        nargs="+",
+        help="Specific task IDs to process (default: all with IFEs)",
+    )
+    parser.add_argument(
+        "--max-tasks",
+        type=int,
+        help="Maximum number of tasks to process",
+    )
+    parser.add_argument(
+        "--min-grade",
+        type=float,
+        default=0.5,
+        help="Minimum rubric grade to consider as IFE (default: 0.5)",
     )
     parser.add_argument(
         "--skip-existing",
@@ -664,71 +662,318 @@ def main():
         help="Skip tasks that already have fixes",
     )
     parser.add_argument(
-        "--batch",
-        action="store_true",
-        help="Process all tasks in a single Claude session",
-    )
-    parser.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Minimal output (no streaming)",
-    )
-    parser.add_argument(
         "--parallel",
         type=int,
         default=1,
-        help="Number of parallel Claude sessions (default: 1)",
+        help="Number of parallel Claude Code sessions (default: 1)",
+    )
+    parser.add_argument(
+        "--tasks-per-batch",
+        type=int,
+        default=5,
+        help="Number of tasks per Claude session (default: 5). Each Claude instance processes this many tasks sequentially.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview prompts without running Claude Code",
+    )
+    parser.add_argument(
+        "--ife-only",
+        action="store_true",
+        help="Only process tasks with judge verdict = 1 (confirmed IFEs). Requires --judge-csv.",
+    )
+    parser.add_argument(
+        "--prefix",
+        type=str,
+        default="inspect",
+        help="Prefix for logging output (default: inspect)",
     )
 
     args = parser.parse_args()
+    prefix = args.prefix
 
-    # List IFE tasks
-    if args.list_ife_tasks:
-        ife_tasks = get_ife_tasks()
-        print(f"\nTasks with IFE detected ({len(ife_tasks)} total):")
-        for task_id in sorted(ife_tasks, key=lambda x: int(x) if x.isdigit() else x):
-            verdicts = load_judge_verdicts()
-            v = verdicts.get(task_id, {})
-            has_fix = "✓ has fix" if has_existing_fix(task_id) else ""
-            print(f"  {task_id}: Grade={v.get('final_grade', 'N/A')} {has_fix}")
-        return
+    # Color codes for terminal
+    CYAN = "\033[96m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    RED = "\033[91m"
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    DIM = "\033[2m"
 
-    # Get task list
-    if args.all_ife:
-        task_ids = get_ife_tasks()
-        log(f"Found {len(task_ids)} tasks with IFE detected")
-    elif args.task_ids:
-        task_ids = args.task_ids
+    print(f"\n{BOLD}{CYAN}{'='*60}{RESET}")
+    print(f"{BOLD}{CYAN}ScienceAgentBench IFE Fixer - Claude Code CLI{RESET}")
+    print(f"{BOLD}{CYAN}{'='*60}{RESET}\n")
+
+    # Resolve paths
+    rubric_dir = Path(args.rubric_dir)
+    if not rubric_dir.is_absolute():
+        rubric_dir = REPO_ROOT / rubric_dir
+
+    log(f"Rubric directory: {rubric_dir}", prefix)
+    log(f"Benchmark: {args.benchmark}", prefix)
+
+    trace_files = [Path(f) if Path(f).is_absolute() else REPO_ROOT / f for f in args.trace_files] if args.trace_files else []
+    if trace_files:
+        log(f"Using {len(trace_files)} trace files for conversation context", prefix)
+        for tf in trace_files[:3]:
+            log(f"  - {tf.name}", prefix)
+        if len(trace_files) > 3:
+            log(f"  ... and {len(trace_files) - 3} more", prefix)
     else:
-        parser.error("Must specify --task-id, --all-ife, or --list-ife-tasks")
+        log("No trace files provided - using rubric evaluations only", prefix)
+        log(f"  Hint: Trace files are in traces/ with names like scienceagentbench_*.json", prefix)
+
+    # Load judge verdicts if provided
+    judge_verdicts = {}
+    if args.judge_csv:
+        judge_path = Path(args.judge_csv)
+        if not judge_path.is_absolute():
+            judge_path = REPO_ROOT / judge_path
+        judge_verdicts = load_judge_verdicts_from_file(judge_path)
+        log(f"Loaded {len(judge_verdicts)} judge verdicts from {judge_path.name}", prefix)
+
+    # Validate --ife-only requires --judge-csv
+    if args.ife_only and not args.judge_csv:
+        print(f"{RED}Error: --ife-only requires --judge-csv to be specified{RESET}")
         return
+
+    # Determine tasks to process
+    if args.task_ids:
+        task_ids = args.task_ids
+        log(f"Processing {len(task_ids)} specified tasks: {', '.join(task_ids)}", prefix)
+    else:
+        # Find all tasks with IFEs based on rubric grades
+        task_ids = set()
+        csv_count = 0
+        for csv_file in rubric_dir.glob("*.csv"):
+            csv_count += 1
+            with csv_file.open() as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    try:
+                        grade = float(row.get("grade", 0) or 0)
+                    except (ValueError, TypeError):
+                        grade = 0
+                    if grade >= args.min_grade:
+                        task_ids.add(row.get("task_id", ""))
+        task_ids = sorted(task_ids, key=lambda x: int(x) if x.isdigit() else x)
+        log(f"Scanned {csv_count} CSV files in {rubric_dir.name}", prefix)
+        log(f"Found {len(task_ids)} tasks with grade >= {args.min_grade} (potential IFEs)", prefix)
+
+    # Filter to confirmed IFEs only (judge verdict = 1)
+    if args.ife_only:
+        original_count = len(task_ids)
+        ife_task_ids = []
+        for tid in task_ids:
+            verdict = judge_verdicts.get(tid, {})
+            if verdict.get("final_grade", 0) == 1:
+                ife_task_ids.append(tid)
+        task_ids = ife_task_ids
+        log(f"Filtered to {len(task_ids)} confirmed IFEs (verdict=1) from {original_count} candidates", prefix)
+
+    # Filter existing fixes
+    skipped_tasks = []
+    if args.skip_existing:
+        original_count = len(task_ids)
+        for tid in task_ids:
+            if has_existing_fix(tid):
+                skipped_tasks.append(tid)
+        task_ids = [t for t in task_ids if t not in skipped_tasks]
+        log(f"Skipping {len(skipped_tasks)} tasks with existing fixes, {len(task_ids)} remaining", prefix)
+
+    # Limit tasks
+    if args.max_tasks and len(task_ids) > args.max_tasks:
+        log(f"Limiting to first {args.max_tasks} tasks (use --max-tasks to change)", prefix)
+        task_ids = task_ids[:args.max_tasks]
 
     if not task_ids:
-        log("No tasks to process")
+        log(f"{YELLOW}No tasks to process{RESET}", prefix)
         return
 
-    global _total_count
-    _total_count = len(task_ids)
+    # Set totals for progress tracking
+    _total_count = len(task_ids) + len(skipped_tasks)
+    _completed_count = len(skipped_tasks)
 
-    # Process tasks
-    if args.batch:
-        success = process_batch(task_ids, skip_existing=args.skip_existing)
-        sys.exit(0 if success else 1)
-    elif args.parallel > 1:
+    # Create batches
+    tasks_per_batch = args.tasks_per_batch
+    batches = [task_ids[i:i + tasks_per_batch] for i in range(0, len(task_ids), tasks_per_batch)]
+    num_batches = len(batches)
+
+    print(f"\n{BOLD}Configuration:{RESET}")
+    print(f"  Tasks to process: {len(task_ids)}")
+    print(f"  Tasks per batch: {tasks_per_batch}")
+    print(f"  Total batches: {num_batches}")
+    print(f"  Parallel sessions: {args.parallel}")
+    print(f"  Fixes output: fixes/{args.benchmark}/<task_id>/")
+    print()
+
+    if args.dry_run:
+        print(f"\n{BOLD}{YELLOW}{'='*60}{RESET}")
+        print(f"{BOLD}{YELLOW}DRY RUN MODE - Previewing batch prompts{RESET}")
+        print(f"{BOLD}{YELLOW}{'='*60}{RESET}\n")
+
+        # Preview first batch
+        preview_batch = batches[0] if batches else []
+        tasks_data = []
+        for task_id in preview_batch:
+            evaluations = load_all_rubric_evaluations(rubric_dir, task_id)
+            judge_verdict = judge_verdicts.get(task_id)
+            conversations = load_task_conversations_from_files(trace_files, task_id)
+            tasks_data.append({
+                'task_id': task_id,
+                'evaluations': evaluations,
+                'judge_verdict': judge_verdict,
+                'conversations': conversations,
+            })
+            # Show task details
+            log(f"Task {task_id}:", prefix)
+            log(f"  - Evaluations: {len(evaluations)}", prefix)
+            log(f"  - Judge verdict: {'Yes' if judge_verdict else 'No'}", prefix)
+            log(f"  - Conversations: {len(conversations)} models", prefix)
+
+        prompt = build_claude_prompt_batch(tasks_data)
+
+        print(f"\n{BOLD}BATCH 1 of {num_batches}{RESET}")
+        print(f"Tasks: {', '.join(preview_batch)}")
+        print(f"Prompt length: {len(prompt):,} chars")
+        print(f"\n{DIM}{'='*60}{RESET}")
+        print(prompt[:5000] + "..." if len(prompt) > 5000 else prompt)
+
+        print(f"\n{BOLD}{GREEN}{'='*60}{RESET}")
+        print(f"{BOLD}DRY RUN SUMMARY{RESET}")
+        print(f"{'='*60}")
+        print(f"  Total tasks: {len(task_ids)}")
+        print(f"  Skipped (existing): {len(skipped_tasks)}")
+        print(f"  Batches: {num_batches}")
+        print(f"  Tasks per batch: {tasks_per_batch}")
+        print(f"  Parallel sessions: {args.parallel}")
+        print(f"  Total Claude sessions: {num_batches}")
+        print(f"{'='*60}\n")
+        return
+
+    # Process batches
+    all_results = []
+
+    if args.parallel > 1:
+        log(f"\n{BOLD}Running {args.parallel} parallel Claude sessions, {tasks_per_batch} tasks each{RESET}", prefix)
+        print(f"{'='*60}\n")
+
+        def run_batch(batch_tuple):
+            batch_idx, batch = batch_tuple
+            log_progress(f"batch_{batch_idx}", "started", prefix)
+            results = process_task_batch(
+                task_ids=batch,
+                rubric_dir=rubric_dir,
+                judge_verdicts=judge_verdicts,
+                trace_files=trace_files,
+                benchmark=args.benchmark,
+                batch_id=batch_idx,
+                quiet=True,
+            )
+            for tid, success, msg in results:
+                if success:
+                    log_progress(tid, "completed", prefix)
+                else:
+                    log_progress(tid, "failed", prefix)
+            return results
+
         with ThreadPoolExecutor(max_workers=args.parallel) as executor:
-            futures = {
-                executor.submit(process_task, task_id, args.skip_existing, args.quiet): task_id
-                for task_id in task_ids
-            }
+            futures = {executor.submit(run_batch, (idx, batch)): idx for idx, batch in enumerate(batches)}
+
             for future in as_completed(futures):
-                task_id = futures[future]
-                try:
-                    future.result()
-                except Exception as e:
-                    log(f"Error processing {task_id}: {e}")
+                batch_results = future.result()
+                all_results.extend(batch_results)
+
     else:
-        for task_id in task_ids:
-            process_task(task_id, skip_existing=args.skip_existing, quiet=args.quiet)
+        # Sequential batch processing with detailed logging
+        log(f"\nProcessing {len(task_ids)} tasks in {num_batches} batches (sequential mode)", prefix)
+        print(f"{'='*60}\n")
+
+        for batch_idx, batch in enumerate(batches):
+            print(f"\n{BOLD}{CYAN}{'='*60}{RESET}")
+            print(f"{BOLD}BATCH {batch_idx + 1}/{num_batches}{RESET}")
+            print(f"Tasks: {', '.join(batch)}")
+            print(f"{BOLD}{CYAN}{'='*60}{RESET}\n")
+
+            # Show task details before processing
+            for task_id in batch:
+                evaluations = load_all_rubric_evaluations(rubric_dir, task_id)
+                judge_verdict = judge_verdicts.get(task_id)
+                conversations = load_task_conversations_from_files(trace_files, task_id)
+
+                log(f"Task {task_id}:", prefix)
+                log(f"  - Rubric evaluations: {len(evaluations)}", prefix)
+                for ev in evaluations[:2]:
+                    grade_str = ev.get('grade', 'N/A')
+                    log(f"    * {ev.get('source', 'unknown')}: grade={grade_str}", prefix)
+                if len(evaluations) > 2:
+                    log(f"    ... and {len(evaluations) - 2} more", prefix)
+                log(f"  - Judge verdict: {judge_verdict.get('final_grade', 'N/A') if judge_verdict else 'None'}", prefix)
+                log(f"  - Conversation logs: {len(conversations)} models", prefix)
+
+            batch_results = process_task_batch(
+                task_ids=batch,
+                rubric_dir=rubric_dir,
+                judge_verdicts=judge_verdicts,
+                trace_files=trace_files,
+                benchmark=args.benchmark,
+                batch_id=batch_idx,
+                quiet=False,
+            )
+            all_results.extend(batch_results)
+
+            # Batch summary
+            batch_success = sum(1 for _, s, _ in batch_results if s)
+            print(f"\n{BOLD}Batch {batch_idx + 1} Result:{RESET} {batch_success}/{len(batch)} tasks completed")
+
+    # Final summary
+    successful = [r for r in all_results if r[1]]
+    failed = [r for r in all_results if not r[1]]
+
+    print(f"\n{BOLD}{GREEN}{'='*60}{RESET}")
+    print(f"{BOLD}FINAL SUMMARY{RESET}")
+    print(f"{'='*60}")
+    print(f"\n{GREEN}Succeeded: {len(successful)}/{len(all_results)}{RESET}")
+    for tid, _, msg in successful[:10]:
+        print(f"  {GREEN}✓{RESET} {tid}")
+    if len(successful) > 10:
+        print(f"  ... and {len(successful) - 10} more")
+
+    if failed:
+        print(f"\n{RED}Failed: {len(failed)}/{len(all_results)}{RESET}")
+        for tid, _, msg in failed:
+            print(f"  {RED}✗{RESET} {tid}: {msg}")
+
+    if skipped_tasks:
+        print(f"\n{YELLOW}Skipped (existing fixes): {len(skipped_tasks)}{RESET}")
+        for tid in skipped_tasks[:5]:
+            print(f"  {YELLOW}⊘{RESET} {tid}")
+        if len(skipped_tasks) > 5:
+            print(f"  ... and {len(skipped_tasks) - 5} more")
+
+    print(f"\n{BOLD}Fixes saved to:{RESET} fixes/{args.benchmark}/<task_id>/")
+    print(f"{'='*60}\n")
+
+
+def load_judge_verdicts_from_file(verdict_csv: Path) -> Dict[str, Dict[str, Any]]:
+    """Load judge verdicts from a CSV file."""
+    results = {}
+    if not verdict_csv.exists():
+        return results
+    with verdict_csv.open() as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            task_id = row.get("task_id", "")
+            results[task_id] = {
+                "final_grade": float(row.get("final_grade", 0)),
+                "satisfies_rubric": row.get("satisfies_rubric", "0") == "1",
+                "reasoning": row.get("reasoning", ""),
+                "num_evaluations": int(row.get("num_evaluations", 0)),
+                "model_runs": row.get("model_runs", "").split(";"),
+            }
+    return results
 
 
 if __name__ == "__main__":

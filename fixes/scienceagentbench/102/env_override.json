@@ -1,0 +1,5 @@
+{
+  "HAL_PIP_PACKAGES": "modnet pymatgen matminer",
+  "HAL_CONDA_CHANNELS": "conda-forge",
+  "notes": "MODNet is a materials science ML package that requires pymatgen (for crystal structures) and matminer (for featurization). The Docker harness currently has NO special handling for MODNet unlike deepchem/scanpy. This env_override ensures explicit installation. The pickled training data contains MODNet-specific objects that cannot be deserialized without modnet installed."
+}
