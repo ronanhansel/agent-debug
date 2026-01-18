@@ -221,26 +221,56 @@ Respond with valid JSON:
 ```bash
 # 1. Evaluate failed tasks with SciCode rubric
 python scripts/eval_rubric.py \
-    --trace-file traces/scicode_potato_openai_gpt-4_1.json \
-    --trace-file traces/scicode_potato_openai_gpt-5.json \
-    --trace-file traces/scicode_potato_openai_o3_2025.json \
-    --trace-file traces/scicode_potato_openai_o4-mini_2025-04-16_high.json \
-    --trace-file traces/scicode_potato_openai_o4-mini_2025-04-16_low.json \
+    --trace-file traces/scicode_honey_openai_gpt-4_1.json \
+    --trace-file traces/scicode_honey_openai_o3_2025.json \
+    --trace-file traces/scicode_honey_openai_o4-mini_2025-04-16_high.json \
+    --trace-file traces/scicode_honey_openai_o4-mini_2025-04-16_low.json \
     --rubric rubric_templates/scicode.txt \
     --rubric-model openai:gpt-5.2 \
-    --inbetween "TMUX= ./deploy_llm.sh" \
-    --sleep 5s \
     --max-batch-messages 400 \
     --inter-batch-delay 0 \
+    --sleep 0s \
     --retries 10 \
     --sort-by-messages \
     -y
 
+
+python scripts/eval_rubric.py \
+    --trace-file traces/scicode_hal_generalist_agent_deepseekaideepseekr1_1753777608_UPLOAD.json \
+    --trace-file traces/scicode_scicode_zero_shot_agent_o4mini20250416_low_1745290900_UPLOAD.json \
+    --trace-file traces/scicode_scicode_zero_shot_agent_o4mini20250416_high_1745429794_UPLOAD.json \
+    --trace-file traces/scicode_scicode_zero_shot_agent_o4mini20250416_1745274271_UPLOAD.json \
+    --trace-file traces/scicode_scicode_zero_shot_agent_o320250416_1745284451_UPLOAD.json \
+    --trace-file traces/scicode_scicode_zero_shot_agent_gpt4120250414_1745265933_UPLOAD.json \
+    --trace-file traces/scicode_scicode_zero_shot_agent_gemini20flash_1745437512_UPLOAD.json \
+    --trace-file traces/scicode_scicode_zero_shot_agent_deepseekaideepseekv3_1745456160_UPLOAD.json \
+    --trace-file traces/scicode_scicode_zero_shot_agent_deepseekaideepseekr1_1753815994_UPLOAD.json \
+    --trace-file traces/scicode_scicode_zero_shot_agent_claude37sonnet20250219_high_1748945506_UPLOAD.json \
+    --trace-file traces/scicode_scicode_zero_shot_agent_claude37sonnet20250219_1745345545_UPLOAD.json \
+    --trace-file traces/scicode_scicode_tool_calling_agent_o4mini20250416_low_1745286980_UPLOAD.json \
+    --trace-file traces/scicode_scicode_tool_calling_agent_o4mini20250416_high_1745414081_UPLOAD.json \
+    --trace-file traces/scicode_scicode_tool_calling_agent_o320250416_1745276105_UPLOAD.json \
+    --trace-file traces/scicode_scicode_tool_calling_agent_deepseekaideepseekr1_1753819405_UPLOAD.json \
+    --trace-file traces/scicode_scicode_tool_calling_agent_claudehaiku45_1760968740_UPLOAD.json \
+    --trace-file traces/scicode_hal_generalist_agent_gemini20flash_1745628676_UPLOAD.json \
+    --trace-file traces/scicode_hal_generalist_agent_deepseekaideepseekv3_1745642054_UPLOAD.json \
+    --trace-file traces/scicode_scicode_tool_calling_agent_gpt5_1754600998_UPLOAD.json \
+    --rubric rubric_templates/scicode.txt \
+    --rubric-model openai:gpt-5.2 \
+    --inbetween "TMUX= ./deploy_llm.sh" \
+    --sleep 15s \
+    --max-batch-messages 400 \
+    --inter-batch-delay 0 \
+    --retries 10 \
+    --sort-by-messages \
+    --sort-by-file-size \
+    -y
+
 python scripts/judge.py \
-    --pattern "scicode_potato_*" \
+    --pattern "scicode_honey_*" \
     --rubric-dir rubrics_output/scicode \
     --model openai:gpt-5.2 \
-    --parallel 5 \
+    --parallel 10 \
     -y
 
 
@@ -328,21 +358,26 @@ unset OPENAI_BASE_URL
 
 ### "No raw_logging_results in trace"
 
+```bash
+python scripts/merge_traces.py --input 'traces/scicode_honey__scicode_honey_openai_gpt-4_1_2025-04-14_*_UPLOAD.json' --output traces/scicode_honey_openai_gpt-4_1_MERGED_UPLOAD.json --force && \
+python scripts/merge_traces.py --input 'traces/scicode_honey__scicode_honey_openai_o3_2025-04-16_medium_*_UPLOAD.json' --output traces/scicode_honey_openai_o3_medium_MERGED_UPLOAD.json --force && \
+python scripts/merge_traces.py --input 'traces/scicode_honey__scicode_honey_openai_o4-mini_2025-04-16_high_*_UPLOAD.json' --output traces/scicode_honey_openai_o4-mini_high_MERGED_UPLOAD.json --force && \
+python scripts/merge_traces.py --input 'traces/scicode_honey__scicode_honey_openai_o4-mini_2025-04-16_low_*_UPLOAD.json' --output traces/scicode_honey_openai_o4-mini_low_MERGED_UPLOAD.json --force
+```
+
 Run Weave extraction first:
 
 ```bash
 python scripts/extract_weave_traces.py \
-  --project ronanhansel-hanoi-university-of-science-and-technology/scicode_potato_scicode \
-  --prefix scicode_potato_openai_gpt-4_1 \
-  --prefix scicode_potato_openai_gpt-5 \
-  --prefix scicode_potato_openai_o3_2025 \
-  --prefix scicode_potato_openai_o4-mini_2025-04-16_high \
-  --prefix scicode_potato_openai_o4-mini_2025-04-16_low \
-  --merge-input traces/scicode_potato_openai_gpt_4.1_2025_04_14_MERGED_scicode_20260117_142658_UPLOAD.json \
-  --merge-input traces/scicode_potato_openai_gpt_5_MERGED_scicode_20260117_142658_UPLOAD.json \
-  --merge-input traces/scicode_potato_openai_o3_2025_04_16_MERGED_scicode_20260117_142658_UPLOAD.json \
-  --merge-input traces/scicode_potato_openai_o4_mini_2025_04_16_high_MERGED_scicode_20260117_142658_UPLOAD.json \
-  --merge-input traces/scicode_potato_openai_o4_mini_2025_04_16_low_MERGED_scicode_20260117_142658_UPLOAD.json
+    --project ronanhansel-hanoi-university-of-science-and-technology/scicode_honey_scicode \
+    --prefix scicode_honey_openai_gpt-4_1 \
+    --prefix scicode_honey_openai_o3_2025 \
+    --prefix scicode_honey_openai_o4-mini_2025-04-16_high \
+    --prefix scicode_honey_openai_o4-mini_2025-04-16_low \
+    --merge-input traces/scicode_honey_openai_gpt-4_1_MERGED_UPLOAD.json \
+    --merge-input traces/scicode_honey_openai_o3_medium_MERGED_UPLOAD.json \
+    --merge-input traces/scicode_honey_openai_o4-mini_high_MERGED_UPLOAD.json \
+    --merge-input traces/scicode_honey_openai_o4-mini_low_MERGED_UPLOAD.json
 ```
 
 ## Key Files
@@ -355,14 +390,6 @@ python scripts/extract_weave_traces.py \
 | `rubric_templates/scicode.txt`   | SciCode Intrinsic Formation Error rubric   |
 | `rubric_templates/corebench.txt` | CoreBench Environmental Barrier rubric     |
 | `rubric_evaluator/cli.py`        | Core rubric evaluation logic with Docent   |
-
-## Models
-
-Recommended models for rubric evaluation:
-
-- `openai:gpt-4o` - Best balance of speed/accuracy (recommended)
-- `openai:gpt-4o-mini` - Fast, good for iteration
-- `azure_openai:gpt-4o` - If using Azure
 
 ```bash
 # Example with different models
@@ -400,7 +427,20 @@ python scripts/run_scicode_fixes.py \
 
 # Pipeline running
 python scripts/run_scicode_fixes.py\
-    --prefix scicode_potato_ \
+    --prefix scicode_honey \
     --parallel 20 \
     --docker
+```
+
+If you're forgetting to download the `test_data.h5` for SciCode benchmark, download it and place it in `./hal-harness/hal/benchmarks/SciCode/eval/data`:
+
+```bash
+# Dry run first (preview what will be done)
+python scripts/reevaluate_scicode.py --prefix scicode_honey --dry-run
+
+# Run the actual re-evaluation
+python scripts/reevaluate_scicode.py --prefix scicode_honey
+
+# Re-evaluate specific tasks only
+python scripts/reevaluate_scicode.py --prefix scicode_honey --task-id 12 --task-id 35
 ```
