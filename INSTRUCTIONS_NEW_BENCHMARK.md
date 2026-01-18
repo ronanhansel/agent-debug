@@ -1,64 +1,175 @@
 # Instructions: Adding a New Benchmark to the Item Fixing Pipeline
 
-This document provides step-by-step instructions for Claude Code to set up a new benchmark for the Item Fixing Pipeline, including rubric templates AND Claude fixer scripts.
+This document provides comprehensive step-by-step instructions for Claude Code to set up a new benchmark for the Item Fixing Pipeline, including rubric templates, Claude fixer scripts, fix runners, and model configurations.
 
 ---
 
 ## Overview
 
 When adding a new benchmark, you need to create:
-1. **Rubric template** - For LLM-based IFE detection
-2. **Claude fixer script** - For automated fix generation
-3. **Fix runner script** (optional) - For applying fixes and re-running evaluation
-4. **Documentation updates** - CLAUDE.md entries
+1. **Rubric template** - For LLM-based IFE detection (`rubric_templates/<benchmark>.txt`)
+2. **Claude fixer script** - For automated fix generation (`scripts/claude_fixer_<benchmark>.py`)
+3. **Fix runner script** - For applying fixes and re-running evaluation (`scripts/run_<benchmark>_fixes.py`)
+4. **Model configuration** - Maps models to baseline traces (`model_to_baseline_<benchmark>.json`)
+5. **Documentation updates** - CLAUDE.md entries
 
 ---
 
-## Step 1: Explore the Benchmark
+## PHASE 1: Deep Understanding of the Benchmark
 
-First, understand the benchmark structure:
+### Step 1.1: Explore the Benchmark Structure
+
+**First, understand the complete harness structure:**
 
 ```bash
+# Find the benchmark implementation
+cat hal-harness/hal/benchmarks/<benchmark_name>.py
+
 # Find the agent implementation
 ls -la hal-harness/agents/ | grep -i <benchmark_name>
+cat hal-harness/agents/<agent_dir>/main.py
 
-# Find the benchmark definition
-cat hal-harness/hal/benchmarks/<benchmark_name>.py
+# Check requirements and dependencies
+cat hal-harness/agents/<agent_dir>/requirements.txt
+
+# Check if there's a submodule with additional code
+ls -la hal-harness/hal/benchmarks/<benchmark_name>/
 ```
 
-Answer these questions:
-- What is the agent's entry point? (e.g., `main.py`, `agent.py`)
-- What function is called? (e.g., `run`, `main.run`)
-- Does it require Docker?
-- What are common failure patterns?
-- How is success/failure determined (metrics, test cases, etc.)?
-- What are the trace file structures?
+**Answer these critical questions:**
 
----
+| Question | Why It Matters |
+|----------|---------------|
+| What is the agent's entry point? | Needed for `--agent_function` in hal-eval |
+| How does the agent framework work? | smolagents, LangChain, custom? Affects sandbox behavior |
+| Does it require Docker? | Affects how files are copied and execution environment |
+| How is success/failure determined? | Metrics, test cases, GPT-4 judge, exact match? |
+| What is the evaluation flow? | Does it run agent code in sandbox or extract code? |
+| What are the task data structures? | Keys like `task_inst`, `problem_statement`, etc. |
+| What packages do gold programs use? | Must be in requirements.txt |
 
-## Step 2: Research Known Issues
+### Step 1.2: Understand the Evaluation Flow
 
-Before creating the rubric, research the benchmark:
+**This is CRITICAL - different benchmarks evaluate differently:**
+
+```python
+# Example: ScienceAgentBench evaluation flow
+# 1. Agent runs in Docker container with smolagents CodeAgent
+# 2. Agent generates code wrapped in ```python blocks
+# 3. recover_pred_from_log.py EXTRACTS code via regex: r"```python(.*?)```"
+# 4. Extracted code runs in SEPARATE Docker container for evaluation
+# 5. Results compared to gold program output
+
+# Key insight: Sandbox "Forbidden function" errors don't matter!
+# The agent just needs to OUTPUT valid code, not EXECUTE it successfully
+```
+
+**Read the evaluation code to understand:**
+```bash
+# Check how results are processed
+grep -r "evaluate\|eval_" hal-harness/hal/benchmarks/<benchmark>*.py
+cat hal-harness/hal/benchmarks/<benchmark_name>/<benchmark_name>/recover_pred_from_log.py
+cat hal-harness/hal/benchmarks/<benchmark_name>/<benchmark_name>/run_eval.py
+```
+
+### Step 1.3: Check Docker/Container Setup
+
+**Understand the Docker runner behavior:**
 
 ```bash
-# Search for known issues, papers, GitHub issues
-# Use WebSearch tool to find:
-# - Academic papers analyzing benchmark limitations
-# - GitHub issues about broken/flaky tasks
-# - Community discussions about evaluation problems
+# Check docker_runner.py for:
+# - Working directory setup (/workspace vs /workspace/environment)
+# - File copying destinations
+# - Environment variable handling
+# - Prepared image caching (requirements hash)
+
+grep -A20 "environment" hal-harness/hal/utils/docker_runner.py
+grep -A10 "_requirements_hash" hal-harness/hal/utils/docker_runner.py
 ```
 
-Document findings about:
-- Known problematic tasks
-- Common false positive/negative patterns
-- Environment/dependency issues
-- Evaluation metric limitations
+**Key Docker insights from ScienceAgentBench debugging:**
+- Prepared images are cached based on hash of: `requirements.txt + base_image_id + template_version`
+- Files copied via `benchmark['files']` dict go to specified destination
+- Working directory may differ from file destination (e.g., `/workspace/environment/` vs `/workspace/`)
+- `run_agent.py` may `chdir()` to a subdirectory before running agent
+
+### Step 1.4: Analyze Gold Programs for Dependencies
+
+**Find ALL packages used by gold/reference programs:**
+
+```bash
+# Extract imports from gold programs
+grep -rh "^import\|^from" hal-harness/hal/benchmarks/<benchmark>/<submodule>/benchmark/gold_programs/*.py \
+    | sed 's/import /\nimport /g; s/from /\nfrom /g' \
+    | grep -E "^import|^from" \
+    | sed 's/import \([a-zA-Z0-9_]*\).*/\1/; s/from \([a-zA-Z0-9_]*\).*/\1/' \
+    | sort | uniq -c | sort -rn | head -40
+```
+
+**Compare with requirements.txt:**
+```bash
+# Check what's already in requirements
+cat hal-harness/agents/<agent_dir>/requirements.txt
+
+# Check what's in AUTHORIZED_IMPORTS (for smolagents)
+grep -A200 "AUTHORIZED_IMPORTS" hal-harness/agents/<agent_dir>/main.py | head -250
+```
 
 ---
 
-## Step 3: Create the Rubric Template
+## PHASE 2: Research Known Issues
 
-Create `rubric_templates/<benchmark_name>.txt` using this structure:
+### Step 2.1: Search for Research-Documented Issues
+
+Use WebSearch to find:
+- Academic papers analyzing the benchmark
+- GitHub issues about broken/flaky tasks
+- Community discussions about evaluation problems
+- Leaderboard submissions with notes
+
+**Search queries to try:**
+- `"<benchmark_name>" benchmark issues limitations`
+- `"<benchmark_name>" evaluation problems`
+- `"<benchmark_name>" github issues`
+- `"<benchmark_name>" paper analysis`
+
+### Step 2.2: Analyze Existing Traces (If Available)
+
+```bash
+# List available traces
+ls -la traces/<benchmark>*.json
+
+# Extract failure patterns
+python -c "
+import json
+from pathlib import Path
+from collections import Counter
+
+errors = Counter()
+for f in Path('traces').glob('<benchmark>*.json'):
+    data = json.loads(f.read_text())
+    for result in data.get('raw_logging_results', []):
+        if 'error' in str(result).lower():
+            # Extract error type
+            pass
+print(errors.most_common(20))
+"
+```
+
+### Step 2.3: Cross-Model Failure Analysis
+
+**Key indicator of IFE: Same task fails across ALL models**
+
+```bash
+# Count tasks that fail across all models
+# This suggests benchmark issue, not agent capability
+```
+
+---
+
+## PHASE 3: Create the Rubric Template
+
+Create `rubric_templates/<benchmark_name>.txt` with this comprehensive structure:
 
 ```markdown
 # <Benchmark Name> Intrinsic Formation Error Detection Rubric
@@ -82,16 +193,42 @@ Even if a defect exists, determine whether it actually prevented success, or whe
 
 ## Deficiency Categories for <Benchmark Name>
 
-### 1. <Category Name>
-<Description>:
-- <Indicator>
-- <Indicator>
+### 1. Environment/Dependency Issues
+Missing or misconfigured packages that block ALL agents:
+- Required package not installed in Docker container
+- Package version conflicts causing import failures
+- Missing system libraries (C headers, CUDA, etc.)
+- Conda environment not properly activated
 
-### 2. <Category Name>
-<Description>:
-- <Indicator>
+### 2. Data/Input Issues
+Problems with task data that prevent any solution:
+- Data files missing or corrupted
+- Data format doesn't match documentation
+- File paths incorrect or inaccessible
+- Encoding issues preventing file reading
 
-[Add 4-6 benchmark-specific categories based on research]
+### 3. Task Specification Issues
+Ambiguous or impossible requirements:
+- Output format requirements unclear or contradictory
+- Task requires information not provided
+- Conflicting instructions between task and evaluation
+- Missing domain knowledge critical for solution
+
+### 4. Evaluation Issues
+Problems with how success is determined:
+- Evaluation script has bugs
+- Numerical tolerance too strict
+- GPT-4 judge penalizes valid alternatives
+- Format-sensitive comparison rejects correct answers
+
+### 5. Gold Program/Reference Issues
+Problems with the reference implementation:
+- Gold program uses unavailable libraries
+- Gold program has hardcoded paths
+- Multiple valid approaches rejected
+- Gold program doesn't match task requirements
+
+[Add benchmark-specific categories based on research]
 
 ---
 
@@ -99,11 +236,29 @@ Even if a defect exists, determine whether it actually prevented success, or whe
 
 Do NOT classify the following as benchmark deficiencies:
 
-### 1. <Agent Issue Type>
-- <Example>
-- These are agent capability issues, not benchmark defects
+### 1. Algorithm/Logic Errors
+- Agent chose wrong approach
+- Agent made calculation mistakes
+- Agent misunderstood the problem
+- These are capability issues, not benchmark defects
 
-[Add 4-6 agent issue categories]
+### 2. Sandbox Limitations (If Code is Extracted)
+- "Forbidden function" errors in smolagents sandbox
+- Import restrictions during agent execution
+- **IF the benchmark extracts code via regex and runs separately, sandbox errors don't matter**
+- Check the evaluation flow before classifying these as IFEs
+
+### 3. API/Network Errors
+- Rate limiting from LLM provider
+- Timeout errors from API calls
+- These are infrastructure issues, not benchmark defects
+
+### 4. Resource Exhaustion
+- Agent ran out of steps
+- Token limit exceeded
+- These indicate agent inefficiency, not benchmark problems
+
+[Add benchmark-specific exclusions]
 
 ---
 
@@ -138,805 +293,253 @@ Respond with a JSON object:
 
 ---
 
-## Common <Benchmark Name> Failure Patterns
-
-### Likely Agent Issues (Score 0):
-- <Pattern>
-- <Pattern>
-
-### Potential Benchmark Issues (Score 1):
-- <Pattern>
-- <Pattern>
-
----
-
 ## Cross-Run Analysis Guidelines
 
 When evaluating IFEs, use evidence from multiple model runs:
 
-### Strong IFE Indicators:
-1. Same error across ALL models
-2. Valid output rejected by evaluation
-3. Environment/dependency issues block ALL models
+### Strong IFE Indicators (Lean toward Score 1):
+1. **Same error across ALL models** - Universal failure suggests benchmark issue
+2. **Valid output rejected** - Evaluation rejects correct answer
+3. **Environment blocks ALL models identically** - Setup issue affects everyone
+4. **Impossible requirements** - No amount of capability could satisfy
 
 ### Weak IFE Indicators (Lean toward Score 0):
-1. Only one model fails with an error
-2. Different error types across models
-3. Some models succeed on the task
+1. **Only one model fails** - Other models succeeded
+2. **Different error types** - Not systematic
+3. **Partial success** - Model got partway, could have done better
+4. **Known solvable** - Other submissions succeeded on this task
 
 ---
 
 ## Exploratory Analysis: Discovering Hidden Benchmark Issues
 
-[Add benchmark-specific investigation prompts - use suggestions rather than strict rules so the LLM can freely explore and reason]
-
 ### Areas to Investigate (Suggestions, Not Rules)
 
-**1. <Domain-Specific Area>**
-Consider whether...
+**1. Evaluation Fairness**
+Consider whether the evaluation method unfairly penalizes valid solutions:
+- Does GPT-4 judge have biases about formatting/style?
+- Are numerical tolerances reasonable for the domain?
+- Do alternative correct approaches get rejected?
 
-**2. <Evaluation Fairness>**
-Examine whether...
+**2. Environment Completeness**
+Examine whether the execution environment is properly configured:
+- Are all packages from gold programs available?
+- Are system dependencies (C libraries, tools) present?
+- Does the working directory match file locations?
+
+**3. Task Clarity**
+Assess whether task requirements are unambiguous:
+- Are output format requirements explicit?
+- Is domain knowledge properly included?
+- Do instructions match evaluation criteria?
 
 ### Questions to Ask Yourself
 
-1. **"Would a domain expert find this solvable?"**
-2. **"Is the evaluation measuring the right thing?"**
-3. **"Could the environment be the problem?"**
+1. **"If I were a perfect agent, could I solve this?"**
+2. **"Is the evaluation measuring what the task asks for?"**
+3. **"Would adding packages/fixing environment allow success?"**
+4. **"Is this a fair test of agent capability?"**
 
 ### Known Problematic Task Patterns
 
 [Add specific task IDs and patterns discovered during trace analysis]
+
+---
+
+## <Benchmark Name>-Specific Evaluation Notes
+
+[Add notes about how this specific benchmark evaluates]
+
+Example for ScienceAgentBench:
+- Agent generates code in ```python blocks
+- Code is EXTRACTED via regex, not executed in sandbox
+- Evaluation runs extracted code in separate Docker container
+- GPT-4 judges figure similarity (subjective)
+- "Forbidden function" sandbox errors are IRRELEVANT to final score
 ```
 
 ---
 
-## Step 4: Analyze Traces (If Available)
+## PHASE 4: Create the Claude Fixer Script
 
-If trace files exist, analyze them to populate the rubric with real data:
+Create `scripts/claude_fixer_<benchmark_name>.py` based on existing templates.
 
-```python
-# Example analysis pattern
-import json
-from pathlib import Path
+**Key components to customize:**
 
-traces_dir = Path("traces")
-for trace_file in traces_dir.glob(f"{benchmark_name}_*.json"):
-    data = json.loads(trace_file.read_text())
-    # Analyze:
-    # - Success/failure rates
-    # - Common error patterns
-    # - Cross-model failure correlation
-```
-
-Update the rubric with:
-- Actual failure statistics (e.g., "67/102 tasks failed across ALL 4 models")
-- Specific problematic task IDs
-- Error message patterns
-
----
-
-## Step 5: Create the Claude Fixer Script
-
-Create `scripts/claude_fixer_<benchmark_name>.py` based on the template:
+### 4.1: Update Constants
 
 ```python
-#!/usr/bin/env python3
-"""
-Claude Code CLI-based <Benchmark Name> Fixer
-
-Uses Claude Code CLI (claude -p) to diagnose and fix Intrinsic Formation Errors (IFEs)
-in <Benchmark Name> tasks WITHOUT nerfing the problems.
-
-Usage:
-    # Process all IFE tasks from rubrics (requires judge verdict)
-    python scripts/claude_fixer_<benchmark_name>.py \
-        --rubric-dir rubrics_output/<benchmark_name> \
-        --judge-csv judge_output/<benchmark_name>_verdict.csv \
-        --trace-files traces/<benchmark_name>_*.json \
-        --ife-only \
-        --tasks-per-batch 5 \
-        --parallel 4
-
-    # Process specific tasks
-    python scripts/claude_fixer_<benchmark_name>.py \
-        --rubric-dir rubrics_output/<benchmark_name> \
-        --task-ids task_1 task_2 task_3 \
-        --tasks-per-batch 3
-
-    # Dry run to preview what would be processed
-    python scripts/claude_fixer_<benchmark_name>.py \
-        --rubric-dir rubrics_output/<benchmark_name> \
-        --ife-only \
-        --dry-run
-"""
-
-from __future__ import annotations
-
-import argparse
-import csv
-import json
-import os
-import subprocess
-import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
-from pathlib import Path
-from threading import Lock
-from typing import Any, Dict, List, Optional, Tuple
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TRACES_DIR = REPO_ROOT / "traces"
 FIXES_DIR = REPO_ROOT / "fixes"
 BENCHMARK = "<benchmark_name>"
-
-# Thread-safe progress tracking
-_progress_lock = Lock()
-_completed_count = 0
-_total_count = 0
-
-# === COPY UTILITY FUNCTIONS FROM claude_fixer_scicode.py ===
-# - log(), log_progress()
-# - has_existing_fix()
-# - load_rubric_results()
-# - load_judge_verdicts()
-# - load_task_conversations()  # Adapt to benchmark's trace structure
-# - format_stream_json()
-# - run_claude_code()
-# - process_task_batch()
-
-def build_claude_prompt_batch(tasks_data: List[Dict[str, Any]]) -> str:
-    """Build the prompt for Claude Code CLI with multiple tasks."""
-
-    # === CUSTOMIZE THIS PROMPT FOR THE BENCHMARK ===
-    # This is a RIGOROUS prompt template - be thorough in error checking
-    prompt = f'''You are diagnosing and fixing Intrinsic Formation Errors (IFEs) in <Benchmark Name> tasks.
-
-## CRITICAL CONSTRAINTS
-1. **FIX INTRINSIC FORMATION ERRORS ONLY** - Do NOT make the problem easier
-2. **PRESERVE DIFFICULTY** - The task should remain as challenging as intended
-3. **NO NERFING** - Do not simplify, give hints, or pre-compute results
-
-## <BENCHMARK NAME> HARNESS STRUCTURE
-
-**First, read these files to understand the benchmark:**
-- `hal-harness/hal/benchmarks/<benchmark_name>.py` - Main benchmark class
-- `hal-harness/agents/<agent_dir>/` - Agent implementation
-- [Other relevant files specific to this benchmark]
-
-**How Evaluation Works:**
-[Describe the evaluation process specific to this benchmark]
-
-## THOROUGH ERROR ANALYSIS CHECKLIST
-
-For EACH task, systematically check ALL of these potential error sources:
-
-### 1. Environment/Dependency Issues
-- [ ] Missing Python packages in Docker container
-- [ ] Package version conflicts between dependencies
-- [ ] Missing system libraries (C headers, compilers)
-- [ ] Conda vs pip installation conflicts
-- [ ] GPU/CUDA requirements not met
-- [ ] Memory/timeout limits too restrictive
-
-### 2. Data/Input Issues
-- [ ] Missing or corrupted data files
-- [ ] Data format differs from documentation
-- [ ] Column names don't match task description
-- [ ] Encoding issues (UTF-8, binary files)
-- [ ] Relative vs absolute path issues
-
-### 3. Task Specification Issues
-- [ ] Ambiguous output format requirements
-- [ ] Unclear success criteria
-- [ ] Missing domain knowledge in instructions
-- [ ] Conflicting requirements between steps
-- [ ] Unstated assumptions from source papers
-
-### 4. Evaluation Script Issues
-- [ ] Numerical tolerance too strict
-- [ ] Format-sensitive comparison (whitespace, ordering)
-- [ ] Evaluation crashes on valid outputs
-- [ ] Metrics don't match task description
-- [ ] GPT-4 judge subjectivity (for figure tasks)
-
-### 5. Gold Program/Reference Issues
-- [ ] Gold program has hardcoded paths
-- [ ] Gold program uses unavailable libraries
-- [ ] Multiple valid approaches rejected
-- [ ] Gold program doesn't match task requirements
-
-### 6. Cross-Model Failure Patterns
-- [ ] Same error across ALL models → likely IFE
-- [ ] Valid output rejected by evaluation → evaluation issue
-- [ ] Environment blocks ALL models identically → setup issue
-
-## KNOWN IFE PATTERNS FOR <BENCHMARK NAME>
-
-[List known patterns from trace analysis - be specific with task IDs and error messages]
-
-## FIX OUTPUT FORMAT
-
-For each task that needs a fix, create: `fixes/<benchmark_name>/TASK_ID/`
-
-**Environment Fixes** (`env_override.json`):
-```json
-{{
-  "HAL_CONDA_PACKAGES": "package1 package2",
-  "HAL_PIP_PACKAGES": "package3",
-  "HAL_SYSTEM_PACKAGES": "libfoo-dev cmake",
-  "HAL_TIMEOUT_SECONDS": 600,
-  "notes": "Justification for these changes"
-}}
 ```
 
-**Evaluation Fixes** (`evaluation_override.json`):
-```json
-{{
-  "tolerance": 1e-4,
-  "allow_alternative_outputs": true,
-  "skip_format_check": false,
-  "notes": "Justification for tolerance adjustment"
-}}
+### 4.2: Adapt Trace Loading
+
+Different benchmarks store task data differently:
+
+```python
+def load_task_conversations(trace_files: List[str], task_ids: Set[str]) -> Dict[str, str]:
+    """Extract agent conversations from trace files.
+
+    CUSTOMIZE THIS for your benchmark's trace structure.
+    """
+    conversations = {}
+
+    for trace_file in trace_files:
+        data = json.loads(Path(trace_file).read_text())
+
+        # ScienceAgentBench format:
+        for result in data.get("raw_logging_results", []):
+            task_id = str(result.get("inputs", {}).get("task_id", ""))
+            # Extract conversation...
+
+        # SciCode format:
+        for result in data.get("raw_logging_results", []):
+            task_id = result.get("inputs", {}).get("task_id", "")
+            # Extract conversation...
+
+        # Other benchmarks may have different structures
+
+    return conversations
 ```
 
-**Instruction Clarifications** (`instruction_override.json`):
-```json
-{{
-  "clarifications": [
-    "Use scipy.integrate.simpson instead of deprecated simps",
-    "Output file should be named exactly 'results.csv'"
-  ],
-  "additional_context": "Any missing domain knowledge to include"
-}}
-```
+### 4.3: Customize the Claude Prompt
 
-**Documentation** (`README.md`):
-- Root cause analysis of the IFE
-- What fix was applied and why
-- Why this preserves task difficulty
-- Expected outcome after fix
+The prompt should include:
+1. Benchmark-specific harness files to read
+2. Evaluation flow description
+3. Known IFE patterns from trace analysis
+4. Thorough error analysis checklist
+5. Fix format appropriate for the benchmark
 
-## FIX RUNNER SCRIPT GENERATION
-
-After creating fixes, also update or create the fix runner script:
-`scripts/run_<benchmark_name>_fixes.py`
-
-The fix runner must:
-1. Load fixes from `fixes/<benchmark_name>/<task_id>/`
-2. Apply environment overrides before evaluation
-3. Inject instruction clarifications into prompts
-4. Adjust evaluation parameters as specified
-5. Run HAL evaluation with the fixes applied
-6. Output new traces with a configurable prefix
-
-**Reference implementation**: See `scripts/run_scicode_fixes.py` for the pattern.
-
-## TASKS TO PROCESS
-
-{tasks_text}
-
-## BEGIN - SYSTEMATIC APPROACH
-
-For EACH task:
-
-1. **Read the benchmark code** to understand evaluation
-2. **Load the specific task** from the dataset/trace
-3. **Analyze ALL error messages** from agent conversations
-4. **Check EACH item** in the error analysis checklist above
-5. **Cross-reference with other models** - same error = likely IFE
-6. **Create fix OR document why no fix needed**
-7. **Verify fix doesn't nerf the problem**
-
-After processing all tasks:
-8. **Update the fix runner script** if new fix types were used
-9. **Test that fixes can be applied** without errors
-
-Remember: Make evaluation FAIR, not EASY. Be THOROUGH in diagnosis.
-'''
-    return prompt
-
-
-def main():
-    global _total_count, _completed_count
-
-    parser = argparse.ArgumentParser(
-        description="Use Claude Code to diagnose and fix <Benchmark Name> IFEs"
-    )
-
-    # Required arguments
-    parser.add_argument(
-        "--rubric-dir", type=str, required=True,
-        help="Directory containing rubric CSV outputs (e.g., rubrics_output/<benchmark>)"
-    )
-
-    # Optional arguments
-    parser.add_argument(
-        "--judge-csv", type=str,
-        help="Path to judge verdict CSV (optional)"
-    )
-    parser.add_argument(
-        "--trace-files", type=str, nargs="+", default=[],
-        help="Trace files to extract conversations from (optional, provides additional context)"
-    )
-    parser.add_argument(
-        "--benchmark", type=str, default="<benchmark_name>",
-        help="Benchmark name (default: <benchmark_name>)"
-    )
-    parser.add_argument(
-        "--task-ids", type=str, nargs="+",
-        help="Specific task IDs to process (default: all with IFEs)"
-    )
-    parser.add_argument(
-        "--max-tasks", type=int,
-        help="Maximum number of tasks to process"
-    )
-    parser.add_argument(
-        "--min-grade", type=float, default=0.5,
-        help="Minimum rubric grade to consider as IFE (default: 0.5)"
-    )
-    parser.add_argument(
-        "--skip-existing", action="store_true",
-        help="Skip tasks that already have fixes"
-    )
-    parser.add_argument(
-        "--parallel", type=int, default=1,
-        help="Number of parallel Claude Code sessions (default: 1)"
-    )
-    parser.add_argument(
-        "--tasks-per-batch", type=int, default=5,
-        help="Number of tasks per Claude session (default: 5)"
-    )
-    parser.add_argument(
-        "--dry-run", action="store_true",
-        help="Preview prompts without running Claude Code"
-    )
-    parser.add_argument(
-        "--ife-only", action="store_true",
-        help="Only process tasks with judge verdict = 1 (confirmed IFEs). Requires --judge-csv."
-    )
-    parser.add_argument(
-        "--prefix", type=str, default="inspect",
-        help="Prefix for logging output (default: inspect)"
-    )
-
-    args = parser.parse_args()
-
-    # Implementation follows pattern from claude_fixer_scicode.py
-    # 1. Load rubric results from --rubric-dir
-    # 2. Load judge verdicts from --judge-csv (if provided)
-    # 3. Load trace conversations from --trace-files (if provided)
-    # 4. Filter tasks based on --ife-only, --task-ids, --min-grade
-    # 5. Group tasks into batches of --tasks-per-batch
-    # 6. Process batches in parallel with --parallel workers
-    # ...
-
-if __name__ == "__main__":
-    main()
-```
-
-**Key customizations needed:**
-1. Update `BENCHMARK` constant
-2. Adapt `load_task_conversations()` to the benchmark's trace structure (different benchmarks store task IDs in different places)
-3. Customize `build_claude_prompt_batch()` with:
-   - Benchmark-specific harness files to read
-   - Evaluation process description
-   - Known IFE patterns from trace analysis
-   - Fix format specific to the benchmark
-
-**CLI Arguments Reference:**
-| Argument | Required | Description |
-|----------|----------|-------------|
-| `--rubric-dir` | Yes | Directory containing rubric CSV outputs |
-| `--judge-csv` | No | Path to judge verdict CSV for IFE filtering |
-| `--trace-files` | No | Trace files to extract conversations from |
-| `--benchmark` | No | Benchmark name (default: from script) |
-| `--task-ids` | No | Specific task IDs to process |
-| `--max-tasks` | No | Maximum number of tasks to process |
-| `--min-grade` | No | Minimum rubric grade for IFE (default: 0.5) |
-| `--skip-existing` | No | Skip tasks that already have fixes |
-| `--parallel` | No | Number of parallel Claude sessions (default: 1) |
-| `--tasks-per-batch` | No | Tasks per Claude session (default: 5) |
-| `--dry-run` | No | Preview without running Claude Code |
-| `--ife-only` | No | Only process confirmed IFEs (requires --judge-csv) |
-| `--prefix` | No | Logging prefix (default: "inspect") |
+**See template in existing INSTRUCTIONS_NEW_BENCHMARK.md Step 5**
 
 ---
 
-## Step 6: Create the Fix Runner Script
+## PHASE 5: Create Model Configuration
 
-Create `scripts/run_<benchmark_name>_fixes.py` to apply fixes and re-run evaluations.
-
-**Reference**: Use `scripts/run_scicode_fixes.py` as a template.
-
-### 6.1 Create Model Configuration File
-
-First, create `model_to_baseline_<benchmark_name>.json` to map models to their configurations:
+Create `model_to_baseline_<benchmark_name>.json`:
 
 ```json
 {
   "openai/gpt-4.1-2025-04-14": {
     "model_id": "openai/gpt-4.1-2025-04-14",
     "short_name": "gpt-4.1",
-    "baseline_trace": "<benchmark>_agent_gpt4120250414_UPLOAD.json",
+    "baseline_trace": "<benchmark>_gpt41_UPLOAD.json",
     "max_steps": 5
   },
   "openai/o3-2025-04-16": {
     "model_id": "openai/o3-2025-04-16",
     "short_name": "o3",
-    "baseline_trace": "<benchmark>_agent_o320250416_UPLOAD.json",
+    "baseline_trace": "<benchmark>_o3_UPLOAD.json",
     "reasoning_effort": "medium",
+    "max_steps": 5
+  },
+  "openai/o4-mini-2025-04-16-low": {
+    "model_id": "openai/o4-mini-2025-04-16",
+    "short_name": "o4-mini-low",
+    "baseline_trace": "<benchmark>_o4mini_low_UPLOAD.json",
+    "reasoning_effort": "low",
     "max_steps": 5
   },
   "openai/o4-mini-2025-04-16-high": {
     "model_id": "openai/o4-mini-2025-04-16",
     "short_name": "o4-mini-high",
-    "baseline_trace": "<benchmark>_agent_o4mini20250416_high_UPLOAD.json",
+    "baseline_trace": "<benchmark>_o4mini_high_UPLOAD.json",
     "reasoning_effort": "high",
-    "max_steps": 5
-  },
-  "anthropic/claude-sonnet-4-5-20250929": {
-    "model_id": "anthropic/claude-sonnet-4-5-20250929",
-    "short_name": "sonnet-4.5",
-    "baseline_trace": "<benchmark>_agent_claudesonnet45_UPLOAD.json",
     "max_steps": 5
   }
 }
 ```
 
-### 6.2 Create Fix Runner Script
+**Fields explained:**
+- `model_id`: Full model identifier for LiteLLM/API
+- `short_name`: Human-readable name for logs/output
+- `baseline_trace`: Original trace file for comparison
+- `reasoning_effort`: For o-series models (low/medium/high)
+- `max_steps`: Agent max iterations
+
+---
+
+## PHASE 6: Create Fix Runner Script
+
+Create `scripts/run_<benchmark_name>_fixes.py`.
+
+**Key customizations:**
+
+### 6.1: Update Paths and Constants
 
 ```python
-#!/usr/bin/env python3
-"""
-Apply <Benchmark Name> fix packages and re-run HAL evaluations.
-
-This script:
-1. Loads model configurations from model_to_baseline_<benchmark>.json
-2. Loads fixes from fixes/<benchmark_name>/<task_id>/
-3. Creates a modified dataset with instruction clarifications injected
-4. Applies environment overrides (packages, timeouts)
-5. Runs HAL evaluation for fixed tasks using the original failing model
-6. Outputs traces with a configurable prefix
-
-Usage:
-    # List available fixes
-    python scripts/run_<benchmark_name>_fixes.py --list-fixes
-
-    # Dry run - see what would happen
-    python scripts/run_<benchmark_name>_fixes.py --task-id 11 --dry-run
-
-    # Run fixes for all failed tasks that have fixes (auto-detects model from rubric)
-    python scripts/run_<benchmark_name>_fixes.py --prefix iter1_ \\
-        --rubric-csv rubrics_output/<benchmark>/<benchmark>_combined.csv --docker
-
-    # Run with specific model override
-    python scripts/run_<benchmark_name>_fixes.py --prefix iter1_ --model gpt-4o
-"""
-
-from __future__ import annotations
-
-import argparse
-import csv
-import json
-import os
-import re
-import subprocess
-from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXES_DIR = REPO_ROOT / "fixes" / "<benchmark_name>"
-TRACES_DIR = REPO_ROOT / "traces"
-HAL_HARNESS = REPO_ROOT / "hal-harness"
 DEFAULT_MODEL_CONFIG = REPO_ROOT / "model_to_baseline_<benchmark_name>.json"
+```
 
-def load_model_config(path: Path) -> Dict[str, Dict[str, Any]]:
-    """Load model_to_baseline_<benchmark>.json and return dict mapping model keys to config.
+### 6.2: Adapt Model Extraction from Run Names
 
-    Format:
-    {
-      "openai/gpt-4.1-2025-04-14": {
-        "model_id": "openai/gpt-4.1-2025-04-14",
-        "short_name": "gpt-4.1",
-        "baseline_trace": "<benchmark>_..._UPLOAD.json",
-        "reasoning_effort": "high",  // optional
-        "max_steps": 5
-      },
-      ...
-    }
-    """
-    if not path.exists():
-        return {}
-    data = json.loads(path.read_text(encoding="utf-8"))
-
-    # Flat dict format - expected format
-    if isinstance(data, dict) and "models" not in data:
-        return data
-
-    # Legacy format with "models" array - convert to flat dict
-    if "models" in data and isinstance(data["models"], list):
-        result = {}
-        for model_entry in data["models"]:
-            model_id = model_entry.get("model_id")
-            if model_id:
-                result[model_id] = model_entry
-        return result
-
-    return {}
-
-def load_rubric_task_models(csv_path: Path) -> List[Tuple[str, str]]:
-    """Load rubric CSV and return list of (task_id, model_id) pairs for failed tasks."""
-    task_model_pairs: List[Tuple[str, str]] = []
-    seen: Set[Tuple[str, str]] = set()
-
-    if not csv_path.exists():
-        return task_model_pairs
-
-    with csv_path.open("r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            task_id = row.get("task_id", "").strip()
-            correct = row.get("correct", "").strip()
-            model_run = row.get("model_run", "").strip()
-
-            # Only include failed tasks (correct=0)
-            if task_id and correct == "0" and model_run:
-                model_id = _extract_model_from_run_name(model_run)
-                if model_id and (task_id, model_id) not in seen:
-                    task_model_pairs.append((task_id, model_id))
-                    seen.add((task_id, model_id))
-
-    return task_model_pairs
-
+```python
 def _extract_model_from_run_name(model_run: str) -> Optional[str]:
-    """Extract model config key from model_run column.
-
-    Customize this function for your benchmark's naming conventions.
-    """
-    # Add patterns specific to your benchmark
+    """Extract model config key from model_run column."""
     patterns = [
-        (r"gpt[\-_]?4[\-_]?1[\-_]?2025", "openai/gpt-4.1-2025-04-14"),
+        (r"gpt[\-_]?4[\-_]?1", "openai/gpt-4.1-2025-04-14"),
         (r"o3[\-_]?2025", "openai/o3-2025-04-16"),
         (r"o4[\-_]?mini.*high", "openai/o4-mini-2025-04-16-high"),
         (r"o4[\-_]?mini.*low", "openai/o4-mini-2025-04-16-low"),
-        (r"claude[\-_]?sonnet[\-_]?4[\-_]?5", "anthropic/claude-sonnet-4-5-20250929"),
+        # Add patterns matching your benchmark's naming conventions
     ]
-
     for pattern, config_key in patterns:
         if re.search(pattern, model_run, re.IGNORECASE):
             return config_key
     return None
+```
 
-def load_fix(task_id: str) -> Dict[str, Any]:
-    """Load all fix files for a task."""
-    fix_dir = FIXES_DIR / task_id
-    fix = {"task_id": task_id, "exists": fix_dir.exists()}
+### 6.3: Adapt Instruction Injection
 
-    if fix_dir.exists():
-        for fix_file in ["env_override.json", "instruction_override.json",
-                         "evaluation_override.json"]:
-            path = fix_dir / fix_file
-            if path.exists():
-                fix[fix_file.replace(".json", "")] = json.loads(path.read_text())
-
-    return fix
-
-def apply_env_override(fix: Dict[str, Any]) -> Dict[str, str]:
-    """Convert env_override to environment variables."""
-    env = os.environ.copy()
-    if "env_override" in fix:
-        override = fix["env_override"]
-        for key in ["HAL_CONDA_PACKAGES", "HAL_PIP_PACKAGES", "HAL_APT_PACKAGES",
-                    "HAL_CONDA_CHANNELS", "HAL_TIMEOUT_SECONDS"]:
-            if key in override:
-                env[key] = str(override[key])
-    return env
-
+```python
 def inject_instruction_clarifications(task_data: Dict, fix: Dict) -> Dict:
-    """Inject instruction clarifications into task prompt."""
-    if "instruction_override" not in fix:
-        return task_data
-
-    clarifications = fix["instruction_override"].get("clarifications", [])
-    additional_context = fix["instruction_override"].get("additional_context", "")
-
-    if not clarifications and not additional_context:
-        return task_data
-
-    # Build clarification text
-    clarification_text = ""
-    if clarifications:
-        clarification_text += "\n\n**IMPORTANT CLARIFICATIONS:**\n" + \
-                            "\n".join(f"- {c}" for c in clarifications)
-    if additional_context:
-        clarification_text += f"\n\n**ADDITIONAL CONTEXT:**\n{additional_context}"
-
-    # Modify task_data based on benchmark structure (customize for your benchmark)
-    if "problem_statement" in task_data:
-        task_data["problem_statement"] += clarification_text
-    elif "instructions" in task_data:
-        task_data["instructions"] += clarification_text
-    elif "task_inst" in task_data:  # ScienceAgentBench format
+    """Inject clarifications - customize key names for your benchmark."""
+    # ScienceAgentBench uses "task_inst"
+    # SciCode uses "problem_statement"
+    # SWE-bench uses "problem_statement"
+    if "task_inst" in task_data:
         task_data["task_inst"] += clarification_text
-
+    elif "problem_statement" in task_data:
+        task_data["problem_statement"] += clarification_text
     return task_data
-
-def run_hal_evaluation(task_id: str, model_config: Dict[str, Any], fix: Dict[str, Any],
-                       prefix: str, docker: bool = False) -> int:
-    """Run HAL evaluation with fixes applied for a single task+model."""
-    model_id = model_config.get("model_id", "gpt-4o")
-    short_name = model_config.get("short_name", "model")
-    reasoning_effort = model_config.get("reasoning_effort")
-    max_steps = model_config.get("max_steps", 5)
-
-    # Build HAL command
-    cmd = [
-        "hal-eval",
-        "--benchmark", "<benchmark_name>",
-        "--agent_dir", "agents/<agent_dir>/",
-        "--agent_function", "<function_name>",
-        "--agent_name", f"Fixed Agent ({short_name})",
-        "-A", f"model_name={model_id}",
-        "-A", f"max_steps={max_steps}",
-        "--run_id", f"{prefix}{short_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-        "--task_ids", task_id,
-    ]
-
-    if reasoning_effort:
-        cmd.extend(["-A", f"reasoning_effort={reasoning_effort}"])
-
-    if docker:
-        cmd.append("--docker")
-
-    # Apply environment overrides from fix
-    env = apply_env_override(fix)
-
-    # Run evaluation
-    result = subprocess.run(cmd, cwd=HAL_HARNESS, env=env)
-    return result.returncode
-
-def main():
-    parser = argparse.ArgumentParser(description="Run <Benchmark Name> with fixes applied")
-    parser.add_argument("--list-fixes", action="store_true", help="List available fixes")
-    parser.add_argument("--task-id", action="append", dest="task_ids", help="Task IDs to run")
-    parser.add_argument("--rubric-csv", type=str, help="Rubric CSV to get failed task/model pairs")
-    parser.add_argument("--model-config", type=str, default=str(DEFAULT_MODEL_CONFIG),
-                        help="Path to model configuration JSON")
-    parser.add_argument("--prefix", type=str, default="fixed_", help="Output prefix")
-    parser.add_argument("--model", type=str, help="Override model for all tasks")
-    parser.add_argument("--docker", action="store_true", help="Use Docker execution")
-    parser.add_argument("--dry-run", action="store_true", help="Preview without running")
-
-    args = parser.parse_args()
-
-    # Load model configurations
-    model_configs = load_model_config(Path(args.model_config))
-
-    if args.list_fixes:
-        for fix_dir in sorted(FIXES_DIR.iterdir()):
-            if fix_dir.is_dir():
-                fix = load_fix(fix_dir.name)
-                print(f"{fix_dir.name}: {list(fix.keys())}")
-        return
-
-    # Determine task/model pairs to run
-    if args.rubric_csv:
-        # Get failed task/model pairs from rubric
-        task_model_pairs = load_rubric_task_models(Path(args.rubric_csv))
-        # Filter to only tasks with fixes
-        task_model_pairs = [(tid, mid) for tid, mid in task_model_pairs
-                           if (FIXES_DIR / tid).exists()]
-    elif args.task_ids:
-        # Use specified tasks with default or override model
-        default_model = args.model or list(model_configs.keys())[0] if model_configs else "gpt-4o"
-        task_model_pairs = [(tid, default_model) for tid in args.task_ids]
-    else:
-        # All fixes with default model
-        default_model = args.model or list(model_configs.keys())[0] if model_configs else "gpt-4o"
-        task_model_pairs = [(d.name, default_model) for d in FIXES_DIR.iterdir() if d.is_dir()]
-
-    if args.dry_run:
-        print(f"Would run {len(task_model_pairs)} task/model pairs:")
-        for tid, mid in task_model_pairs:
-            fix = load_fix(tid)
-            config = model_configs.get(mid, {"short_name": mid})
-            print(f"  {tid} with {config.get('short_name', mid)}: {list(fix.keys())}")
-        return
-
-    # Run evaluations
-    for task_id, model_id in task_model_pairs:
-        fix = load_fix(task_id)
-        config = model_configs.get(model_id, {"model_id": model_id, "short_name": model_id})
-        print(f"Running {task_id} with {config.get('short_name', model_id)}...")
-        run_hal_evaluation(task_id, config, fix, args.prefix, args.docker)
-
-if __name__ == "__main__":
-    main()
-```
-
-**Key customizations needed:**
-1. Update `<benchmark_name>`, agent directory, function name
-2. Update `_extract_model_from_run_name()` patterns for your benchmark's naming
-3. Adapt `inject_instruction_clarifications()` for benchmark's task structure (key names)
-4. Create corresponding `model_to_baseline_<benchmark>.json` configuration file
-5. Handle evaluation override parameters if needed
-
----
-
-## Step 7: Create Output Directories
-
-```bash
-mkdir -p rubrics_output/<benchmark_name>
-mkdir -p fixes/<benchmark_name>
 ```
 
 ---
 
-## Step 8: Update CLAUDE.md
+## PHASE 7: Testing and Validation
 
-### 8.1 Add to Supported Benchmarks Table
+### 7.1: Test Docker Image Build
 
-Find the "Supported Benchmarks" table and add:
-
-```markdown
-| **<Benchmark Name>** | `agents/<agent_dir>/` | `rubric_templates/<benchmark>.txt` | Ready |
-```
-
-### 8.2 Add Benchmark-Specific Details Section
-
-Add a new section under "Benchmark-Specific Details":
-
-```markdown
-### <Benchmark Name>
-**Purpose**: <One line description>
-
-**Agent**: `hal-harness/agents/<agent_dir>/`
-- <Key feature 1>
-- <Key feature 2>
-
-**Common Issues**:
-- <Issue 1>
-- <Issue 2>
-
-**Known Research-Documented Issues** (if any):
-- <Issue from papers/analysis>
-- <Issue from trace analysis>
-
-**Rubric Features** (`rubric_templates/<benchmark>.txt`):
-- <Key rubric feature 1>
-- <Key rubric feature 2>
-
-**Fixer Script**: `scripts/claude_fixer_<benchmark>.py`
-- Diagnoses IFEs from rubric evaluations and traces
-- Creates fixes in `fixes/<benchmark>/<task_id>/`
-
-**Evaluation**: <How tasks are evaluated>
-
-**HAL Command**:
 ```bash
+# Delete old cached images to force rebuild
+docker images | grep agent-env | awk '{print $3}' | xargs -r docker rmi -f
+
+# Clear Docker build cache
+docker builder prune -af
+
+# Run hal-eval to trigger fresh build
 hal-eval --benchmark <benchmark_name> \
     --agent_dir agents/<agent_dir>/ \
-    --agent_function <function_name> \
-    --agent_name "<Agent Name>" \
+    --agent_function main.run \
+    --agent_name "test" \
+    --docker \
+    --max_tasks 1 \
     -A model_name=gpt-4o
 ```
+
+### 7.2: Verify File Paths in Container
+
+```bash
+# Check a running container to verify file locations
+docker exec <container_id> bash -c "pwd && ls -la && ls -la benchmark/datasets/ 2>/dev/null || echo 'not found'"
 ```
 
-### 8.3 Add to Quick Reference Table
-
-Find the "Quick Reference" table and add:
-
-```markdown
-| <Benchmark Name> | `<benchmark>.txt` | <Key focus areas> |
-```
-
----
-
-## Step 9: Test the Setup
-
-### 9.1 Run Rubric Evaluation
+### 7.3: Test Rubric Evaluation
 
 ```bash
 python scripts/eval_rubric.py \
@@ -946,126 +549,157 @@ python scripts/eval_rubric.py \
     --failed-only -y
 ```
 
-### 9.2 Aggregate Verdicts
+### 7.4: Test Fix Runner
 
 ```bash
-python scripts/judge.py \
-    --rubric-dir rubrics_output/<benchmark> \
-    --output judge_output/<benchmark>_verdict.csv
-```
-
-### 9.3 Test Fixer Script
-
-```bash
-# Dry run to see what tasks would be processed
-python scripts/claude_fixer_<benchmark>.py \
-    --rubric-dir rubrics_output/<benchmark> \
-    --judge-csv judge_output/<benchmark>_verdict.csv \
-    --ife-only \
-    --dry-run
-
-# Test with specific tasks
-python scripts/claude_fixer_<benchmark>.py \
-    --rubric-dir rubrics_output/<benchmark> \
-    --task-ids task_1 task_2 \
-    --tasks-per-batch 2
-
-# Full run with all IFE tasks (parallel processing)
-python scripts/claude_fixer_<benchmark>.py \
-    --rubric-dir rubrics_output/<benchmark> \
-    --judge-csv judge_output/<benchmark>_verdict.csv \
-    --trace-files traces/<benchmark>_*.json \
-    --ife-only \
-    --tasks-per-batch 5 \
-    --parallel 4 \
-    --skip-existing
-```
-
-### 9.4 Test Fix Runner Script
-
-```bash
-# List available fixes
+# List fixes
 python scripts/run_<benchmark>_fixes.py --list-fixes
 
 # Dry run
-python scripts/run_<benchmark>_fixes.py --task-id <some_id> --dry-run
+python scripts/run_<benchmark>_fixes.py --task-id <id> --dry-run
 
-# Run with fixes applied
-python scripts/run_<benchmark>_fixes.py --task-id <some_id> --prefix fixed_
+# Actual run
+python scripts/run_<benchmark>_fixes.py --task-id <id> --prefix test_
 ```
+
+---
+
+## Common Issues and Solutions
+
+### Issue: Docker Cache Not Invalidating
+
+**Symptoms:** Same hash appears after changing requirements.txt
+
+**Solution:**
+```bash
+# 1. Stop all running containers
+docker ps -q | xargs -r docker stop
+docker ps -aq | xargs -r docker rm -f
+
+# 2. Delete prepared images
+docker images | grep agent-env | awk '{print $3}' | xargs -r docker rmi -f
+
+# 3. Clear build cache
+docker builder prune -af
+
+# 4. Re-run evaluation
+```
+
+### Issue: Files Not Found in Container
+
+**Symptoms:** `FileNotFoundError: benchmark/datasets/...`
+
+**Solution:** Check that file destination matches working directory:
+```python
+# In benchmark.py, ensure files go to correct location
+# If run_agent.py does: os.chdir("/workspace/environment")
+# Then files must be copied to: "environment/benchmark/datasets/"
+# NOT: "benchmark/datasets/"
+```
+
+### Issue: API Timeouts / Rate Limiting
+
+**Symptoms:** `openai.APITimeoutError: Request timed out`
+
+**Solution:** Reduce parallelism:
+```bash
+# Instead of --parallel 20, use --parallel 5
+python scripts/run_<benchmark>_fixes.py --parallel 5
+```
+
+### Issue: Sandbox "Forbidden Function" Errors
+
+**Symptoms:** `InterpreterError: Forbidden function evaluation: 'open'`
+
+**First, check if it matters:**
+- If evaluation EXTRACTS code via regex → sandbox errors are IRRELEVANT
+- If evaluation RUNS code in sandbox → need to fix AUTHORIZED_IMPORTS
+
+**For extraction-based evaluation:** Ignore these errors in rubric evaluation.
+
+**For sandbox-based evaluation:** Add to AUTHORIZED_IMPORTS in main.py.
+
+### Issue: Missing Packages
+
+**Symptoms:** `ModuleNotFoundError: No module named 'xxx'`
+
+**Solution:**
+1. Add to `agents/<agent_dir>/requirements.txt`
+2. Add to `AUTHORIZED_IMPORTS` in `main.py` (for smolagents)
+3. Delete Docker cache and rebuild
 
 ---
 
 ## Checklist
 
-### Rubric Setup
-- [ ] Explored benchmark (agent location, evaluation method)
-- [ ] Researched known issues (papers, GitHub issues, community)
-- [ ] Analyzed traces (if available) for failure patterns
-- [ ] Created `rubric_templates/<benchmark>.txt` with:
-  - [ ] Benchmark-specific deficiency categories
-  - [ ] Agent capability exclusions
-  - [ ] Cross-run analysis guidelines
-  - [ ] Exploratory analysis section
-  - [ ] Known problematic task patterns
+### Phase 1: Understanding
+- [ ] Read benchmark implementation (`hal/benchmarks/<benchmark>.py`)
+- [ ] Read agent implementation (`agents/<agent_dir>/main.py`)
+- [ ] Understand evaluation flow (sandbox vs extraction)
+- [ ] Understand Docker/file path setup
+- [ ] Extract all imports from gold programs
+- [ ] Compare with requirements.txt and AUTHORIZED_IMPORTS
 
-### Fixer Script Setup
-- [ ] Created `scripts/claude_fixer_<benchmark>.py` with:
-  - [ ] Correct `BENCHMARK` constant
-  - [ ] Standard CLI interface (--rubric-dir, --judge-csv, --trace-files, --task-ids, --ife-only, --parallel, --tasks-per-batch, --dry-run, etc.)
-  - [ ] Adapted trace loading for benchmark structure
-  - [ ] Customized prompt with benchmark-specific context
-  - [ ] Thorough error analysis checklist in prompt
-  - [ ] Fix format appropriate for benchmark
-  - [ ] Fix runner generation instructions in prompt
+### Phase 2: Research
+- [ ] Search for known benchmark issues (papers, GitHub)
+- [ ] Analyze existing traces for failure patterns
+- [ ] Identify cross-model failure patterns
 
-### Fix Runner Script Setup
-- [ ] Created `model_to_baseline_<benchmark>.json` with:
-  - [ ] Model ID mappings for all tested models
-  - [ ] Baseline trace file references
-  - [ ] Reasoning effort settings (for o-series models)
-  - [ ] Max steps and other agent parameters
-- [ ] Created `scripts/run_<benchmark>_fixes.py` with:
-  - [ ] Load model config from `model_to_baseline_<benchmark>.json`
-  - [ ] Load fixes from `fixes/<benchmark>/<task_id>/`
-  - [ ] Apply environment overrides
-  - [ ] Inject instruction clarifications
-  - [ ] Apply evaluation parameter adjustments
-  - [ ] Run HAL evaluation with modified config
-  - [ ] Output traces with configurable prefix
-  - [ ] Support `--rubric-csv` for auto-detecting failed task/model pairs
+### Phase 3: Rubric
+- [ ] Create `rubric_templates/<benchmark>.txt`
+- [ ] Include benchmark-specific deficiency categories
+- [ ] Include proper exclusions (sandbox errors if extraction-based)
+- [ ] Add cross-run analysis guidelines
+- [ ] Add known problematic task patterns
 
-### Documentation
-- [ ] Updated CLAUDE.md: Supported Benchmarks table
-- [ ] Updated CLAUDE.md: Benchmark-Specific Details section
-- [ ] Updated CLAUDE.md: Quick Reference table
-- [ ] Updated CLAUDE.md: Fixer Scripts section
+### Phase 4: Fixer Script
+- [ ] Create `scripts/claude_fixer_<benchmark>.py`
+- [ ] Adapt trace loading for benchmark structure
+- [ ] Customize prompt with benchmark specifics
+- [ ] Include thorough error analysis checklist
+
+### Phase 5: Model Config
+- [ ] Create `model_to_baseline_<benchmark>.json`
+- [ ] Include all tested models
+- [ ] Include reasoning_effort for o-series
+- [ ] Reference correct baseline trace files
+
+### Phase 6: Fix Runner
+- [ ] Create `scripts/run_<benchmark>_fixes.py`
+- [ ] Adapt model extraction patterns
+- [ ] Adapt instruction injection for task structure
+- [ ] Test with --dry-run
+
+### Phase 7: Documentation
+- [ ] Update CLAUDE.md: Supported Benchmarks table
+- [ ] Update CLAUDE.md: Benchmark-Specific Details section
+- [ ] Update CLAUDE.md: Fixer Scripts section
+- [ ] Create output directories
 
 ### Directories
-- [ ] Created `rubrics_output/<benchmark>/`
-- [ ] Created `fixes/<benchmark>/`
+- [ ] Create `rubrics_output/<benchmark>/`
+- [ ] Create `fixes/<benchmark>/`
 
 ---
 
 ## Reference: Existing Implementations
 
-Use these as templates:
-
-| Benchmark | Rubric Template | Fixer Script | Fix Runner | Key Features |
-|-----------|----------------|--------------|------------|--------------|
-| SciCode | `scicode.txt` | `claude_fixer_scicode.py` | `run_scicode_fixes.py` | Dependency constraints, test tolerance |
-| SWE-bench | `swebench.txt` | N/A | N/A | Cross-run validation, known flaky tasks |
-| AssistantBench | `assistantbench.txt` | N/A | N/A | Bot detection, environment blocking |
-| ScienceAgentBench | `scienceagentbench.txt` | `claude_fixer_scienceagentbench.py` | `run_scienceagentbench_fixes.py` | Domain libraries, figure evaluation |
-| CoreBench | `corebench.txt` | N/A | `run_corebench_fixes.py` | Docker/container issues |
-| USACO | `usaco.txt` | N/A | `run_usaco_fixes.py` | Algorithm correctness, time limits |
+| Benchmark | Rubric | Fixer | Fix Runner | Model Config | Key Notes |
+|-----------|--------|-------|------------|--------------|-----------|
+| SciCode | `scicode.txt` | `claude_fixer_scicode.py` | `run_scicode_fixes.py` | `model_to_baseline_scicode.json` | Sandbox execution, import restrictions |
+| ScienceAgentBench | `scienceagentbench.txt` | `claude_fixer_scienceagentbench.py` | `run_scienceagentbench_fixes.py` | `model_to_baseline_scienceagentbench.json` | Code extraction via regex, sandbox errors irrelevant |
+| CoreBench | `corebench.txt` | N/A | `run_corebench_fixes.py` | N/A | Docker container issues |
+| SWE-bench | `swebench.txt` | N/A | N/A | N/A | Cross-run validation |
+| USACO | `usaco.txt` | N/A | `run_usaco_fixes.py` | N/A | Algorithm correctness |
+| AssistantBench | `assistantbench.txt` | N/A | N/A | N/A | Web accessibility |
 
 ---
 
-## Notes
+## Key Principles
 
-- The unified schema (`rubric_templates/rubric.schema.json`) is automatically used
-- Focus deficiency categories on issues specific to the benchmark's domain
-- Err on the side of classifying issues as agent capability problems (Score 0)
-- Use exploratory prompts (suggestions) rather than strict rules in rubrics
-- Key principle for fixers: Make evaluation FAIR, not EASY
+1. **Understand before fixing** - Deep dive into benchmark code before writing rubrics
+2. **Check evaluation flow** - Sandbox errors may be irrelevant if code is extracted
+3. **Cross-model analysis** - Universal failures indicate IFE, single-model failures don't
+4. **Make fair, not easy** - Fixes should enable success, not guarantee it
+5. **Test Docker setup** - File paths and working directories are common issues
+6. **Document everything** - Future agents need to understand your reasoning

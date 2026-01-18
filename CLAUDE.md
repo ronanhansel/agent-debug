@@ -228,22 +228,50 @@ hal-eval --benchmark assistantbench \
 ### ScienceAgentBench
 **Purpose**: Scientific data-driven discovery
 
-**Agent**: `hal-harness/hal/benchmarks/scienceagentbench/ScienceAgentBench/agent.py`
+**Agent**: `hal-harness/agents/hal_generalist_agent/`
 - 102 tasks across 4 scientific domains (bioinformatics, chemistry, GIS, psychology)
-- Uses ScienceAgent class with LLM engines
-- Optional self-debug mechanism
-- Docker-based evaluation
+- Uses smolagents CodeAgent with sandboxed PythonInterpreterTool
+- Docker-based execution with prepared images
+
+**CRITICAL: Evaluation Flow**
+```
+1. Agent runs in Docker with smolagents CodeAgent
+2. Agent generates code wrapped in ```python blocks
+3. recover_pred_from_log.py EXTRACTS code via regex: r"```python(.*?)```"
+4. Extracted code runs in SEPARATE Docker container
+5. Results compared to gold program output
+```
+**Key insight**: Sandbox "Forbidden function" errors are IRRELEVANT to final score!
+The agent just needs to OUTPUT valid code, not EXECUTE it successfully in sandbox.
+
+**Docker/File Path Setup**:
+- Prepared images cached by hash of: `requirements.txt + base_image_id + template_version`
+- Files copied to `environment/benchmark/datasets/` (NOT `benchmark/datasets/`)
+- Working directory is `/workspace/environment/` (set by `run_agent.py` chdir)
+- If files not found, check that `scienceagentbench.py` copies to correct destination
+
+**Required Packages** (in `agents/hal_generalist_agent/requirements.txt`):
+- Core: matplotlib, numpy, scipy, scikit-learn, h5py, tables
+- Bioinformatics: scanpy, anndata, mudata, muon, leidenalg, biopython
+- Neuroimaging: mne, neurokit2, biopsykit
+- Chemistry: rdkit, deepchem, pubchempy, pymatgen
+- Geospatial: scitools-iris, cartopy, geopandas, xarray, geoplot, eofs, rasterio, fiona
+- Cognitive: ccobra
+- ML: catboost
+
+**AUTHORIZED_IMPORTS** (in `agents/hal_generalist_agent/main.py`):
+All packages above must also be in AUTHORIZED_IMPORTS for smolagents sandbox.
 
 **Common Issues**:
-- Dataset files missing or corrupted
-- Evaluation scripts have bugs
-- Required libraries not in container
-- Output format requirements unclear
+- **File not found**: Check file destination vs working directory mismatch
+- **Docker cache**: Delete old images (`docker images | grep agent-env`) and clear build cache
+- **API timeout**: Reduce parallelism (use `--parallel 5` instead of 20)
+- **Sandbox forbidden**: These errors are IRRELEVANT - code is extracted via regex
 
 **Known Research-Documented Issues** (from benchmark paper and trace analysis):
 - **High Universal Failure Rate**: 67/102 tasks failed across ALL 4 models (GPT-4.1, O3, O4-mini)
 - **Figure Evaluation Subjectivity**: GPT-4 judge penalizes color schemes, axis labels, layout differences
-- **Domain Library Gaps**: `oggm`, `mastml`, `mne`, `biopsykit` often missing from environment
+- **Domain Library Gaps**: Packages like `oggm`, `mastml`, `mne`, `biopsykit` needed
 - **Acknowledged Evaluation Noise**: Authors note "subjective variance in color, scale, and labeling"
 - **Partial Credit Issues**: "Functionally equivalent implementations may receive lower scores"
 
@@ -253,21 +281,42 @@ hal-eval --benchmark assistantbench \
 - Domain-specific library availability investigation
 - Known problematic task patterns (Tasks 74, 43, 2 for environment issues)
 - Exploratory questions for subjective evaluation fairness
+- **CRITICAL EXCLUSION**: Sandbox "Forbidden function" errors (code is extracted, not executed)
 
 **Fixer Script**: `scripts/claude_fixer_scienceagentbench.py`
 - Diagnoses IFEs from rubric evaluations and agent traces
 - Creates fixes in `fixes/scienceagentbench/<task_id>/`
 - Handles missing domain libraries, figure evaluation adjustments, tolerance settings
 
+**Fix Runner**: `scripts/run_scienceagentbench_fixes.py`
+- Applies fixes and re-runs evaluation
+- Uses `model_to_baseline_scienceagentbench.json` for model configs
+
 **Metrics**: Valid Execution Rate (VER), Success Rate (SR), CodeBERTScore (CBS)
 
 **HAL Command**:
 ```bash
 hal-eval --benchmark scienceagentbench \
-    --agent_dir hal/benchmarks/scienceagentbench/ScienceAgentBench/ \
-    --agent_function agent.run \
-    --agent_name "Science Agent" \
-    -A model_name=gpt-4o
+    --agent_dir agents/hal_generalist_agent/ \
+    --agent_function main.run \
+    --agent_name "sab_prefix_" \
+    --docker \
+    --max_concurrent 5 \
+    -A model_name=openai/gpt-4.1-2025-04-14 \
+    -A max_steps=5
+```
+
+**Debugging Docker Issues**:
+```bash
+# Check running containers
+docker ps --format "{{.ID}}\t{{.Status}}"
+
+# Check files in container
+docker exec <container_id> bash -c "pwd && ls -la benchmark/datasets/"
+
+# Force rebuild (delete cache)
+docker images | grep agent-env | awk '{print $3}' | xargs -r docker rmi -f
+docker builder prune -af
 ```
 
 ---

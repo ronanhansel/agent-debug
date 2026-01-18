@@ -1,0 +1,808 @@
+#!/usr/bin/env python3
+"""
+Apply ScienceAgentBench fix packages and re-run HAL evaluations.
+
+This script:
+1. Loads model configurations from model_to_baseline_scienceagentbench.json
+2. Loads fixes from fixes/scienceagentbench/<task_id>/
+3. Creates a modified dataset with instruction clarifications injected
+4. Runs HAL evaluation for fixed tasks using the original failing model
+5. Outputs traces with a configurable prefix
+
+Usage:
+    # List available fixes
+    python scripts/run_scienceagentbench_fixes.py --list-fixes
+
+    # Verify fixes are applied correctly (without running HAL)
+    python scripts/run_scienceagentbench_fixes.py --verify-fixes
+
+    # Dry run - see what would happen
+    python scripts/run_scienceagentbench_fixes.py --task-id 74 --dry-run
+
+    # Run fixes for specific tasks
+    python scripts/run_scienceagentbench_fixes.py --task-id 74 --prefix fixed_ --docker
+
+    # Run fixes for all failed tasks that have fixes (auto-detects model from rubric)
+    python scripts/run_scienceagentbench_fixes.py --prefix iter1_ \
+        --rubric-csv rubrics_output/scienceagentbench/scienceagentbench_combined.csv --docker
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+FIXES_DIR = REPO_ROOT / "fixes" / "scienceagentbench"
+TRACES_DIR = REPO_ROOT / "traces"
+HAL_HARNESS = REPO_ROOT / "hal-harness"
+DEFAULT_MODEL_CONFIG = REPO_ROOT / "model_to_baseline_scienceagentbench.json"
+TMP_DIR = REPO_ROOT / ".tmp"
+TMP_DIR.mkdir(exist_ok=True)
+
+
+def log(msg: str, prefix: str = "main") -> None:
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"[{ts}] [{prefix}] {msg}", flush=True)
+
+
+def _slugify(value: str, fallback: str) -> str:
+    """Keep readable identifiers for run_ids / filenames."""
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_")
+    return slug or fallback
+
+
+def load_model_config(path: Path) -> Dict[str, Dict[str, Any]]:
+    """Load model_to_baseline_scienceagentbench.json."""
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+
+    # Flat dict format - expected
+    if isinstance(data, dict) and "models" not in data:
+        return data
+
+    # Legacy format with "models" array
+    if "models" in data and isinstance(data["models"], list):
+        result = {}
+        for model_entry in data["models"]:
+            model_id = model_entry.get("model_id")
+            if model_id:
+                result[model_id] = model_entry
+        return result
+
+    return {}
+
+
+def load_rubric_task_models(csv_path: Path) -> List[Tuple[str, str]]:
+    """Load rubric CSV and return list of (task_id, model_id) pairs for failed tasks."""
+    task_model_pairs: List[Tuple[str, str]] = []
+    seen: Set[Tuple[str, str]] = set()
+
+    if not csv_path.exists():
+        return task_model_pairs
+
+    with csv_path.open("r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            task_id = row.get("task_id", "").strip()
+            correct = row.get("correct", "").strip()
+            model_run = row.get("model_run", "").strip()
+
+            # Only include failed tasks (correct=0)
+            if task_id and correct == "0" and model_run:
+                model_id = _extract_model_from_run_name(model_run)
+                if model_id and (task_id, model_id) not in seen:
+                    task_model_pairs.append((task_id, model_id))
+                    seen.add((task_id, model_id))
+
+    return task_model_pairs
+
+
+def _extract_model_from_run_name(model_run: str) -> Optional[str]:
+    """Extract a model config key from the model_run column."""
+    has_high = "_high_" in model_run.lower() or "_high" in model_run.lower()
+    has_low = "_low_" in model_run.lower() or "_low" in model_run.lower()
+
+    patterns = [
+        (r"gpt[\-_]?4[\-_]?1[\-_]?2025|gpt4120250414", "openai/gpt-4.1-2025-04-14"),
+        (r"o3[\-_]?2025[\-_]?04[\-_]?16|o320250416", "openai/o3-2025-04-16"),
+        (r"o4[\-_]?mini[\-_]?2025|o4mini20250416", None),  # Handle separately
+    ]
+
+    for pattern, config_key in patterns:
+        if re.search(pattern, model_run, re.IGNORECASE):
+            if config_key is not None:
+                return config_key
+
+            # Handle o4-mini with effort suffixes
+            if "o4" in pattern and "mini" in pattern:
+                if has_high:
+                    return "openai/o4-mini-2025-04-16"
+                elif has_low:
+                    return "o4-mini-2025-04-16"
+                else:
+                    return "o4-mini-2025-04-16"
+
+    return None
+
+
+def get_agent_args_for_model(
+    model_key: str,
+    model_config: Dict[str, Dict[str, Any]],
+) -> Optional[Tuple[Dict[str, Any], str]]:
+    """Get the agent_args for a specific model."""
+    if not model_key:
+        return None
+
+    pricing_key = model_key
+    model_entry = model_config.get(model_key)
+
+    # Try matching by model_id
+    if not model_entry:
+        for key, entry in model_config.items():
+            if entry.get("model_id") == model_key:
+                model_entry = entry
+                pricing_key = key
+                break
+
+    if not model_entry:
+        return None
+
+    model_id = model_entry.get("model_id")
+    if not model_id:
+        return None
+
+    agent_args: Dict[str, Any] = {
+        "model_name": model_id,
+    }
+    if "reasoning_effort" in model_entry:
+        agent_args["reasoning_effort"] = model_entry["reasoning_effort"]
+    if "max_steps" in model_entry:
+        agent_args["max_steps"] = model_entry["max_steps"]
+
+    return agent_args, pricing_key
+
+
+def load_fix_package(task_id: str) -> Dict[str, Any]:
+    """Load all fix files for a task."""
+    fix_dir = FIXES_DIR / task_id
+    if not fix_dir.exists():
+        return {}
+
+    fix = {"task_id": task_id, "fix_dir": fix_dir}
+
+    # Load different override types
+    for name in ["instruction_override", "input_override", "env_override", "evaluation_override"]:
+        path = fix_dir / f"{name}.json"
+        if path.exists():
+            fix[name] = json.loads(path.read_text())
+
+    # Load README
+    readme = fix_dir / "README.md"
+    if readme.exists():
+        fix["readme"] = readme.read_text()
+
+    return fix
+
+
+def list_available_fixes(include_readme_only: bool = False) -> List[str]:
+    """List all task IDs that have actual fix files."""
+    if not FIXES_DIR.exists():
+        return []
+
+    task_ids = []
+    for item in FIXES_DIR.iterdir():
+        if item.is_dir() and not item.name.startswith("."):
+            actual_fix_files = [
+                "instruction_override.json", "input_override.json",
+                "env_override.json", "evaluation_override.json",
+            ]
+            has_actual_fix = any((item / f).exists() for f in actual_fix_files)
+
+            if has_actual_fix:
+                task_ids.append(item.name)
+            elif include_readme_only and (item / "README.md").exists():
+                task_ids.append(item.name)
+
+    return sorted(task_ids, key=lambda x: int(x) if x.isdigit() else float('inf'))
+
+
+def load_scienceagentbench_dataset() -> List[Dict[str, Any]]:
+    """Load the ScienceAgentBench dataset from HuggingFace."""
+    try:
+        from datasets import load_dataset
+        dataset = list(load_dataset("osunlp/ScienceAgentBench", split="validation"))
+        return dataset
+    except Exception as e:
+        log(f"Failed to load ScienceAgentBench dataset: {e}", "data")
+        return []
+
+
+def apply_fix_to_task(task: Dict[str, Any], fix: Dict[str, Any]) -> Tuple[Dict[str, Any], List[str]]:
+    """Apply a fix to a task, modifying task instructions.
+
+    Returns:
+        Tuple of (modified_task, list of changes made)
+    """
+    modified = json.loads(json.dumps(task))  # Deep copy
+    changes_made = []
+    task_id = str(task.get("instance_id", ""))
+
+    # =============================================================
+    # 1. Apply instruction_override - Add clarifications to task_inst
+    # =============================================================
+    if fix.get("instruction_override"):
+        instr = fix["instruction_override"]
+        clarifications = instr.get("clarifications", [])
+
+        if clarifications:
+            clarification_text = "\n\n## IMPORTANT CLARIFICATIONS\n" + "\n".join(f"- {c}" for c in clarifications)
+            modified["task_inst"] = modified.get("task_inst", "") + clarification_text
+            changes_made.append(f"Added {len(clarifications)} clarification(s) to task_inst")
+
+    # =============================================================
+    # 2. Apply input_override - Additional clarifications
+    # =============================================================
+    if fix.get("input_override"):
+        inp = fix["input_override"]
+        clarifications = inp.get("clarifications", [])
+
+        if clarifications:
+            clarification_text = "\n\n## ADDITIONAL NOTES\n" + "\n".join(f"- {c}" for c in clarifications)
+            modified["task_inst"] = modified.get("task_inst", "") + clarification_text
+            changes_made.append(f"Added {len(clarifications)} input clarification(s)")
+
+    # =============================================================
+    # 3. Apply env_override - Store for harness to read
+    # =============================================================
+    if fix.get("env_override"):
+        modified["_env_override"] = fix["env_override"]
+        changes_made.append(f"Environment: Added overrides {list(fix['env_override'].keys())}")
+
+    return modified, changes_made
+
+
+def create_filtered_dataset(
+    tasks: List[Dict[str, Any]],
+    fixes: Dict[str, Dict[str, Any]],
+    task_ids: List[str],
+    verbose: bool = True,
+) -> Tuple[List[Dict[str, Any]], Dict[str, List[str]]]:
+    """Create a filtered dataset with only the specified tasks, with fixes applied."""
+    filtered = []
+    all_changes: Dict[str, List[str]] = {}
+
+    for task in tasks:
+        instance_id = str(task.get("instance_id", ""))
+        if instance_id in task_ids:
+            if instance_id in fixes:
+                modified, changes = apply_fix_to_task(task, fixes[instance_id])
+                all_changes[instance_id] = changes
+
+                if verbose and changes:
+                    log(f"Applied {len(changes)} fix(es) to task {instance_id}:", "fix")
+                    for change in changes:
+                        log(f"  - {change}", "fix")
+                elif verbose:
+                    log(f"No changes applied to task {instance_id} (fix had no applicable overrides)", "fix")
+            else:
+                modified = task
+            filtered.append(modified)
+
+    return filtered, all_changes
+
+
+def run_hal_eval(
+    agent_dir: Path,
+    agent_args: Dict[str, Any],
+    dataset_path: Path,
+    output_prefix: str,
+    benchmark: str = "scienceagentbench",
+    docker: bool = False,
+    task_ids: Optional[List[str]] = None,
+    pricing_key: Optional[str] = None,
+    max_concurrent: int = 1,
+) -> Tuple[bool, str, Optional[Path]]:
+    """Run HAL evaluation with a custom dataset.
+
+    Args:
+        task_ids: List of task IDs being run (for logging/run_id only)
+        max_concurrent: Number of concurrent tasks within this HAL run
+    """
+    model_name = str(agent_args.get("model_name", "model"))
+    model_slug = _slugify(model_name.replace("/", "_"), "model")
+    effort = str(agent_args.get("reasoning_effort") or "").strip().lower()
+    effort_part = f"_{_slugify(effort, '')}" if effort else ""
+    # For multi-task runs, don't include task_id in run_id
+    task_part = f"_{task_ids[0]}" if task_ids and len(task_ids) == 1 else ""
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    run_id = f"{output_prefix}{model_slug}{effort_part}{task_part}_{benchmark}_{timestamp}"
+
+    cmd = [
+        sys.executable, "-m", "hal.cli",
+        "--benchmark", benchmark,
+        "--agent_name", output_prefix,
+        "--agent_function", "main.run",
+        "--agent_dir", str(agent_dir),
+        "--run_id", run_id,
+        "--max_concurrent", str(max_concurrent),
+    ]
+
+    # Note: task filtering is done via the dataset file (SCIENCEAGENTBENCH_DATASET_PATH)
+    # The dataset only contains the tasks we want to run
+
+    if docker:
+        cmd.append("--docker")
+
+    for key, value in agent_args.items():
+        if isinstance(value, (dict, list)):
+            cmd += ["-A", f"{key}={json.dumps(value)}"]
+        else:
+            cmd += ["-A", f"{key}={value}"]
+
+    # Set environment (like scicode does)
+    env = os.environ.copy()
+    env["SCIENCEAGENTBENCH_DATASET_PATH"] = str(dataset_path)
+
+    # Add hal-harness to PYTHONPATH
+    extra_path = str(HAL_HARNESS)
+    env["PYTHONPATH"] = f"{extra_path}{os.pathsep}{env.get('PYTHONPATH', '')}".rstrip(os.pathsep)
+    env.setdefault("WANDB_SILENT", "true")
+
+    # Use pricing_key for cost tracking (config key), model_name is for API calls (model_id)
+    effective_pricing_key = pricing_key or str(agent_args.get("model_name", ""))
+    env["HAL_PRICING_MODEL_NAME"] = effective_pricing_key
+
+    # Set weave project name based on prefix
+    weave_project = f"{output_prefix.rstrip('_')}_{benchmark}"
+    env["HAL_WEAVE_PROJECT"] = weave_project
+
+    num_tasks = len(task_ids) if task_ids else "all"
+    log(f"Running HAL eval with run_id: {run_id}", "hal")
+    log(f"Model (API): {agent_args.get('model_name')} | Pricing key: {effective_pricing_key}", "hal")
+    log(f"Tasks: {num_tasks} | Max concurrent: {max_concurrent}", "hal")
+    log(f"Dataset: {dataset_path}", "hal")
+    log(f"Command: {' '.join(cmd)}", "hal")
+
+    # Results directory (at REPO_ROOT, not HAL_HARNESS)
+    results_dir = REPO_ROOT / "results" / benchmark / run_id
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # Run from REPO_ROOT (like scicode) - let output stream to console
+        result = subprocess.run(cmd, cwd=REPO_ROOT, env=env, timeout=7200)
+
+        # Find output trace in REPO_ROOT/results
+        trace_path = results_dir / f"{run_id}_UPLOAD.json"
+
+        # Also check HAL_HARNESS results as fallback
+        if not trace_path.exists():
+            hal_results_dir = HAL_HARNESS / "results" / benchmark / run_id
+            alt_trace = hal_results_dir / f"{run_id}_UPLOAD.json"
+            if alt_trace.exists():
+                results_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy(alt_trace, trace_path)
+                # Also copy logs if they exist
+                for log_file in hal_results_dir.glob("*.log"):
+                    shutil.copy(log_file, results_dir / log_file.name)
+
+        if result.returncode == 0:
+            if trace_path.exists():
+                # Copy trace to our traces directory with prefix
+                dest = TRACES_DIR / f"{output_prefix}_{trace_path.name}"
+                TRACES_DIR.mkdir(parents=True, exist_ok=True)
+                shutil.copy(trace_path, dest)
+                log(f"Trace saved to: {dest}", "hal")
+                log(f"Results in: {results_dir}", "hal")
+                return True, "Success", dest
+            return True, "Success (no trace found)", None
+        else:
+            log(f"HAL eval failed with exit code {result.returncode}", "hal")
+            # Check for verbose log to find error
+            verbose_log = results_dir / f"{run_id}_verbose.log"
+            if verbose_log.exists():
+                log(f"Check verbose log: {verbose_log}", "hal")
+            return False, f"Exit code {result.returncode}", None
+
+    except subprocess.TimeoutExpired:
+        return False, "Timeout", None
+    except Exception as e:
+        return False, str(e), None
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Apply ScienceAgentBench fixes and re-run HAL evaluations."
+    )
+
+    parser.add_argument("--agent-dir", default=str(HAL_HARNESS / "agents" / "hal_generalist_agent"),
+                        help="Path to the agent directory.")
+    parser.add_argument("--benchmark", default="scienceagentbench",
+                        help="Benchmark name (default: scienceagentbench).")
+    parser.add_argument("--output-prefix", default="fixed",
+                        help="Prefix for output traces (default: fixed).")
+    parser.add_argument("--prefix", help="Prefix for run IDs. Takes precedence over --output-prefix.")
+    parser.add_argument("--task-id", dest="task_ids", action="append",
+                        help="Task ID(s) to process. Can be repeated.")
+    parser.add_argument("--max-tasks", type=int, help="Maximum number of tasks to process.")
+    parser.add_argument("--dry-run", action="store_true", help="Preview what would be done.")
+    parser.add_argument("--parallel", type=int, default=1,
+                        help="Number of parallel HAL evaluations (default: 1).")
+    parser.add_argument("--list-fixes", action="store_true", help="List available fixes and exit.")
+    parser.add_argument("--show-fix", help="Show details of a specific fix and exit.")
+    parser.add_argument("--docker", action="store_true", help="Run HAL evaluation with --docker flag.")
+    parser.add_argument("--rubric-csv", help="Path to rubric CSV to determine which model failed.")
+    parser.add_argument("--model-config", default=str(DEFAULT_MODEL_CONFIG),
+                        help="Path to model configuration JSON.")
+    parser.add_argument("--model", help="Force a specific model for all tasks.")
+    parser.add_argument("--all-models", action="store_true",
+                        help="Run all models from config for each task with fixes.")
+    parser.add_argument("--verify-fixes", action="store_true",
+                        help="Verify fixes are applied correctly without running HAL eval.")
+
+    args = parser.parse_args()
+
+    agent_dir = Path(args.agent_dir)
+    if not agent_dir.is_absolute():
+        agent_dir = REPO_ROOT / agent_dir
+
+    # List fixes mode
+    if args.list_fixes:
+        with_fixes = list_available_fixes(include_readme_only=False)
+        all_analyzed = list_available_fixes(include_readme_only=True)
+        readme_only = set(all_analyzed) - set(with_fixes)
+
+        print(f"\n{'='*60}")
+        print(f"FIXES AVAILABLE in fixes/scienceagentbench/")
+        print(f"{'='*60}\n")
+
+        print(f"Tasks with ACTUAL FIXES ({len(with_fixes)}):")
+        for task_id in with_fixes:
+            fix = load_fix_package(task_id)
+            types = []
+            if fix.get("instruction_override"): types.append("instr")
+            if fix.get("input_override"): types.append("input")
+            if fix.get("env_override"): types.append("env")
+            if fix.get("evaluation_override"): types.append("eval")
+            print(f"  {task_id}: [{', '.join(types)}]")
+
+        if readme_only:
+            print(f"\nTasks analyzed - NO FIX NEEDED ({len(readme_only)}):")
+            for task_id in sorted(readme_only, key=lambda x: int(x) if x.isdigit() else float('inf')):
+                print(f"  {task_id}: [readme only]")
+
+        print(f"\n{'='*60}")
+        print(f"Summary: {len(with_fixes)} fixes to apply, {len(readme_only)} analyzed (no fix needed)")
+        print(f"{'='*60}\n")
+        return
+
+    # Show specific fix
+    if args.show_fix:
+        fix = load_fix_package(args.show_fix)
+        if not fix:
+            print(f"No fix found for task {args.show_fix}")
+            return
+        print(f"\n=== Fix for task {args.show_fix} ===\n")
+        for key, value in fix.items():
+            if key in ["fix_dir"]:
+                continue
+            if key == "readme":
+                print(f"README:\n{value[:500]}...")
+            elif isinstance(value, dict):
+                print(f"{key}: {json.dumps(value, indent=2)}")
+            else:
+                print(f"{key}: {value[:200] if isinstance(value, str) else value}")
+        return
+
+    # Verify fixes mode
+    if args.verify_fixes:
+        print(f"\n{'='*60}")
+        print("VERIFY FIXES MODE")
+        print(f"{'='*60}\n")
+
+        log("Loading ScienceAgentBench dataset from HuggingFace...", "verify")
+        dataset = load_scienceagentbench_dataset()
+        if not dataset:
+            log("Failed to load dataset", "verify")
+            return
+        log(f"Loaded {len(dataset)} tasks", "verify")
+
+        with_fixes = list_available_fixes(include_readme_only=False)
+        if args.task_ids:
+            with_fixes = [t for t in with_fixes if t in args.task_ids]
+
+        log(f"Verifying {len(with_fixes)} fixes...\n", "verify")
+
+        all_success = True
+        for task_id in with_fixes:
+            fix = load_fix_package(task_id)
+            if not fix:
+                continue
+
+            original_task = None
+            for task in dataset:
+                if str(task.get("instance_id")) == task_id:
+                    original_task = task
+                    break
+
+            if not original_task:
+                print(f"  Task {task_id}: NOT FOUND in dataset")
+                all_success = False
+                continue
+
+            modified_task, changes = apply_fix_to_task(original_task, fix)
+
+            print(f"\n{'='*60}")
+            print(f"Task {task_id}")
+            print(f"{'='*60}")
+
+            if not changes:
+                print(f"  NO CHANGES APPLIED (fix may not match dataset structure)")
+                all_success = False
+            else:
+                print(f"  {len(changes)} change(s) applied:")
+                for change in changes:
+                    print(f"    - {change}")
+
+                # Show before/after for task_inst
+                orig_inst = original_task.get("task_inst", "")[:200]
+                mod_inst = modified_task.get("task_inst", "")
+                if orig_inst != mod_inst[:200]:
+                    print(f"\n  task_inst (truncated):")
+                    print(f"    BEFORE: {orig_inst}...")
+                    # Show the added part
+                    added = mod_inst[len(original_task.get('task_inst', '')):]
+                    if added:
+                        print(f"    ADDED: {added[:300]}...")
+
+        print(f"\n{'='*60}")
+        if all_success:
+            print("All fixes verified successfully!")
+        else:
+            print("Some fixes had issues - review output above")
+        print(f"{'='*60}\n")
+        return
+
+    # Determine effective prefix
+    prefix = args.prefix or args.output_prefix or "fixed"
+    if not prefix.endswith("_"):
+        prefix = prefix + "_"
+
+    # Load model config
+    model_config_path = Path(args.model_config)
+    if not model_config_path.is_absolute():
+        model_config_path = REPO_ROOT / model_config_path
+    model_config = load_model_config(model_config_path)
+    if model_config:
+        log(f"Loaded {len(model_config)} model configs from {model_config_path.name}", "model")
+    else:
+        log(f"WARNING: No model config found at {model_config_path}", "model")
+
+    # Build list of available fixes
+    available_fixes = set(list_available_fixes())
+    if args.task_ids:
+        requested = set(args.task_ids)
+        available_fixes = available_fixes & requested
+        missing = requested - available_fixes
+        if missing:
+            log(f"WARN: Requested task(s) not found: {', '.join(sorted(missing))}", "main")
+
+    if not available_fixes:
+        log("No fix directories found.", "main")
+        return
+
+    log(f"Found {len(available_fixes)} available fixes", "main")
+
+    # Build (task_id, model_id) pairs to run
+    task_model_pairs: List[Tuple[str, str]] = []
+
+    if args.all_models:
+        if not model_config:
+            log("ERROR: --all-models requires model config file", "model")
+            return
+        for task_id in sorted(available_fixes, key=lambda x: int(x) if x.isdigit() else float('inf')):
+            for model_key in model_config.keys():
+                task_model_pairs.append((task_id, model_key))
+        log(f"Running all {len(model_config)} models for {len(available_fixes)} tasks = {len(task_model_pairs)} total jobs", "model")
+    elif args.model:
+        for task_id in sorted(available_fixes, key=lambda x: int(x) if x.isdigit() else float('inf')):
+            task_model_pairs.append((task_id, args.model))
+        log(f"Forced model '{args.model}' for all {len(task_model_pairs)} tasks", "model")
+    elif args.rubric_csv:
+        rubric_csv_path = Path(args.rubric_csv)
+        if not rubric_csv_path.is_absolute():
+            rubric_csv_path = REPO_ROOT / rubric_csv_path
+        all_failed_pairs = load_rubric_task_models(rubric_csv_path)
+        log(f"Loaded {len(all_failed_pairs)} failed (task, model) pairs from {rubric_csv_path.name}", "model")
+
+        for task_id, model_id in all_failed_pairs:
+            if task_id in available_fixes:
+                task_model_pairs.append((task_id, model_id))
+        log(f"Filtered to {len(task_model_pairs)} pairs with available fixes", "model")
+    elif model_config:
+        # Default: run all models from config for each task with fixes
+        for task_id in sorted(available_fixes, key=lambda x: int(x) if x.isdigit() else float('inf')):
+            for model_key in model_config.keys():
+                task_model_pairs.append((task_id, model_key))
+        log(f"Running all {len(model_config)} models for {len(available_fixes)} tasks = {len(task_model_pairs)} total jobs", "model")
+        for model_key in model_config.keys():
+            log(f"  - {model_key}", "model")
+    else:
+        log("No model config found, cannot proceed", "model")
+        return
+
+    if args.max_tasks:
+        task_model_pairs = task_model_pairs[:args.max_tasks]
+
+    if not task_model_pairs:
+        log("No tasks to process after filtering.", "main")
+        return
+
+    # Load fixes
+    fixes: Dict[str, Dict[str, Any]] = {}
+    for task_id in set(t[0] for t in task_model_pairs):
+        fix = load_fix_package(task_id)
+        if fix:
+            fixes[task_id] = fix
+
+    if not fixes:
+        log("No valid fixes found for specified tasks.", "main")
+        return
+
+    log(f"Loaded {len(fixes)} fixes", "main")
+
+    # Dry run
+    if args.dry_run:
+        # Group tasks by model
+        model_to_tasks: Dict[str, List[str]] = {}
+        for task_id, model_id in task_model_pairs:
+            model_to_tasks.setdefault(model_id, []).append(task_id)
+
+        print(f"\n{'='*60}")
+        print("DRY RUN - Would run HAL with the following configuration:")
+        print("="*60)
+        print(f"\nPrefix: {prefix}")
+        print(f"Docker: {args.docker}")
+        print(f"Max concurrent tasks per HAL: {args.parallel}")
+        print(f"\nTotal: {len(model_to_tasks)} HAL instances (running in parallel), {len(task_model_pairs)} task-model pairs")
+
+        for model_id, task_list in model_to_tasks.items():
+            print(f"\n--- Model: {model_id} ---")
+            print(f"  Tasks ({len(task_list)}): {', '.join(sorted(task_list, key=lambda x: int(x) if x.isdigit() else float('inf')))}")
+
+            # Show fix types for each task
+            for task_id in sorted(task_list, key=lambda x: int(x) if x.isdigit() else float('inf'))[:5]:  # Show first 5
+                fix = fixes.get(task_id, {})
+                fix_types = []
+                if fix.get("instruction_override"): fix_types.append("instr")
+                if fix.get("input_override"): fix_types.append("input")
+                if fix.get("env_override"): fix_types.append("env")
+                if fix.get("evaluation_override"): fix_types.append("eval")
+                if fix_types:
+                    print(f"    Task {task_id}: [{', '.join(fix_types)}]")
+            if len(task_list) > 5:
+                print(f"    ... and {len(task_list) - 5} more tasks")
+
+        print(f"\n{'='*60}")
+        return
+
+    # Load ScienceAgentBench dataset
+    log("Loading ScienceAgentBench dataset from HuggingFace...", "data")
+    dataset = load_scienceagentbench_dataset()
+    if not dataset:
+        log("Failed to load dataset", "main")
+        return
+    log(f"Loaded {len(dataset)} tasks from dataset", "data")
+
+    # Group tasks by model - each model gets one HAL run with all its tasks
+    model_to_tasks: Dict[str, List[str]] = {}
+    for task_id, model_id in task_model_pairs:
+        model_to_tasks.setdefault(model_id, []).append(task_id)
+
+    log(f"Grouped into {len(model_to_tasks)} model runs:", "main")
+    for model_id, task_list in model_to_tasks.items():
+        log(f"  - {model_id}: {len(task_list)} tasks", "main")
+
+    # Run one HAL instance per model - all models in parallel
+    generated_traces: List[Path] = []
+    failed_runs: List[Tuple[str, str, str]] = []
+
+    def run_model_batch(model_id: str, task_list: List[str]) -> Tuple[str, bool, Optional[Path], str, List[str]]:
+        """Run all tasks for a single model. Returns (model_id, success, trace_path, message, task_list)."""
+        log(f"Starting model: {model_id} ({len(task_list)} tasks)", model_id[:20])
+
+        result = get_agent_args_for_model(model_id, model_config)
+        if result is None:
+            return (model_id, False, None, "model not in config", task_list)
+        task_agent_args, pricing_key = result
+
+        # Create combined dataset with all tasks for this model, with fixes applied
+        task_fixes = {tid: fixes[tid] for tid in task_list if tid in fixes}
+        filtered, changes_applied = create_filtered_dataset(dataset, task_fixes, task_list, verbose=False)
+
+        if not filtered:
+            return (model_id, False, None, "tasks not in dataset", task_list)
+
+        log(f"Created dataset with {len(filtered)} tasks", model_id[:20])
+
+        # Write temporary dataset file
+        temp_dataset = TMP_DIR / f"scienceagentbench_{model_id.replace('/', '_')}_{time.time()}.json"
+        temp_dataset.write_text(json.dumps(filtered, indent=2))
+
+        try:
+            success, message, trace_path = run_hal_eval(
+                agent_dir=agent_dir,
+                agent_args=task_agent_args,
+                dataset_path=temp_dataset,
+                output_prefix=prefix,
+                benchmark=args.benchmark,
+                docker=args.docker,
+                task_ids=task_list,
+                pricing_key=pricing_key,
+                max_concurrent=args.parallel,
+            )
+            return (model_id, success and trace_path is not None, trace_path, message, task_list)
+        finally:
+            # Clean up temp file
+            temp_dataset.unlink(missing_ok=True)
+
+    # Run all models in parallel
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    log(f"Launching {len(model_to_tasks)} HAL instances in parallel...", "main")
+
+    with ThreadPoolExecutor(max_workers=len(model_to_tasks)) as executor:
+        futures = {
+            executor.submit(run_model_batch, model_id, task_list): model_id
+            for model_id, task_list in model_to_tasks.items()
+        }
+
+        for future in as_completed(futures):
+            model_id = futures[future]
+            try:
+                model_id, success, trace_path, message, task_list = future.result()
+                if success and trace_path:
+                    generated_traces.append(trace_path)
+                    log(f"SUCCESS: {model_id} -> {trace_path}", "main")
+                else:
+                    for task_id in task_list:
+                        failed_runs.append((task_id, model_id, message))
+                    log(f"FAILED: {model_id} - {message}", "main")
+            except Exception as e:
+                log(f"ERROR: {model_id} - {e}", "main")
+                for task_id in model_to_tasks[model_id]:
+                    failed_runs.append((task_id, model_id, str(e)))
+
+    # Summary
+    print(f"\n{'='*60}")
+    print("SUMMARY")
+    print("="*60)
+    print(f"Total jobs: {len(task_model_pairs)}")
+    print(f"Successful: {len(generated_traces)}")
+    print(f"Failed: {len(failed_runs)}")
+
+    if generated_traces:
+        print(f"\nGenerated traces:")
+        for trace in generated_traces:
+            print(f"  - {trace}")
+
+    if failed_runs:
+        print(f"\nFailed runs:")
+        for task_id, model_id, reason in failed_runs:
+            print(f"  - {task_id} ({model_id}): {reason}")
+
+
+if __name__ == "__main__":
+    main()
