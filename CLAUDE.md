@@ -120,6 +120,11 @@ Runs are identified by fruit-based prefixes:
 - `heapq`, `numpy.random` not in AUTHORIZED_IMPORTS
 - Quantum computing tasks need `dtype=complex`
 
+**Fixer Script**: `scripts/claude_fixer_scicode.py`
+- Diagnoses IFEs from rubric evaluations and agent traces
+- Creates fixes in `fixes/scicode/<task_id>/`
+- Handles deprecated API warnings, import authorizations, tolerance adjustments
+
 **Evaluation**: Direct Python execution in sandbox
 
 ---
@@ -249,6 +254,11 @@ hal-eval --benchmark assistantbench \
 - Known problematic task patterns (Tasks 74, 43, 2 for environment issues)
 - Exploratory questions for subjective evaluation fairness
 
+**Fixer Script**: `scripts/claude_fixer_scienceagentbench.py`
+- Diagnoses IFEs from rubric evaluations and agent traces
+- Creates fixes in `fixes/scienceagentbench/<task_id>/`
+- Handles missing domain libraries, figure evaluation adjustments, tolerance settings
+
 **Metrics**: Valid Execution Rate (VER), Success Rate (SR), CodeBERTScore (CBS)
 
 **HAL Command**:
@@ -356,10 +366,13 @@ python demonstrate/analyze_rubrics_detailed.py
 Quick summary:
 
 1. **Explore benchmark**: Understand agent structure, evaluation method, task format
-2. **Create rubric template**: `rubric_templates/<benchmark>.txt`
-3. **Create output directory**: `mkdir -p rubrics_output/<benchmark>`
-4. **Update CLAUDE.md**: Add benchmark details
-5. **Run rubric evaluation**:
+2. **Research known issues**: Use WebSearch for papers, GitHub issues, community discussions
+3. **Create rubric template**: `rubric_templates/<benchmark>.txt`
+4. **Analyze traces** (if available): Identify failure patterns, cross-model correlations
+5. **Create fixer script**: `scripts/claude_fixer_<benchmark>.py`
+6. **Create output directories**: `mkdir -p rubrics_output/<benchmark> fixes/<benchmark>`
+7. **Update CLAUDE.md**: Add benchmark details and fixer reference
+8. **Run rubric evaluation**:
    ```bash
    python scripts/eval_rubric.py \
        --trace-file traces/<benchmark>_*.json \
@@ -367,16 +380,18 @@ Quick summary:
        --rubric-model openai:gpt-4o \
        --failed-only -y
    ```
-6. **Aggregate verdicts**:
+9. **Aggregate verdicts**:
    ```bash
    python scripts/judge.py \
        --rubric-dir rubrics_output/<benchmark> \
        --output judge_output/<benchmark>_verdict.csv
    ```
-7. **Investigate Grade=1 tasks**: Identify root causes
-8. **Apply item fixes**: Agent config, prompts, rubric clarifications
-9. **Re-run evaluation**: Use new prefix (e.g., `honey`)
-10. **Compare before/after**: Measure improvement
+10. **Run fixer script**:
+    ```bash
+    python scripts/claude_fixer_<benchmark>.py --all-ife --batch
+    ```
+11. **Apply fixes and re-run**: Use new prefix (e.g., `honey`)
+12. **Compare before/after**: Measure improvement
 
 ---
 
@@ -420,6 +435,162 @@ The schema loading priority is:
 1. Benchmark-specific schema (e.g., `swebench.schema.json`) - if exists
 2. Unified schema (`rubric.schema.json`) in the rubric directory
 3. Default simple schema (score + explanation only)
+
+---
+
+## Fixer Scripts
+
+Fixer scripts use Claude Code CLI (`claude -p`) to automatically diagnose IFEs and generate fix packages.
+
+### Available Fixer Scripts
+
+| Benchmark | Fixer Script | Status |
+|-----------|--------------|--------|
+| **SciCode** | `scripts/claude_fixer_scicode.py` | Active |
+| **ScienceAgentBench** | `scripts/claude_fixer_scienceagentbench.py` | Active |
+
+### Fixer Script Usage
+
+```bash
+# List tasks with IFEs detected (Grade=1)
+python scripts/claude_fixer_<benchmark>.py --list-ife-tasks
+
+# Fix a specific task
+python scripts/claude_fixer_<benchmark>.py --task-id <id>
+
+# Fix all IFE tasks
+python scripts/claude_fixer_<benchmark>.py --all-ife
+
+# Batch mode (multiple tasks per Claude session - more efficient)
+python scripts/claude_fixer_<benchmark>.py --all-ife --batch
+
+# Skip tasks with existing fixes
+python scripts/claude_fixer_<benchmark>.py --all-ife --skip-existing
+```
+
+### Fix Package Structure
+
+Fixes are created in `fixes/<benchmark>/<task_id>/`:
+
+```
+fixes/<benchmark>/<task_id>/
+├── README.md                   # Human-readable explanation of the fix
+├── env_override.json           # Environment/dependency fixes
+├── evaluation_override.json    # Evaluation criteria adjustments
+├── instruction_override.json   # Task instruction clarifications
+└── status.json                 # Fix application status
+```
+
+### Fix Types
+
+1. **Environment Fixes** (`env_override.json`):
+   ```json
+   {
+     "HAL_CONDA_PACKAGES": "oggm mne",
+     "HAL_PIP_PACKAGES": "biopsykit mastml"
+   }
+   ```
+
+2. **Evaluation Fixes** (`evaluation_override.json`):
+   ```json
+   {
+     "tolerance": 1e-4,
+     "allow_alternative_methods": true,
+     "notes": "Justification for adjustment"
+   }
+   ```
+
+3. **Instruction Clarifications** (`instruction_override.json`):
+   ```json
+   {
+     "clarifications": [
+       "Use scipy.integrate.simpson instead of deprecated simps",
+       "Output file should be named results.csv"
+     ]
+   }
+   ```
+
+### Key Principle: Fair, Not Easy
+
+Fixer scripts follow the principle: **Make evaluation FAIR, not EASY**.
+
+- ✅ Fix missing dependencies that ALL agents need
+- ✅ Clarify ambiguous output format requirements
+- ✅ Adjust overly strict numerical tolerances
+- ❌ Do NOT give hints about solutions
+- ❌ Do NOT simplify the problem
+- ❌ Do NOT pre-compute partial results
+
+---
+
+## Fix Runner Scripts
+
+Fix runner scripts apply the generated fixes and re-run HAL evaluations.
+
+### Available Fix Runner Scripts
+
+| Benchmark | Fix Runner Script | Status |
+|-----------|------------------|--------|
+| **SciCode** | `scripts/run_scicode_fixes.py` | Active |
+| **ScienceAgentBench** | `scripts/run_scienceagentbench_fixes.py` | Active |
+| **CoreBench** | `scripts/run_corebench_fixes.py` | Active |
+| **USACO** | `scripts/run_usaco_fixes.py` | Active |
+
+### Fix Runner Usage
+
+```bash
+# List available fixes
+python scripts/run_<benchmark>_fixes.py --list-fixes
+
+# Dry run - see what would happen
+python scripts/run_<benchmark>_fixes.py --task-id <id> --dry-run
+
+# Run fixes for specific tasks
+python scripts/run_<benchmark>_fixes.py --task-id 11 --task-id 12 --prefix fixed_
+
+# Run all available fixes
+python scripts/run_<benchmark>_fixes.py --all --prefix iter1_ --docker
+
+# Run with specific model
+python scripts/run_<benchmark>_fixes.py --prefix iter1_ --model gpt-4o
+```
+
+### What Fix Runners Do
+
+1. **Load model config** from `model_to_baseline_<benchmark>.json`
+2. **Load fixes** from `fixes/<benchmark>/<task_id>/`
+3. **Apply environment overrides** (conda/pip packages, system libs, timeouts)
+4. **Inject instruction clarifications** into task prompts
+5. **Adjust evaluation parameters** (tolerances, alternative formats)
+6. **Run HAL evaluation** with the original failing model
+7. **Output new traces** with configurable prefix for comparison
+
+### Model Configuration Files
+
+Each benchmark has a `model_to_baseline_<benchmark>.json` that maps model IDs to configurations:
+
+```json
+{
+  "openai/gpt-4.1-2025-04-14": {
+    "model_id": "openai/gpt-4.1-2025-04-14",
+    "short_name": "gpt-4.1",
+    "baseline_trace": "scicode_agent_gpt4120250414_UPLOAD.json",
+    "max_steps": 5
+  },
+  "openai/o3-2025-04-16": {
+    "model_id": "openai/o3-2025-04-16",
+    "short_name": "o3",
+    "baseline_trace": "scicode_agent_o320250416_UPLOAD.json",
+    "reasoning_effort": "medium",
+    "max_steps": 5
+  }
+}
+```
+
+This allows fix runners to:
+- Re-run failed tasks with the **same model** that originally failed
+- Apply model-specific settings (reasoning effort, max steps)
+- Reference baseline traces for comparison
 
 ---
 
