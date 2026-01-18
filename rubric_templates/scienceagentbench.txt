@@ -1,0 +1,200 @@
+# ScienceAgentBench Intrinsic Formation Error Detection Rubric
+
+## Purpose
+This rubric evaluates whether a task failure on the ScienceAgentBench benchmark stems from an **Intrinsic Formation Error (IFE)** in the benchmark itself, rather than agent capability limitations.
+
+## Scoring
+- **Score 1**: An intrinsic benchmark defect exists AND caused the failure (no agent could succeed)
+- **Score 0**: The failure is due to agent capability issues (a better agent could have succeeded)
+
+## Two-Question Framework
+
+### Question 1: Does an Intrinsic Formation Defect Exist?
+Analyze whether the benchmark item contains any of the deficiency categories below.
+
+### Question 2: Did the Defect Cause This Failure?
+Even if a defect exists, determine whether it actually prevented success, or whether the agent failed for other reasons.
+
+---
+
+## Deficiency Categories for ScienceAgentBench
+
+### 1. Dataset and Input File Issues
+The provided data files have problems:
+- Data files are missing or corrupted
+- File format differs from documentation
+- Data contains errors that prevent valid analysis
+- Dataset preview is misleading or incomplete
+- Required columns or fields are missing
+
+### 2. Task Instruction Ambiguity
+The scientific task description is insufficient:
+- Required methodology is not specified
+- Output format is ambiguous
+- Scientific domain knowledge requirements unclear
+- Multiple valid interpretations exist
+- Expected precision/accuracy not defined
+
+### 3. Evaluation Script Defects
+The task-specific evaluation has problems:
+- Evaluation script has bugs
+- Numerical tolerance is too strict
+- Output comparison is format-sensitive beyond reason
+- Evaluation crashes on valid outputs
+- Metrics don't match task description
+
+### 4. Gold Program Issues
+The reference solution has problems:
+- Gold program produces incorrect results
+- Gold program uses unavailable libraries
+- Gold program has hardcoded paths
+- Multiple valid approaches rejected unfairly
+- Gold program doesn't match task requirements
+
+### 5. Domain Knowledge Gaps
+The provided scientific context is inadequate:
+- Required formulas or methods not provided
+- Domain knowledge contains errors
+- Scientific assumptions are unstated
+- Field-specific conventions not documented
+- Required background exceeds reasonable expectations
+
+### 6. Execution Environment Issues
+The Docker evaluation environment is deficient:
+- Required scientific libraries unavailable
+- Package versions cause compatibility issues
+- Memory limits prevent large dataset processing
+- GPU requirements not met
+- Timeout insufficient for valid computations
+
+### 7. Output Specification Mismatches
+The expected output format has issues:
+- Output filename requirements unclear
+- Data format (CSV, JSON, etc.) not specified
+- Numerical precision requirements unstated
+- Directory structure expectations unclear
+
+---
+
+## CRITICAL EXCLUSIONS: Agent Capability Issues (Score 0)
+
+Do NOT classify the following as benchmark deficiencies:
+
+### 1. Scientific Reasoning Errors
+- Agent misunderstands the scientific problem
+- Agent applies wrong methodology
+- Agent makes mathematical errors
+- Agent misinterprets domain knowledge
+- These are agent capability issues, not benchmark defects
+
+### 2. Code Quality Issues
+- Agent writes syntactically invalid Python
+- Agent has logic bugs in implementation
+- Agent uses wrong libraries or APIs
+- Agent fails to handle edge cases
+- Agent produces runtime errors
+
+### 3. Data Handling Errors
+- Agent reads data incorrectly
+- Agent misparses file formats
+- Agent fails to preprocess data properly
+- Agent uses wrong columns or fields
+- Agent doesn't handle missing values
+
+### 4. Output Format Errors
+- Agent saves to wrong filename
+- Agent uses wrong output format
+- Agent doesn't include required columns
+- Agent outputs data in wrong order
+
+### 5. Incomplete Solutions
+- Agent gives up before completing task
+- Agent produces partial results
+- Agent fails to integrate multiple steps
+- Agent doesn't verify outputs
+
+### 6. Resource Management
+- Agent's approach is unnecessarily memory-intensive
+- Agent doesn't optimize for available resources
+- Agent fails to batch process large data
+- Agent times out due to inefficient code
+
+---
+
+## Evidence Requirements
+
+For Score 1, you MUST provide:
+1. **Specific defect identification**: Show the exact data/script/spec issue
+2. **Impossibility proof**: Demonstrate that NO valid solution can succeed
+3. **Environment verification**: Confirm the issue is in benchmark, not agent
+
+For Score 0, explain:
+1. What scientific approach the agent should have used
+2. What implementation errors were made
+3. Why the task is solvable with correct approach
+
+---
+
+## Response Format
+
+Respond with a JSON object:
+
+```json
+{
+  "score": 0 or 1,
+  "deficiency_exists": true/false,
+  "deficiency_caused_failure": true/false,
+  "deficiency_type": "category name or 'none'",
+  "existence_reasoning": "analysis of whether a benchmark defect exists",
+  "causation_reasoning": "analysis of whether the defect caused failure",
+  "evidence": "specific quotes from transcript supporting conclusion"
+}
+```
+
+---
+
+## Common ScienceAgentBench Failure Patterns
+
+### Likely Agent Issues (Score 0):
+- Agent used wrong statistical method
+- Agent failed to normalize/preprocess data
+- Agent produced syntactically invalid code
+- Agent saved results to wrong file location
+- Agent misunderstood the scientific objective
+- Agent's numerical results are incorrect due to bugs
+
+### Potential Benchmark Issues (Score 1):
+- Data file is empty or contains only headers
+- Evaluation script crashes with "module not found"
+- Required library (scipy, sklearn) not in container
+- Gold program references nonexistent data path
+- Task requires proprietary data not included
+- Evaluation timeout is 10s for legitimate hour-long computation
+
+---
+
+## ScienceAgentBench-Specific Considerations
+
+### Scientific Validity
+ScienceAgentBench tasks are derived from real scientific workflows. Consider:
+- Is the scientific methodology described correctly?
+- Are the expected results scientifically plausible?
+- Does the domain knowledge provided match the task?
+
+### CodeBERT Similarity
+The benchmark uses CodeBERT to measure code similarity. This is a secondary metric:
+- Low similarity but correct output → agent issue (stylistic)
+- High similarity but wrong output → potential benchmark issue
+- Focus primarily on execution success, not code similarity
+
+### Multi-Disciplinary Nature
+Tasks span biology, chemistry, physics, etc.:
+- Domain-specific library issues may be benchmark defects
+- Agent's failure to apply domain knowledge is agent issue
+- Missing domain context in task description could be benchmark issue
+
+### Self-Debug Mechanism
+If agent uses self-debugging:
+- Failure to correct after feedback → agent issue
+- Incorrect feedback from environment → potential benchmark issue
+- Agent ignoring valid error messages → agent issue
