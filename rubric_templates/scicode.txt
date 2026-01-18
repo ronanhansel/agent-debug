@@ -42,6 +42,18 @@ State and Context Persistence
 
 In multi-step problems, examine whether the evaluation harness correctly maintains state between sub-tasks. Deficiencies occur when correctly-implemented earlier steps are not properly injected into later steps, causing NameError or similar exceptions for definitions that were successfully created. The agent's earlier code must be demonstrably correct for this to constitute a formation deficiency—if earlier steps contained bugs, the failure cascade is an agent capability issue. Look for patterns where the trace shows successful step completion followed by mysterious absence of those results in subsequent steps.
 
+CRITICAL EXCLUSION: Agent Output Formatting Errors
+
+Do NOT classify the following as benchmark deficiencies—these are AGENT CAPABILITY issues:
+
+1. Code block formatting errors: If the agent fails to wrap its code in the expected format (e.g., missing ```python opening tag, malformed code fences), this is an agent mistake, not a benchmark issue. The framework clearly communicates expected formats in error messages like "Ensure your response is in the format of ```python" or "Make sure to provide correct code blobs." When the agent subsequently fixes its formatting and the code executes correctly, this confirms the issue was agent-side.
+
+2. Tool call formatting errors: If the agent incorrectly uses tool calls (e.g., calling final_answer() without proper code block wrapper, mixing tool syntax with raw output), and the framework provides clear feedback about correct usage, this is agent error.
+
+3. Recoverable format errors: If an error occurs but the agent is able to retry and succeed by fixing its output format, the original error was NOT caused by a benchmark deficiency. A true benchmark deficiency would block ALL attempts regardless of agent behavior.
+
+The key test: Would ANY output format from the agent work? If yes (as evidenced by successful retries or clear format instructions), then formatting failures are agent issues. Only classify as benchmark deficiency if the expected format is impossible to produce or contradictory instructions make compliance impossible.
+
 EVALUATION PROCESS
 
 Read the complete agent trace with fresh eyes. Do not assume the categories above are exhaustive or that every failure fits neatly into one. Your analysis should:
