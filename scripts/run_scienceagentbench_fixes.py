@@ -9,6 +9,9 @@ This script:
 4. Runs HAL evaluation for fixed tasks using the original failing model
 5. Outputs traces with a configurable prefix
 
+Parallelism: Each (task, model) pair runs in a separate HAL instance.
+Use --parallel N to run N HAL instances concurrently.
+
 Usage:
     # List available fixes
     python scripts/run_scienceagentbench_fixes.py --list-fixes
@@ -25,6 +28,9 @@ Usage:
     # Run fixes for all failed tasks that have fixes (auto-detects model from rubric)
     python scripts/run_scienceagentbench_fixes.py --prefix iter1_ \
         --rubric-csv rubrics_output/scienceagentbench/scienceagentbench_combined.csv --docker
+
+    # Run with parallelism (5 concurrent HAL instances)
+    python scripts/run_scienceagentbench_fixes.py --all-models --prefix iter1_ --parallel 5 --docker
 """
 
 from __future__ import annotations
@@ -311,22 +317,21 @@ def run_hal_eval(
     output_prefix: str,
     benchmark: str = "scienceagentbench",
     docker: bool = False,
-    task_ids: Optional[List[str]] = None,
+    task_id: Optional[str] = None,
     pricing_key: Optional[str] = None,
-    max_concurrent: int = 1,
 ) -> Tuple[bool, str, Optional[Path]]:
     """Run HAL evaluation with a custom dataset.
 
     Args:
-        task_ids: List of task IDs being run (for logging/run_id only)
-        max_concurrent: Number of concurrent tasks within this HAL run
+        task_id: Single task ID being run (for run_id naming)
+        pricing_key: The config key used for pricing lookup (may differ from model_id).
+                     If None, falls back to model_name from agent_args.
     """
     model_name = str(agent_args.get("model_name", "model"))
     model_slug = _slugify(model_name.replace("/", "_"), "model")
     effort = str(agent_args.get("reasoning_effort") or "").strip().lower()
     effort_part = f"_{_slugify(effort, '')}" if effort else ""
-    # For multi-task runs, don't include task_id in run_id
-    task_part = f"_{task_ids[0]}" if task_ids and len(task_ids) == 1 else ""
+    task_part = f"_{task_id}" if task_id else ""
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     run_id = f"{output_prefix}{model_slug}{effort_part}{task_part}_{benchmark}_{timestamp}"
 
@@ -337,7 +342,7 @@ def run_hal_eval(
         "--agent_function", "main.run",
         "--agent_dir", str(agent_dir),
         "--run_id", run_id,
-        "--max_concurrent", str(max_concurrent),
+        "--max_concurrent", "1",
     ]
 
     # Note: task filtering is done via the dataset file (SCIENCEAGENTBENCH_DATASET_PATH)
@@ -369,10 +374,8 @@ def run_hal_eval(
     weave_project = f"{output_prefix.rstrip('_')}_{benchmark}"
     env["HAL_WEAVE_PROJECT"] = weave_project
 
-    num_tasks = len(task_ids) if task_ids else "all"
     log(f"Running HAL eval with run_id: {run_id}", "hal")
     log(f"Model (API): {agent_args.get('model_name')} | Pricing key: {effective_pricing_key}", "hal")
-    log(f"Tasks: {num_tasks} | Max concurrent: {max_concurrent}", "hal")
     log(f"Dataset: {dataset_path}", "hal")
     log(f"Command: {' '.join(cmd)}", "hal")
 
@@ -439,7 +442,7 @@ def main():
     parser.add_argument("--max-tasks", type=int, help="Maximum number of tasks to process.")
     parser.add_argument("--dry-run", action="store_true", help="Preview what would be done.")
     parser.add_argument("--parallel", type=int, default=1,
-                        help="Number of parallel HAL evaluations (default: 1).")
+                        help="Number of parallel HAL instances to run (default: 1). Each (task, model) pair runs in a separate HAL instance.")
     parser.add_argument("--list-fixes", action="store_true", help="List available fixes and exit.")
     parser.add_argument("--show-fix", help="Show details of a specific fix and exit.")
     parser.add_argument("--docker", action="store_true", help="Run HAL evaluation with --docker flag.")
@@ -663,39 +666,40 @@ def main():
 
     log(f"Loaded {len(fixes)} fixes", "main")
 
-    # Dry run
+    # Dry run - show what would be done
     if args.dry_run:
-        # Group tasks by model
-        model_to_tasks: Dict[str, List[str]] = {}
-        for task_id, model_id in task_model_pairs:
-            model_to_tasks.setdefault(model_id, []).append(task_id)
-
         print(f"\n{'='*60}")
-        print("DRY RUN - Would run HAL with the following configuration:")
+        print("DRY RUN - Would apply the following fixes:")
         print("="*60)
-        print(f"\nPrefix: {prefix}")
-        print(f"Docker: {args.docker}")
-        print(f"Max concurrent tasks per HAL: {args.parallel}")
-        print(f"\nTotal: {len(model_to_tasks)} HAL instances (running in parallel), {len(task_model_pairs)} task-model pairs")
 
-        for model_id, task_list in model_to_tasks.items():
-            print(f"\n--- Model: {model_id} ---")
-            print(f"  Tasks ({len(task_list)}): {', '.join(sorted(task_list, key=lambda x: int(x) if x.isdigit() else float('inf')))}")
+        # Group by task
+        tasks_to_models: Dict[str, List[str]] = {}
+        for task_id, model_id in task_model_pairs:
+            tasks_to_models.setdefault(task_id, []).append(model_id)
 
-            # Show fix types for each task
-            for task_id in sorted(task_list, key=lambda x: int(x) if x.isdigit() else float('inf'))[:5]:  # Show first 5
-                fix = fixes.get(task_id, {})
-                fix_types = []
-                if fix.get("instruction_override"): fix_types.append("instr")
-                if fix.get("input_override"): fix_types.append("input")
-                if fix.get("env_override"): fix_types.append("env")
-                if fix.get("evaluation_override"): fix_types.append("eval")
-                if fix_types:
-                    print(f"    Task {task_id}: [{', '.join(fix_types)}]")
-            if len(task_list) > 5:
-                print(f"    ... and {len(task_list) - 5} more tasks")
+        for task_id in sorted(tasks_to_models.keys(), key=lambda x: int(x) if x.isdigit() else float('inf')):
+            models = tasks_to_models[task_id]
+            fix = fixes.get(task_id, {})
+            print(f"\n--- Task {task_id} ---")
+            print(f"  Models: {models}")
+            if fix.get("instruction_override"):
+                instr = fix["instruction_override"]
+                if instr.get("clarifications"):
+                    print("  Clarifications:")
+                    for c in instr["clarifications"]:
+                        print(f"    - {c[:80]}...")
+            if fix.get("input_override"):
+                inp = fix["input_override"]
+                if inp.get("clarifications"):
+                    print(f"  Input clarifications: {len(inp['clarifications'])} items")
+            if fix.get("env_override"):
+                print(f"  Environment: {list(fix['env_override'].keys())}")
 
         print(f"\n{'='*60}")
+        print(f"Would run HAL eval with prefix: {prefix}")
+        print(f"Docker: {args.docker}")
+        print(f"Total jobs: {len(task_model_pairs)}")
+        print(f"Parallel HAL instances: {args.parallel}")
         return
 
     # Load ScienceAgentBench dataset
@@ -706,39 +710,36 @@ def main():
         return
     log(f"Loaded {len(dataset)} tasks from dataset", "data")
 
-    # Group tasks by model - each model gets one HAL run with all its tasks
-    model_to_tasks: Dict[str, List[str]] = {}
-    for task_id, model_id in task_model_pairs:
-        model_to_tasks.setdefault(model_id, []).append(task_id)
+    # Load fallback agent args (for legacy mode)
+    fallback_agent_args: Dict[str, Any] = {"model_name": "gpt-4o"}
 
-    log(f"Grouped into {len(model_to_tasks)} model runs:", "main")
-    for model_id, task_list in model_to_tasks.items():
-        log(f"  - {model_id}: {len(task_list)} tasks", "main")
+    # Define job runner function for parallel execution
+    def run_single_job(job_info: Tuple[int, str, str]) -> Tuple[str, str, bool, Optional[Path], str]:
+        """Run a single (task, model) job. Returns (task_id, model_id, success, trace_path, message)."""
+        job_idx, task_id, model_id = job_info
 
-    # Run one HAL instance per model - all models in parallel
-    generated_traces: List[Path] = []
-    failed_runs: List[Tuple[str, str, str]] = []
+        # Get agent args for this model
+        # Returns (agent_args, pricing_key) where pricing_key is config key for cost tracking
+        pricing_key = None
+        if model_id and model_config:
+            result = get_agent_args_for_model(model_id, model_config)
+            if result is None:
+                return (task_id, model_id, False, None, "model not in config")
+            task_agent_args, pricing_key = result
+        else:
+            task_agent_args = fallback_agent_args.copy()
 
-    def run_model_batch(model_id: str, task_list: List[str]) -> Tuple[str, bool, Optional[Path], str, List[str]]:
-        """Run all tasks for a single model. Returns (model_id, success, trace_path, message, task_list)."""
-        log(f"Starting model: {model_id} ({len(task_list)} tasks)", model_id[:20])
+        # Create filtered dataset with just this task
+        fix = fixes.get(task_id)
+        if not fix:
+            return (task_id, model_id, False, None, "no fix")
 
-        result = get_agent_args_for_model(model_id, model_config)
-        if result is None:
-            return (model_id, False, None, "model not in config", task_list)
-        task_agent_args, pricing_key = result
-
-        # Create combined dataset with all tasks for this model, with fixes applied
-        task_fixes = {tid: fixes[tid] for tid in task_list if tid in fixes}
-        filtered, changes_applied = create_filtered_dataset(dataset, task_fixes, task_list, verbose=False)
-
+        filtered, changes_applied = create_filtered_dataset(dataset, {task_id: fix}, [task_id], verbose=False)
         if not filtered:
-            return (model_id, False, None, "tasks not in dataset", task_list)
-
-        log(f"Created dataset with {len(filtered)} tasks", model_id[:20])
+            return (task_id, model_id, False, None, "task not in dataset")
 
         # Write temporary dataset file
-        temp_dataset = TMP_DIR / f"scienceagentbench_{model_id.replace('/', '_')}_{time.time()}.json"
+        temp_dataset = TMP_DIR / f"scienceagentbench_{task_id}_{model_id.replace('/', '_')}_{time.time()}.json"
         temp_dataset.write_text(json.dumps(filtered, indent=2))
 
         try:
@@ -749,41 +750,65 @@ def main():
                 output_prefix=prefix,
                 benchmark=args.benchmark,
                 docker=args.docker,
-                task_ids=task_list,
+                task_id=task_id,
                 pricing_key=pricing_key,
-                max_concurrent=args.parallel,
             )
-            return (model_id, success and trace_path is not None, trace_path, message, task_list)
+            return (task_id, model_id, success and trace_path is not None, trace_path, message)
         finally:
-            # Clean up temp file
             temp_dataset.unlink(missing_ok=True)
 
-    # Run all models in parallel
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    # Run jobs
+    generated_traces: List[Path] = []
+    failed_runs: List[Tuple[str, str, str]] = []
+    total_jobs = len(task_model_pairs)
 
-    log(f"Launching {len(model_to_tasks)} HAL instances in parallel...", "main")
+    # Prepare job list with indices
+    jobs = [(i, task_id, model_id) for i, (task_id, model_id) in enumerate(task_model_pairs)]
 
-    with ThreadPoolExecutor(max_workers=len(model_to_tasks)) as executor:
-        futures = {
-            executor.submit(run_model_batch, model_id, task_list): model_id
-            for model_id, task_list in model_to_tasks.items()
-        }
+    if args.parallel > 1:
+        # Parallel execution - run separate HAL instances
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import threading
 
-        for future in as_completed(futures):
-            model_id = futures[future]
-            try:
-                model_id, success, trace_path, message, task_list = future.result()
-                if success and trace_path:
-                    generated_traces.append(trace_path)
-                    log(f"SUCCESS: {model_id} -> {trace_path}", "main")
-                else:
-                    for task_id in task_list:
-                        failed_runs.append((task_id, model_id, message))
-                    log(f"FAILED: {model_id} - {message}", "main")
-            except Exception as e:
-                log(f"ERROR: {model_id} - {e}", "main")
-                for task_id in model_to_tasks[model_id]:
-                    failed_runs.append((task_id, model_id, str(e)))
+        log(f"Running {total_jobs} jobs with {args.parallel} parallel HAL instances", "main")
+        completed = 0
+        lock = threading.Lock()
+
+        with ThreadPoolExecutor(max_workers=args.parallel) as executor:
+            future_to_job = {executor.submit(run_single_job, job): job for job in jobs}
+
+            for future in as_completed(future_to_job):
+                job = future_to_job[future]
+                job_idx, task_id, model_id = job
+
+                try:
+                    task_id, model_id, success, trace_path, message = future.result()
+                    with lock:
+                        completed += 1
+                        if success and trace_path:
+                            generated_traces.append(trace_path)
+                            log(f"[{completed}/{total_jobs}] SUCCESS: task={task_id} model={model_id}", "main")
+                        else:
+                            failed_runs.append((task_id, model_id, message))
+                            log(f"[{completed}/{total_jobs}] FAILED: task={task_id} model={model_id} - {message}", "main")
+                except Exception as e:
+                    with lock:
+                        completed += 1
+                        failed_runs.append((task_id, model_id, str(e)))
+                        log(f"[{completed}/{total_jobs}] ERROR: task={task_id} model={model_id} - {e}", "main")
+    else:
+        # Sequential execution
+        for i, (task_id, model_id) in enumerate(task_model_pairs):
+            log(f"\n=== [{i+1}/{total_jobs}] task={task_id}, model={model_id or 'default'} ===", "main")
+
+            task_id, model_id, success, trace_path, message = run_single_job((i, task_id, model_id))
+
+            if success and trace_path:
+                generated_traces.append(trace_path)
+                log(f"SUCCESS: {trace_path}", "main")
+            else:
+                failed_runs.append((task_id, model_id, message))
+                log(f"FAILED: {message}", "main")
 
     # Summary
     print(f"\n{'='*60}")
