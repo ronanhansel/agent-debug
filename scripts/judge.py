@@ -63,19 +63,12 @@ def _ensure_llm_cache_path() -> None:
 
 _ensure_llm_cache_path()
 
-# Docent imports (after env setup)
+# Docent imports (required)
 try:
     from docent_core._llm_util.prod_llms import LLMManager
     from docent_core._llm_util.providers.preferences import ModelOption
-    DOCENT_AVAILABLE = True
 except ImportError as e:
-    DOCENT_AVAILABLE = False
-    print(f"Warning: docent not available ({e}), falling back to OpenAI client")
-
-try:
-    from openai import OpenAI
-except ImportError:
-    print("Error: openai package not installed. Run: pip install openai")
+    print(f"Error: docent not available ({e}). Ensure docent is installed.")
     sys.exit(1)
 
 
@@ -278,6 +271,7 @@ async def judge_tasks_with_docent(
     model_option: "ModelOption",
     parallel: int = 5,
     retries: int = 3,
+    use_cache: bool = True,
 ) -> list[JudgeVerdict]:
     """Judge tasks using docent LLMManager with caching."""
     from tqdm.auto import tqdm
@@ -294,10 +288,10 @@ async def judge_tasks_with_docent(
         ])
         task_id_order.append(task_id)
 
-    # Create LLMManager with caching
+    # Create LLMManager
     llm_manager = LLMManager(
         model_options=[model_option],
-        use_cache=True,
+        use_cache=use_cache,
     )
 
     print(f"Calling {model_option.model_name} (temperature=0) with {parallel} concurrent requests...")
@@ -353,65 +347,6 @@ async def judge_tasks_with_docent(
         verdicts.append(verdict)
 
     return verdicts
-
-
-def judge_task_openai(
-    client: OpenAI,
-    task_id: str,
-    evals: list[TaskEvaluation],
-    model: str,
-    reasoning_effort: str | None = None,
-    retries: int = 3,
-) -> JudgeVerdict:
-    """Fallback: Use OpenAI client directly (no caching)."""
-    prompt = build_judge_prompt(task_id, evals)
-
-    messages = [
-        {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
-        {"role": "user", "content": prompt},
-    ]
-
-    kwargs: dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0,  # Deterministic
-        "response_format": {"type": "json_object"},
-    }
-
-    if reasoning_effort:
-        kwargs["reasoning_effort"] = reasoning_effort
-
-    last_error = None
-    for attempt in range(retries):
-        try:
-            response = client.chat.completions.create(**kwargs)
-            content = response.choices[0].message.content or ""
-            parsed = parse_judge_response(content)
-
-            return JudgeVerdict(
-                task_id=task_id,
-                final_grade=int(parsed.get("final_grade", 0)),
-                satisfies_rubric=bool(parsed.get("satisfies_rubric", False)),
-                reasoning=str(parsed.get("reasoning", "")),
-                num_evaluations=len(evals),
-                model_runs=[ev.model_run for ev in evals],
-            )
-        except Exception as e:
-            last_error = e
-            wait_time = 2 ** attempt
-            print(f"    Attempt {attempt + 1}/{retries} failed: {e}")
-            if attempt < retries - 1:
-                print(f"    Retrying in {wait_time}s...")
-                time.sleep(wait_time)
-
-    return JudgeVerdict(
-        task_id=task_id,
-        final_grade=0,
-        satisfies_rubric=False,
-        reasoning=f"Failed after {retries} attempts: {last_error}",
-        num_evaluations=len(evals),
-        model_runs=[ev.model_run for ev in evals],
-    )
 
 
 def write_verdicts_csv(verdicts: list[JudgeVerdict], output_path: Path) -> None:
@@ -512,7 +447,7 @@ def main():
     parser.add_argument(
         "--no-cache",
         action="store_true",
-        help="Disable docent caching (use OpenAI client directly)",
+        help="Disable LLM response caching (force re-evaluation, keeps parallelism)",
     )
 
     args = parser.parse_args()
@@ -601,51 +536,24 @@ def main():
         print("="*60)
         return
 
-    # Run judge
-    use_docent = DOCENT_AVAILABLE and not args.no_cache
+    # Run judge with docent
+    use_cache = not args.no_cache
+    cache_status = "caching enabled" if use_cache else "caching disabled"
+    print(f"\nUsing docent ({cache_status}, parallel={args.parallel})...")
 
-    if use_docent:
-        print(f"\nUsing docent with caching (parallel={args.parallel})...")
-        model_option = ModelOption(
-            provider=provider,
-            model_name=model_name,
-            reasoning_effort=args.reasoning_effort,
-        )
-        verdicts = asyncio.run(judge_tasks_with_docent(
-            task_ids=task_ids,
-            evaluations=evaluations,
-            model_option=model_option,
-            parallel=args.parallel,
-            retries=args.retries,
-        ))
-    else:
-        print(f"\nUsing OpenAI client directly (no caching)...")
-        base_url = os.getenv("OPENAI_BASE_URL", "http://localhost:4000/v1")
-        api_key = os.getenv("OPENAI_API_KEY", "sk-1234")
-        client = OpenAI(base_url=base_url, api_key=api_key)
-        print(f"API base URL: {base_url}")
-
-        verdicts = []
-        for i, task_id in enumerate(task_ids, 1):
-            evals = evaluations[task_id]
-            print(f"\n[{i}/{len(task_ids)}] Judging task {task_id} ({len(evals)} evaluations)...")
-
-            verdict = judge_task_openai(
-                client=client,
-                task_id=task_id,
-                evals=evals,
-                model=model_name,
-                reasoning_effort=args.reasoning_effort,
-                retries=args.retries,
-            )
-            verdicts.append(verdict)
-
-            # Log result (full output, no truncation)
-            status = "IFE CONFIRMED" if verdict.satisfies_rubric else "NO IFE"
-            print(f"{'='*60}")
-            print(f"Grade: {verdict.final_grade} ({status})")
-            if verdict.reasoning:
-                print(f"Reasoning:\n{verdict.reasoning}")
+    model_option = ModelOption(
+        provider=provider,
+        model_name=model_name,
+        reasoning_effort=args.reasoning_effort,
+    )
+    verdicts = asyncio.run(judge_tasks_with_docent(
+        task_ids=task_ids,
+        evaluations=evaluations,
+        model_option=model_option,
+        parallel=args.parallel,
+        retries=args.retries,
+        use_cache=use_cache,
+    ))
 
     # Write output
     write_verdicts_csv(verdicts, output_path)
