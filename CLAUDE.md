@@ -138,6 +138,19 @@ Runs are identified by fruit-based prefixes:
 - Patch format errors (unified diff)
 - Environment/conda setup failures
 
+**Known Research-Documented Issues** (SWE-bench Verified still has problems):
+- **Weak Test Coverage (~31%)**: Tests only check modified files, incorrect fixes can pass
+- **Flaky Tests**: recursion depth errors, timing issues, external service dependencies (httpbin.org)
+- **Log Parsing Issues**: Django "System check" output breaks test result parsing
+- **Overly Specific Tests**: Valid alternative implementations may fail
+- **Divergent Valid Solutions (~47%)**: Gold patch may be one of many correct approaches
+
+**Rubric Features** (`rubric_templates/swebench.txt`):
+- Cross-run validation (if one model finds files, "missing files" claims are rejected)
+- Exploratory analysis section for discovering novel benchmark issues
+- Known problematic task patterns (Django, Requests, SymPy, Matplotlib)
+- Questions to guide LLM reasoning about potential IFEs
+
 **Evaluation**: Docker-based, applies patch and runs test suite
 
 **HAL Command**:
@@ -211,7 +224,7 @@ hal-eval --benchmark assistantbench \
 **Purpose**: Scientific data-driven discovery
 
 **Agent**: `hal-harness/hal/benchmarks/scienceagentbench/ScienceAgentBench/agent.py`
-- 102 tasks across scientific domains
+- 102 tasks across 4 scientific domains (bioinformatics, chemistry, GIS, psychology)
 - Uses ScienceAgent class with LLM engines
 - Optional self-debug mechanism
 - Docker-based evaluation
@@ -222,7 +235,21 @@ hal-eval --benchmark assistantbench \
 - Required libraries not in container
 - Output format requirements unclear
 
-**Evaluation**: Docker execution + CodeBERT similarity
+**Known Research-Documented Issues** (from benchmark paper and trace analysis):
+- **High Universal Failure Rate**: 67/102 tasks failed across ALL 4 models (GPT-4.1, O3, O4-mini)
+- **Figure Evaluation Subjectivity**: GPT-4 judge penalizes color schemes, axis labels, layout differences
+- **Domain Library Gaps**: `oggm`, `mastml`, `mne`, `biopsykit` often missing from environment
+- **Acknowledged Evaluation Noise**: Authors note "subjective variance in color, scale, and labeling"
+- **Partial Credit Issues**: "Functionally equivalent implementations may receive lower scores"
+
+**Rubric Features** (`rubric_templates/scienceagentbench.txt`):
+- Cross-run analysis with specific failure statistics
+- Figure/visualization evaluation issues category
+- Domain-specific library availability investigation
+- Known problematic task patterns (Tasks 74, 43, 2 for environment issues)
+- Exploratory questions for subjective evaluation fairness
+
+**Metrics**: Valid Execution Rate (VER), Success Rate (SR), CodeBERTScore (CBS)
 
 **HAL Command**:
 ```bash

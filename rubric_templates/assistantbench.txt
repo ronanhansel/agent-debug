@@ -27,6 +27,12 @@ The target website cannot be accessed or navigated:
 - Geographic restrictions prevent access
 - Website has changed structure since task creation
 
+**IMPORTANT - Systematic vs Intermittent Blocking:**
+- If a site blocks access in ALL model runs (e.g., Zillow "Press & Hold" challenge), this IS an IFE
+- If SEC.gov explicitly states "Undeclared Automated Tool" rejection, this IS an environment-level IFE
+- If a task explicitly requires a specific source (e.g., "according to Zillow") and that source is blocked, this IS an IFE even if alternative sources theoretically exist
+- Workarounds that "theoretically exist" but no model successfully used are NOT evidence against IFE
+
 ### 2. Answer Validity Problems
 The expected answer is incorrect or outdated:
 - Information has changed since task creation (prices, dates, facts)
@@ -54,6 +60,14 @@ The browser automation environment is inadequate:
 - Iframes or shadow DOM not properly handled
 - Cookie/session management breaks navigation
 - Network timeouts for slow-loading sites
+- Sites consistently render as "empty page" (e.g., TripAdvisor)
+- chrome-error://chromewebdata/ navigation failures
+- Google reCAPTCHA blocks search functionality across multiple runs
+
+**IMPORTANT - Environment vs Agent Issues:**
+- If a site CONSISTENTLY renders empty across ALL runs, this IS an environment-level IFE
+- If Google reCAPTCHA appears in MOST runs for a task, blocking primary navigation, consider this an IFE
+- Transient single-run failures that don't repeat are likely agent issues, not environment IFEs
 
 ### 6. Data Freshness Issues
 The benchmark data is stale:
@@ -148,3 +162,28 @@ Respond with a JSON object:
 - Product/entity in task no longer exists anywhere
 - Gold answer is demonstrably incorrect
 - Task requires information that was never public
+
+---
+
+## Cross-Run Analysis Guidelines
+
+When evaluating IFE, consider patterns across multiple model runs:
+
+### Strong IFE Indicators:
+1. **All 4+ capable models failed the same task** - suggests systematic issue
+2. **Same blocking pattern (CAPTCHA/empty page) in ALL runs** - not intermittent
+3. **No model found a successful workaround** - theoretical alternatives don't exist in practice
+4. **Task requires specific source that is uniformly blocked** - no alternative can fulfill requirement
+
+### Weak IFE Indicators (Lean toward Score 0):
+1. **Some runs succeeded, others failed** - issue is intermittent/agent-dependent
+2. **Different failure reasons across runs** - not systematic
+3. **At least one model found alternative source** - workaround exists in practice
+
+### The "Theoretical Workaround" Fallacy:
+Do NOT reject an IFE claim simply because a workaround "could theoretically exist." If:
+- The workaround requires accessing a site that is ALSO blocked (e.g., "use Redfin" when Zillow is blocked, but Redfin also requires auth)
+- No model across multiple runs actually succeeded with the workaround
+- The workaround requires capabilities the browser automation environment doesn't have
+
+Then the IFE claim should be accepted.
