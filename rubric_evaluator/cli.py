@@ -534,8 +534,42 @@ def sort_entries(entries: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(entries, key=lambda e: (entry_timestamp(e) or "", e.get("id", "")))
 
 
-def build_trace_message(raw_message: dict[str, Any], entry: dict[str, Any]) -> TraceMessage | None:
-    """Normalize a raw OpenAI message dict into TraceMessage."""
+def build_trace_message(raw_message: dict[str, Any] | list | Any, entry: dict[str, Any]) -> TraceMessage | None:
+    """Normalize a raw OpenAI message dict into TraceMessage.
+
+    Handles multiple formats:
+    - Standard OpenAI format: {"role": "user", "content": "..."}
+    - LangChain serialization format: [{"lc": 1, "type": "constructor", "id": [...], "kwargs": {"content": "..."}}]
+    """
+    # Handle LangChain serialization format (list containing constructor dict)
+    if isinstance(raw_message, list):
+        if raw_message and isinstance(raw_message[0], dict):
+            lc_msg = raw_message[0]
+            if lc_msg.get("type") == "constructor" and "kwargs" in lc_msg:
+                # Extract role from id path (e.g., ["langchain", "schema", "messages", "SystemMessage"])
+                msg_id = lc_msg.get("id", [])
+                role = None
+                if msg_id and len(msg_id) >= 4:
+                    msg_type = msg_id[-1].lower()
+                    if "system" in msg_type:
+                        role = "system"
+                    elif "human" in msg_type or "user" in msg_type:
+                        role = "user"
+                    elif "ai" in msg_type or "assistant" in msg_type:
+                        role = "assistant"
+                    elif "tool" in msg_type or "function" in msg_type:
+                        role = "tool"
+
+                if role:
+                    content = normalize_content(lc_msg.get("kwargs", {}).get("content"))
+                    if content:
+                        return TraceMessage(role=role, content=content, entry_id=entry.get("id"), timestamp=entry_timestamp(entry))
+        return None
+
+    # Must be a dict for standard format
+    if not isinstance(raw_message, dict):
+        return None
+
     role = raw_message.get("role")
     if not role:
         return None
@@ -808,6 +842,7 @@ async def evaluate_environmental_barrier(
     inter_batch_delay: float = 0,
     retries: int = 3,
     json_mode: bool = False,
+    use_cache: bool = True,
 ) -> list[LocalRubricEvaluation]:
     if evaluate_rubric is None:
         raise RuntimeError("Docent rubric evaluator is unavailable. Ensure docent is installed.")
@@ -837,7 +872,7 @@ async def evaluate_environmental_barrier(
         last_error = None
         for attempt in range(retries):
             try:
-                outputs = await evaluate_rubric(batch, rubric, response_format=response_format)
+                outputs = await evaluate_rubric(batch, rubric, response_format=response_format, use_cache=use_cache)
                 break
             except Exception as e:
                 last_error = e
@@ -1145,6 +1180,8 @@ def run(args: argparse.Namespace) -> None:
                 f"with {model_option.provider}:{model_option.model_name} (batch_size={batch_size})..."
             )
 
+        # Determine cache usage - default to True unless --no-cache is specified
+        use_cache = not getattr(args, "no_cache", False)
         try:
             grading_results = asyncio.run(
                 evaluate_environmental_barrier(
@@ -1155,6 +1192,7 @@ def run(args: argparse.Namespace) -> None:
                     inter_batch_delay=inter_batch_delay,
                     retries=retries,
                     json_mode=use_json_mode,
+                    use_cache=use_cache,
                 ),
             )
         except Exception as exc:  # pragma: no cover - depends on provider availability

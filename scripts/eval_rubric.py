@@ -173,6 +173,11 @@ def main():
         type=str,
         help="Sleep duration before and after inbetween command (e.g., '5s', '2m')",
     )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable LLM response caching (force re-evaluation of all tasks).",
+    )
 
     args = parser.parse_args()
 
