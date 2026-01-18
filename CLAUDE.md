@@ -324,47 +324,32 @@ python demonstrate/analyze_rubrics_detailed.py
 
 ## Workflow for New Benchmarks
 
-1. **Collect baseline traces**: Run agents on benchmark, collect traces
-   ```bash
-   hal-eval --benchmark <name> --agent_dir agents/<agent>/ ...
-   ```
+**See `INSTRUCTIONS_NEW_BENCHMARK.md` for detailed step-by-step instructions.**
 
-2. **Create rubric template**: Copy existing template and adapt
-   ```bash
-   cp rubric_templates/scicode.txt rubric_templates/<benchmark>.txt
-   # Edit to match benchmark-specific failure patterns
-   ```
+Quick summary:
 
-3. **Rubric evaluation**: Grade failed tasks
+1. **Explore benchmark**: Understand agent structure, evaluation method, task format
+2. **Create rubric template**: `rubric_templates/<benchmark>.txt`
+3. **Create output directory**: `mkdir -p rubrics_output/<benchmark>`
+4. **Update CLAUDE.md**: Add benchmark details
+5. **Run rubric evaluation**:
    ```bash
-   python scripts/pipeline.py rubric \
-       --trace-file traces/<benchmark>_UPLOAD.json \
-       --rubrics-dir rubric_templates/
+   python scripts/eval_rubric.py \
+       --trace-file traces/<benchmark>_*.json \
+       --rubric rubric_templates/<benchmark>.txt \
+       --rubric-model openai:gpt-4o \
+       --failed-only -y
    ```
-
-4. **Judge aggregation**: Aggregate rubrics into verdicts
+6. **Aggregate verdicts**:
    ```bash
    python scripts/judge.py \
        --rubric-dir rubrics_output/<benchmark> \
        --output judge_output/<benchmark>_verdict.csv
    ```
-
-5. **Identify fixes**: Analyze Grade=1 tasks for root causes
-   ```bash
-   grep ",1," rubrics_output/<benchmark>/*.csv
-   ```
-
-6. **Apply item fixes**: Modify agent config/prompts (not benchmark)
-   - Agent configuration changes
-   - Prompt template updates
-   - Rubric clarifications
-
-7. **Re-run evaluation**: Verify fixes with new traces (use new prefix)
-   ```bash
-   hal-eval --benchmark <name> ...  # Generates new trace
-   ```
-
-8. **Compare before/after**: Generate analysis figures
+7. **Investigate Grade=1 tasks**: Identify root causes
+8. **Apply item fixes**: Agent config, prompts, rubric clarifications
+9. **Re-run evaluation**: Use new prefix (e.g., `honey`)
+10. **Compare before/after**: Measure improvement
 
 ---
 
@@ -387,6 +372,27 @@ All rubric templates follow the same structure:
 ## Response Format (JSON)
 ## Common Failure Patterns
 ```
+
+### Unified Schema
+
+All rubrics use a unified JSON schema (`rubric_templates/rubric.schema.json`):
+
+```json
+{
+  "score": 0 or 1,
+  "deficiency_exists": boolean,
+  "deficiency_caused_failure": boolean,
+  "deficiency_type": "string",
+  "existence_reasoning": "string",
+  "causation_reasoning": "string",
+  "evidence": "string"
+}
+```
+
+The schema loading priority is:
+1. Benchmark-specific schema (e.g., `swebench.schema.json`) - if exists
+2. Unified schema (`rubric.schema.json`) in the rubric directory
+3. Default simple schema (score + explanation only)
 
 ---
 

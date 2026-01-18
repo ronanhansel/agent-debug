@@ -329,7 +329,38 @@ def ensure_default_rubric_files(directory: Path) -> None:
     schema_path.write_text(json.dumps(DEFAULT_OUTPUT_SCHEMA, indent=2), encoding="utf-8")
 
 
-def load_single_rubric(file_path: Path) -> RubricDefinition | None:
+def _load_schema(file_path: Path, rubrics_dir: Path | None = None) -> dict[str, Any]:
+    """Load schema for a rubric, checking benchmark-specific then unified schema."""
+    # First try benchmark-specific schema (e.g., swebench.schema.json)
+    schema_path = file_path.with_suffix(".schema.json")
+    if schema_path.exists():
+        try:
+            return json.loads(schema_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            print(f"⚠️  Failed to parse schema for {file_path.name}: {exc}.")
+
+    # Then try unified schema in the same directory
+    unified_schema_path = file_path.parent / "rubric.schema.json"
+    if unified_schema_path.exists():
+        try:
+            return json.loads(unified_schema_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            print(f"⚠️  Failed to parse unified schema: {exc}.")
+
+    # Then try unified schema in rubrics_dir if different
+    if rubrics_dir and rubrics_dir != file_path.parent:
+        unified_schema_path = rubrics_dir / "rubric.schema.json"
+        if unified_schema_path.exists():
+            try:
+                return json.loads(unified_schema_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                print(f"⚠️  Failed to parse unified schema: {exc}.")
+
+    # Fall back to default
+    return DEFAULT_OUTPUT_SCHEMA
+
+
+def load_single_rubric(file_path: Path, rubrics_dir: Path | None = None) -> RubricDefinition | None:
     """Load a single rubric definition from a .txt file."""
     if not file_path.exists():
         return None
@@ -338,13 +369,7 @@ def load_single_rubric(file_path: Path) -> RubricDefinition | None:
         return None
     if GLOBAL_JSON_REQUIREMENTS not in rubric_text:
         rubric_text = f"{rubric_text.rstrip()}\n\n{GLOBAL_JSON_REQUIREMENTS}"
-    schema_path = file_path.with_suffix(".schema.json")
-    output_schema = DEFAULT_OUTPUT_SCHEMA
-    if schema_path.exists():
-        try:
-            output_schema = json.loads(schema_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            print(f"⚠️  Failed to parse schema for {file_path.name}: {exc}. Using default schema.")
+    output_schema = _load_schema(file_path, rubrics_dir)
     rubric_id = _slugify(file_path.stem.lower())
     return RubricDefinition(
         rubric_id=rubric_id,
@@ -362,13 +387,7 @@ def load_rubric_definitions(directory: Path) -> list[RubricDefinition]:
             continue
         if GLOBAL_JSON_REQUIREMENTS not in rubric_text:
             rubric_text = f"{rubric_text.rstrip()}\n\n{GLOBAL_JSON_REQUIREMENTS}"
-        schema_path = txt_path.with_suffix(".schema.json")
-        output_schema = DEFAULT_OUTPUT_SCHEMA
-        if schema_path.exists():
-            try:
-                output_schema = json.loads(schema_path.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as exc:
-                print(f"⚠️  Failed to parse schema for {txt_path.name}: {exc}. Using default schema.")
+        output_schema = _load_schema(txt_path, directory)
         rubric_id = _slugify(txt_path.stem.lower())
         definitions.append(
             RubricDefinition(
@@ -1076,17 +1095,17 @@ def run(args: argparse.Namespace) -> None:
         use_json_mode = False
 
     # Load rubric(s) - either single file or directory
+    rubrics_dir = Path(args.rubrics_dir).expanduser()
     if hasattr(args, 'rubric') and args.rubric:
         rubric_path = Path(args.rubric).expanduser()
         if not rubric_path.is_absolute():
             rubric_path = Path.cwd() / rubric_path
-        rubric_def = load_single_rubric(rubric_path)
+        rubric_def = load_single_rubric(rubric_path, rubrics_dir=rubric_path.parent)
         if not rubric_def:
             print(f"❌ Could not load rubric from {rubric_path}")
             return
         rubric_definitions = [rubric_def]
     else:
-        rubrics_dir = Path(args.rubrics_dir).expanduser()
         rubric_definitions = load_rubric_definitions(rubrics_dir)
         if not rubric_definitions:
             print(f"❌ No rubric definitions found in {rubrics_dir}. Add *.txt files and retry.")
