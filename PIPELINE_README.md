@@ -356,18 +356,36 @@ curl http://localhost:4000/v1/models
 unset OPENAI_BASE_URL
 ```
 
-### "No raw_logging_results in trace"
+### Subsequent runs Pipeline
+
+I want to start with implementing the full pipeline for the diagnosis and fixing of USACO. How can I get started with it? Here's the code to kickstart scicode and its full pipeline, the fixes are in the fixes/ folder. Now I want to implement the exact flow, pipeline to USACO, make sure to create separate run_usaco_fixes.py that can mirror what this does.
 
 ```bash
+# initial run, when there's no rubrics yet and no runs, you have to upload traces first
+python scripts/eval_rubric.py \
+    --trace-file traces/scicode_hal_generalist_agent_deepseekaideepseekr1_1753777608_UPLOAD.json \
+    --trace-file traces/scicode_scicode_zero_shot_agent_o4mini20250416_low_1745290900_UPLOAD.json \
+    --trace-file traces/scicode_scicode_zero_shot_agent_o4mini20250416_high_1745429794_UPLOAD.json \
+    --rubric rubric_templates/scicode.txt \
+    --rubric-model openai:gpt-5.2 \
+    --inbetween "TMUX= ./deploy_llm.sh" \
+    --sleep 15s \
+    --max-batch-messages 400 \
+    --inter-batch-delay 0 \
+    --retries 10 \
+    --sort-by-messages \
+    --sort-by-file-size \
+    -y
+
+# After initial run, you can merge the resulting traces with this and start from there
+
 python scripts/merge_traces.py --input 'traces/scicode_honey__scicode_honey_openai_gpt-4_1_2025-04-14_*_UPLOAD.json' --output traces/scicode_honey_openai_gpt-4_1_MERGED_UPLOAD.json --force && \
 python scripts/merge_traces.py --input 'traces/scicode_honey__scicode_honey_openai_o3_2025-04-16_medium_*_UPLOAD.json' --output traces/scicode_honey_openai_o3_medium_MERGED_UPLOAD.json --force && \
 python scripts/merge_traces.py --input 'traces/scicode_honey__scicode_honey_openai_o4-mini_2025-04-16_high_*_UPLOAD.json' --output traces/scicode_honey_openai_o4-mini_high_MERGED_UPLOAD.json --force && \
 python scripts/merge_traces.py --input 'traces/scicode_honey__scicode_honey_openai_o4-mini_2025-04-16_low_*_UPLOAD.json' --output traces/scicode_honey_openai_o4-mini_low_MERGED_UPLOAD.json --force
-```
 
-Run Weave extraction first:
+# Weave Extraction
 
-```bash
 python scripts/extract_weave_traces.py \
     --project ronanhansel-hanoi-university-of-science-and-technology/scicode_honey_scicode \
     --prefix scicode_honey_openai_gpt-4_1 \
@@ -378,7 +396,130 @@ python scripts/extract_weave_traces.py \
     --merge-input traces/scicode_honey_openai_o3_medium_MERGED_UPLOAD.json \
     --merge-input traces/scicode_honey_openai_o4-mini_high_MERGED_UPLOAD.json \
     --merge-input traces/scicode_honey_openai_o4-mini_low_MERGED_UPLOAD.json
+
+# Evaluation of rubrics
+
+python scripts/eval_rubric.py \
+    --trace-file traces/scicode_honey_openai_gpt-4_1.json \
+    --trace-file traces/scicode_honey_openai_o3_2025.json \
+    --trace-file traces/scicode_honey_openai_o4-mini_2025-04-16_high.json \
+    --trace-file traces/scicode_honey_openai_o4-mini_2025-04-16_low.json \
+    --rubric rubric_templates/scicode.txt \
+    --rubric-model openai:gpt-5.2 \
+    --max-batch-messages 400 \
+    --inter-batch-delay 0 \
+    --sleep 0s \
+    --retries 10 \
+    --sort-by-messages \
+    -y
+
+python scripts/judge.py \
+    --pattern "scicode_honey_*" \
+    --rubric-dir rubrics_output/scicode \
+    --model openai:gpt-5.2 \
+    --parallel 10 \
+    -y
+
+python scripts/run_scicode_fixes.py\
+    --prefix scicode_honey \
+    --parallel 20 \
+    --docker
 ```
+
+Full USACO Pipeline
+
+Step 2: Rubric Evaluation
+
+# Evaluate failed tasks against rubric
+
+```bash
+python scripts/eval_rubric.py \
+    $(printf -- '--trace-file %s ' traces/scienceagentbench_*) \
+    --rubric rubric_templates/scienceagentbench.txt \
+    --rubric-model openai:gpt-5.2 \
+    --max-batch-messages 1000 \
+    --max-concurrency 500 \
+    --rate-limit-delay 65 \
+    --retries 10 \
+    --inbetween "TMUX= ./deploy_llm.sh" \
+    --sleep 10s \
+    --inter-batch-delay 5 \
+    --sort-by-messages \
+    -y
+```
+
+Step 3: Judge Aggregation
+
+# Aggregate rubric verdicts
+
+```bash
+python scripts/judge.py \
+    --pattern scienceagentbench_* \
+    --rubric-dir rubrics_output/scienceagentbench \
+    --model openai:gpt-5.2 \
+    --parallel 100 \
+    -y
+```
+
+Step 4: Create Fixes (Manual)
+
+For each task with Grade=1 (benchmark defect), create a fix package:
+
+mkdir -p fixes/usaco/<task_id>
+
+# Create fix files (see fixes/usaco/README.md for formats)
+
+# - instruction_override.json
+
+# - evaluation_override.json
+
+# - input_override.json
+
+# - test_case_override.json
+
+Step 5: Verify and Apply Fixes
+
+# List available fixes
+
+python scripts/run_usaco_fixes.py --list-fixes
+
+# Verify fixes are applied correctly
+
+python scripts/run_usaco_fixes.py --verify-fixes
+
+# Dry run to see what would happen
+
+python scripts/run*usaco_fixes.py \
+ --prefix usaco_lime* \
+ --model openai/gpt-4.1-2025-04-14 \
+ --dry-run
+
+# Actually run fixes
+
+python scripts/run*usaco_fixes.py \
+ --prefix usaco_lime* \
+ --parallel 20 \
+ --docker
+
+Step 6: Merge Traces (Optional)
+
+python scripts/run*usaco_fixes.py \
+ --prefix usaco_lime* \
+ --merge-traces
+
+Step 7: Re-evaluate After Fixes
+
+python scripts/eval*rubric.py \
+ --trace-file traces/usaco_lime*\*\_UPLOAD.json \
+ --rubric rubric_templates/usaco.txt \
+ --rubric-model openai:gpt-5.2 \
+ -y
+
+python scripts/judge.py \
+ --pattern "usaco*lime*\*" \
+ --rubric-dir rubrics_output/usaco \
+ --model openai:gpt-5.2 \
+ -y
 
 ## Key Files
 
