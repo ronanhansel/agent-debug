@@ -154,6 +154,18 @@ def main():
         help="Number of retries per batch on failure (default: 3).",
     )
     parser.add_argument(
+        "--rate-limit-delay",
+        type=int,
+        default=65,
+        help="Seconds to wait on rate limit errors (default: 65). Set to match your API rate limit window.",
+    )
+    parser.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=10,
+        help="Max concurrent LLM requests within a batch (default: 10). Lower this to avoid overwhelming your API.",
+    )
+    parser.add_argument(
         "--sort-by-messages",
         action="store_true",
         help="Sort tasks from least to most messages before processing.",

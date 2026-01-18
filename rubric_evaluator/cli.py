@@ -157,6 +157,18 @@ def parse_args() -> argparse.Namespace:
         help="Number of retries per batch on failure (default: 3).",
     )
     parser.add_argument(
+        "--rate-limit-delay",
+        type=int,
+        default=65,
+        help="Seconds to wait on rate limit errors (default: 65). Set to match your API rate limit window.",
+    )
+    parser.add_argument(
+        "--max-concurrency",
+        type=int,
+        default=10,
+        help="Max concurrent LLM requests within a batch (default: 10). Lower this to avoid overwhelming your API.",
+    )
+    parser.add_argument(
         "--sort-by-messages",
         action="store_true",
         help="Sort tasks from least to most messages before processing.",
@@ -843,6 +855,8 @@ async def evaluate_environmental_barrier(
     retries: int = 3,
     json_mode: bool = False,
     use_cache: bool = True,
+    rate_limit_delay: int = 65,
+    max_concurrency: int = 10,
 ) -> list[LocalRubricEvaluation]:
     if evaluate_rubric is None:
         raise RuntimeError("Docent rubric evaluator is unavailable. Ensure docent is installed.")
@@ -867,17 +881,38 @@ async def evaluate_environmental_barrier(
         print(f"  Processing batch {batch_idx + 1}/{len(batches)}: {len(batch)} tasks ({batch_msg_count} messages)...")
         response_format = {"type": "json_object"} if json_mode else None
 
-        # Retry logic with exponential backoff
+        # Retry logic with exponential backoff and rate limit detection
         outputs = None
         last_error = None
         for attempt in range(retries):
             try:
-                outputs = await evaluate_rubric(batch, rubric, response_format=response_format, use_cache=use_cache)
+                outputs = await evaluate_rubric(batch, rubric, response_format=response_format, use_cache=use_cache, max_concurrency=max_concurrency)
                 break
             except Exception as e:
                 last_error = e
-                wait_time = 2 ** attempt  # 1, 2, 4 seconds
-                print(f"    ⚠️  Attempt {attempt + 1}/{retries} failed: {e}")
+                error_str = str(e).lower()
+
+                # Check for rate limit errors (429)
+                is_rate_limit = (
+                    "429" in error_str or
+                    "rate" in error_str or
+                    "too many requests" in error_str or
+                    "token limit" in error_str
+                )
+
+                if is_rate_limit:
+                    # Try to extract wait time from error message (e.g., "Try again in 44 seconds")
+                    wait_match = re.search(r'try again in (\d+)', error_str)
+                    if wait_match:
+                        wait_time = int(wait_match.group(1)) + 5  # Add buffer
+                    else:
+                        wait_time = rate_limit_delay  # Use configured rate limit delay
+                    print(f"    ⚠️  Rate limit hit (attempt {attempt + 1}/{retries}): {e}")
+                else:
+                    # Regular exponential backoff for other errors
+                    wait_time = min(2 ** attempt * 3, 60)  # 3, 6, 12, 24, 48, 60 max
+                    print(f"    ⚠️  Attempt {attempt + 1}/{retries} failed: {e}")
+
                 if attempt < retries - 1:
                     print(f"    Retrying in {wait_time}s...")
                     time.sleep(wait_time)
@@ -1160,6 +1195,8 @@ def run(args: argparse.Namespace) -> None:
     max_batch_messages = getattr(args, 'max_batch_messages', 0) or 0
     inter_batch_delay = getattr(args, 'inter_batch_delay', 0) or 0
     retries = getattr(args, 'retries', 3) or 3
+    rate_limit_delay = getattr(args, 'rate_limit_delay', 65) or 65
+    max_concurrency = getattr(args, 'max_concurrency', 10) or 10
 
     output_dir = Path(args.output_dir).expanduser()
     if args.output_mode == "csv":
@@ -1193,6 +1230,8 @@ def run(args: argparse.Namespace) -> None:
                     retries=retries,
                     json_mode=use_json_mode,
                     use_cache=use_cache,
+                    rate_limit_delay=rate_limit_delay,
+                    max_concurrency=max_concurrency,
                 ),
             )
         except Exception as exc:  # pragma: no cover - depends on provider availability
