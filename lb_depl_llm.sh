@@ -2,14 +2,14 @@
 # LLM API Load Balanced Cluster Deployment
 # Starts 20 LiteLLM backends + nginx load balancer (21 ports total)
 #
-# Usage: bash lb_depl_llm.sh              # Uses ports 4000-4020
-#        LB_PORT=5000 bash lb_depl_llm.sh # Uses ports 5000-5020
+# Usage: bash lb_depl_llm.sh              # Uses ports 5000-5020
+#        LB_PORT=6000 bash lb_depl_llm.sh # Uses ports 6000-6020
 #
-# Default: port 4000 (LB) + ports 4001-4020 (20 backends)
+# Default: port 5000 (LB) + ports 5001-5020 (20 backends)
 
 set -e
 
-LB_PORT=${LB_PORT:-4000}
+LB_PORT=${LB_PORT:-5000}
 START_PORT=$((LB_PORT + 1))  # Backends automatically start at LB_PORT + 1
 NUM_INSTANCES=${NUM_INSTANCES:-20}
 WORKSPACE=~/api
@@ -52,21 +52,25 @@ else
     source .venv/bin/activate
 fi
 
-# 5. Generate nginx config dynamically
-NGINX_RUNTIME_CONF="/tmp/llm_lb_nginx.conf"
-cat > "$NGINX_RUNTIME_CONF" << 'NGINX_EOF'
+# 5. Generate nginx config dynamically (port-specific files)
+NGINX_RUNTIME_CONF="/tmp/llm_lb_nginx_${LB_PORT}.conf"
+NGINX_ERROR_LOG="/tmp/llm_lb_nginx_${LB_PORT}_error.log"
+NGINX_ACCESS_LOG="/tmp/llm_lb_nginx_${LB_PORT}_access.log"
+NGINX_PID="/tmp/llm_lb_nginx_${LB_PORT}.pid"
+
+cat > "$NGINX_RUNTIME_CONF" << NGINX_EOF
 worker_processes auto;
-error_log /tmp/llm_lb_nginx_error.log warn;
-pid /tmp/llm_lb_nginx.pid;
+error_log $NGINX_ERROR_LOG warn;
+pid $NGINX_PID;
 
 events {
     worker_connections 1024;
 }
 
 http {
-    access_log /tmp/llm_lb_nginx_access.log;
+    access_log $NGINX_ACCESS_LOG;
 
-    upstream llm_backends {
+    upstream llm_backends_${LB_PORT} {
         least_conn;
 NGINX_EOF
 
@@ -92,7 +96,7 @@ cat >> "$NGINX_RUNTIME_CONF" << NGINX_EOF
         chunked_transfer_encoding on;
 
         location / {
-            proxy_pass http://llm_backends;
+            proxy_pass http://llm_backends_${LB_PORT};
             proxy_http_version 1.1;
             proxy_set_header Host \$host;
             proxy_set_header X-Real-IP \$remote_addr;
@@ -112,10 +116,13 @@ NGINX_EOF
 
 echo "Generated nginx config: $NGINX_RUNTIME_CONF"
 
-# 6. Stop existing nginx and sessions
+# 6. Stop existing nginx and sessions for this port
 echo ""
-echo "Stopping existing instances..."
-pkill -f "nginx.*llm_lb_nginx" 2>/dev/null || true
+echo "Stopping existing instances on port $LB_PORT..."
+# Kill any nginx using this port's config
+pkill -f "nginx.*llm_lb_nginx_${LB_PORT}" 2>/dev/null || true
+# Also kill any process using the LB port directly
+lsof -ti :$LB_PORT | xargs kill -9 2>/dev/null || true
 for i in $(seq 0 $((NUM_INSTANCES - 1))); do
     PORT=$((START_PORT + i))
     tmux kill-session -t "llm_api_$PORT" 2>/dev/null || true
@@ -166,8 +173,8 @@ for i in $(seq 0 $((NUM_INSTANCES - 1))); do
 done
 echo ""
 echo "Logs:"
-echo "  Nginx access: tail -f /tmp/llm_lb_nginx_access.log"
-echo "  Nginx error:  tail -f /tmp/llm_lb_nginx_error.log"
+echo "  Nginx access: tail -f $NGINX_ACCESS_LOG"
+echo "  Nginx error:  tail -f $NGINX_ERROR_LOG"
 echo ""
 echo "Stop everything:"
-echo "  pkill -f 'nginx.*llm_lb_nginx'; for port in \$(seq $START_PORT $((START_PORT + NUM_INSTANCES - 1))); do tmux kill-session -t llm_api_\$port 2>/dev/null; tmux kill-session -t llm_watchdog_\$port 2>/dev/null; done"
+echo "  pkill -f 'nginx.*llm_lb_nginx_${LB_PORT}'; for port in \$(seq $START_PORT $((START_PORT + NUM_INSTANCES - 1))); do tmux kill-session -t llm_api_\$port 2>/dev/null; tmux kill-session -t llm_watchdog_\$port 2>/dev/null; done"
