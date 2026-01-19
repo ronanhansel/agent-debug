@@ -319,7 +319,7 @@ def run_hal_eval(
     agent_args: Dict[str, Any],
     dataset_path: Path,
     output_prefix: str,
-    benchmark: str = "colbench_frontend_design",
+    benchmark: str = "colbench_backend_programming",
     docker: bool = False,
     conda_env: Optional[str] = None,
     task_id: Optional[str] = None,
@@ -448,9 +448,9 @@ def main():
 
     parser.add_argument("--agent-dir", default=str(HAL_HARNESS / "agents" / "colbench_example_agent"),
                         help="Path to the agent directory.")
-    parser.add_argument("--benchmark", default="colbench_frontend_design",
+    parser.add_argument("--benchmark", default="colbench_backend_programming",
                         choices=["colbench_backend_programming", "colbench_frontend_design"],
-                        help="Benchmark variant (default: colbench_frontend_design).")
+                        help="Benchmark variant (default: colbench_backend_programming).")
     parser.add_argument("--output-prefix", default="fixed",
                         help="Prefix for output traces (default: fixed).")
     parser.add_argument("--prefix", help="Prefix for run IDs. Takes precedence over --output-prefix.")

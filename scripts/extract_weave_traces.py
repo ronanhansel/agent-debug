@@ -208,16 +208,36 @@ def merge_local_traces(paths: List[Path], run_id: str) -> Dict[str, Any]:
     written_correct = vision_correct = 0
     written_total = vision_total = 0
 
+    # Track tasks that have been classified
+    successful_tasks_set = set()
+    failed_tasks_set = set()
+
     for path in paths:
         data = load_trace(path)
         results = data.get("results", {})
+
+        # Extract successful/failed tasks from results lists
+        for task_id in (results.get("successful_tasks") or []):
+            successful_tasks_set.add(str(task_id))
+        for task_id in (results.get("failed_tasks") or []):
+            failed_tasks_set.add(str(task_id))
+
+        # Also extract from raw_eval_results if available
+        raw_eval = data.get("raw_eval_results", {})
+        eval_results = raw_eval.get("eval_result", {})
+        for task_id, eval_data in eval_results.items():
+            if isinstance(eval_data, dict):
+                success_rate = eval_data.get("success_rate", 0)
+                if success_rate > 0:
+                    successful_tasks_set.add(str(task_id))
+                else:
+                    failed_tasks_set.add(str(task_id))
+
         log(
             f"Merging local trace {path.name} "
             f"(success={len(results.get('successful_tasks') or [])}, "
             f"fail={len(results.get('failed_tasks') or [])})"
         )
-        merged_results["successful_tasks"].extend(results.get("successful_tasks") or [])
-        merged_results["failed_tasks"].extend(results.get("failed_tasks") or [])
 
         if results.get("latencies"):
             for key, value in results["latencies"].items():
@@ -263,6 +283,10 @@ def merge_local_traces(paths: List[Path], run_id: str) -> Dict[str, Any]:
             vision_total += stats.get("total_vision_questions", 0)
 
         raw_logging_results.extend(data.get("raw_logging_results") or [])
+
+    # Convert sets to sorted lists
+    merged_results["successful_tasks"] = sorted(successful_tasks_set, key=lambda x: int(x) if x.isdigit() else x)
+    merged_results["failed_tasks"] = sorted(failed_tasks_set, key=lambda x: int(x) if x.isdigit() else x)
 
     total_tasks = len(merged_results["successful_tasks"]) + len(merged_results["failed_tasks"])
     merged_results["accuracy"] = (
@@ -496,23 +520,60 @@ def fetch_calls(
     log(f"Using client.get_calls API for trace collection (query={query}, include_costs={include_costs}).")
     log_every = max(LOG_EVERY, 1)
     seen = 0
+    skipped = 0
     with Heartbeat("Fetching calls", HEARTBEAT_SECONDS):
-        for call in client.get_calls(query=query, page_size=1000, include_costs=include_costs):
-            serialized = _serialize_call(call)
-            attrs = serialized.get("attributes") or {}
-            run_id = attrs.get("run_id")
-            if not run_id or not any(str(run_id).startswith(p) for p in prefixes):
-                continue
-            calls.append(process_call(serialized))
-            seen += 1
-            if seen % log_every == 0:
-                log(
-                    f"Fetched calls={seen} "
-                    f"(last id={serialized.get('id')}, op={serialized.get('op_name')}, "
-                    f"run_id={run_id})"
-                )
+        call_iterator = iter(client.get_calls(query=query, page_size=1000, include_costs=include_costs))
+        while True:
+            try:
+                # Get next call from iterator (this is where deserialization errors occur)
+                call = next(call_iterator)
 
-    log(f"Finished fetching calls: {len(calls)} total.")
+                # Serialize and process the call
+                try:
+                    serialized = _serialize_call(call)
+                    attrs = serialized.get("attributes") or {}
+                    run_id = attrs.get("run_id")
+                    if not run_id or not any(str(run_id).startswith(p) for p in prefixes):
+                        continue
+                    calls.append(process_call(serialized))
+                    seen += 1
+                    if seen % log_every == 0:
+                        log(
+                            f"Fetched calls={seen} "
+                            f"(last id={serialized.get('id')}, op={serialized.get('op_name')}, "
+                            f"run_id={run_id})"
+                        )
+                except Exception as e:
+                    skipped += 1
+                    log(f"Warning: Failed to serialize/process call: {e}")
+                    if skipped <= 5:
+                        import traceback
+                        log(f"  Traceback: {traceback.format_exc()}")
+
+            except StopIteration:
+                # Normal end of iteration
+                break
+            except (ValueError, TypeError, KeyError) as e:
+                # Deserialization error from Weave SDK - skip this call and continue
+                skipped += 1
+                if "No serializer found" in str(e) or "Content.content" in str(e):
+                    if skipped % 10 == 1:  # Log first and every 10th
+                        log(f"Skipped {skipped} call(s) with deserialization issues (Content type not supported)")
+                else:
+                    log(f"Warning: Deserialization error: {e}")
+                    if skipped <= 5:
+                        import traceback
+                        log(f"  Traceback: {traceback.format_exc()}")
+            except Exception as e:
+                # Unexpected error - log but continue
+                skipped += 1
+                log(f"Error fetching call: {e}")
+                import traceback
+                log(f"  Traceback: {traceback.format_exc()}")
+                # Try to continue with next call
+                continue
+
+    log(f"Finished fetching calls: {len(calls)} total (skipped {skipped} problematic calls).")
 
     return calls
 
@@ -551,7 +612,16 @@ def main() -> None:
 
     for i, prefix in enumerate(args.prefix):
         log(f"Processing prefix: {prefix}")
-        local_paths = sorted(TRACES_DIR.glob(f"{prefix}*_UPLOAD.json"))
+
+        # Look for individual UPLOAD files first (e.g., sab_cow__sab_cow_openai_gpt-4_1_*_UPLOAD.json)
+        # These contain the evaluation results per task
+        individual_pattern = f"*{prefix}*_UPLOAD.json"
+        local_paths = sorted(TRACES_DIR.glob(individual_pattern))
+
+        # Filter to only include files that match the prefix pattern more precisely
+        # (avoid matching partial prefixes)
+        local_paths = [p for p in local_paths if prefix in p.name]
+
         # Positional matching: i-th prefix gets i-th merge-input file
         extra_for_prefix = [extra_paths[i]] if i < len(extra_paths) else []
         if extra_for_prefix:
