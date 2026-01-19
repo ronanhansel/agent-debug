@@ -23,6 +23,7 @@ This repository implements an **Automated Item Fixing Pipeline** for benchmark e
 | **USACO** | `agents/USACO/` | `rubric_templates/usaco.txt` | Ready |
 | **AssistantBench** | `agents/assistantbench_browser_agent/` | `rubric_templates/assistantbench.txt` | Ready |
 | **ScienceAgentBench** | `hal/benchmarks/scienceagentbench/` | `rubric_templates/scienceagentbench.txt` | Ready |
+| **ColBench** | `agents/colbench_example_agent/` | `rubric_templates/colbench.txt` | Ready |
 
 ## Repository Structure
 
@@ -58,7 +59,8 @@ agent-debug/
 │   ├── swebench.txt             # SWE-bench benchmark rubric
 │   ├── usaco.txt                # USACO benchmark rubric
 │   ├── assistantbench.txt       # AssistantBench benchmark rubric
-│   └── scienceagentbench.txt    # ScienceAgentBench benchmark rubric
+│   ├── scienceagentbench.txt    # ScienceAgentBench benchmark rubric
+│   └── colbench.txt             # ColBench benchmark rubric
 │
 ├── rubrics_output/              # Rubric evaluation results (CSVs)
 │   ├── scicode/
@@ -66,7 +68,8 @@ agent-debug/
 │   ├── swebench/
 │   ├── usaco/
 │   ├── assistantbench/
-│   └── scienceagentbench/
+│   ├── scienceagentbench/
+│   └── colbench/
 │
 ├── traces/                      # Agent execution traces (JSON)
 ├── fixes/                       # Generated fix packages
@@ -338,6 +341,72 @@ docker builder prune -af
 
 ---
 
+### ColBench
+**Purpose**: Collaborative agent-human interaction for coding tasks
+
+**Agent**: `hal-harness/agents/colbench_example_agent/`
+- Multi-turn dialogue with simulated human (GPT-4o)
+- Two task variants: `colbench_backend_programming` (1000 tasks) and `colbench_frontend_design` (100 tasks)
+- Agent discovers requirements through dialogue (up to 10 turns)
+- Hidden information only known to simulated user
+
+**Architecture**:
+1. Agent receives problem description
+2. Agent asks clarifying questions via dialogue
+3. Simulated user (GPT-4o) responds based on hidden information
+4. Agent provides final answer (code or HTML design)
+5. Evaluation: test cases (backend) or CLIP image similarity (frontend)
+
+**Common Issues**:
+- Simulated user gives contradictory feedback
+- Hidden information contains arbitrary implementation details
+- Test cases verify behavior not specified in dialogue
+- CLIP similarity penalizes valid alternative designs
+- 10-turn limit insufficient for complex tasks
+
+**Known Research Context** (SWEET-RL paper, Zhou et al. 2025):
+- ColBench introduced to study multi-turn RL algorithms
+- Designed for task diversity and complexity
+- SWEET-RL achieves 6% improvement over baselines
+
+**Rubric Features** (`rubric_templates/colbench.txt`):
+- Simulated user response quality analysis
+- Hidden information accessibility investigation
+- Test case fairness evaluation
+- CLIP evaluation bias detection
+- Cross-model failure pattern identification
+
+**Fixer Script**: `scripts/claude_fixer_colbench.py`
+- Diagnoses IFEs from rubric evaluations and dialogue traces
+- Creates fixes in `fixes/colbench/<task_id>/`
+- Fix types: `instruction_override.json`, `evaluation_override.json`, `simulated_user_override.json`
+
+**Evaluation**:
+- Backend: Test case execution (scores 0-1, partial credit)
+- Frontend: CLIP similarity to ground truth image (scores 0-1)
+
+**HAL Commands**:
+```bash
+# Backend programming
+hal-eval --benchmark colbench_backend_programming \
+    --agent_dir agents/colbench_example_agent/ \
+    --agent_function main.run \
+    --agent_name "ColBench Backend" \
+    -A model_name=gpt-4.1-2025-04-14 \
+    -A budget=1000
+
+# Frontend design
+hal-eval --benchmark colbench_frontend_design \
+    --agent_dir agents/colbench_example_agent/ \
+    --agent_function main.run \
+    --agent_name "ColBench Frontend" \
+    -A model_name=gpt-4.1-2025-04-14
+```
+
+**Model Configuration**: `model_to_baseline_colbench.json`
+
+---
+
 ## Common Commands
 
 ### Pipeline Operations
@@ -497,6 +566,7 @@ Fixer scripts use Claude Code CLI (`claude -p`) to automatically diagnose IFEs a
 |-----------|--------------|--------|
 | **SciCode** | `scripts/claude_fixer_scicode.py` | Active |
 | **ScienceAgentBench** | `scripts/claude_fixer_scienceagentbench.py` | Active |
+| **ColBench** | `scripts/claude_fixer_colbench.py` | Ready |
 
 ### Fixer Script Usage
 
@@ -738,3 +808,4 @@ See `demonstrate/README.md` for detailed analysis and figures.
 | USACO | `usaco.txt` | Algorithm correctness, time limits, I/O format |
 | AssistantBench | `assistantbench.txt` | Website accessibility, data freshness |
 | ScienceAgentBench | `scienceagentbench.txt` | Data files, evaluation scripts, scientific validity |
+| ColBench | `colbench.txt` | Simulated user quality, hidden info accessibility, test fairness |
