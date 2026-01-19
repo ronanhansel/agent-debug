@@ -381,6 +381,32 @@ docker builder prune -af
 - Creates fixes in `fixes/colbench/<task_id>/`
 - Fix types: `instruction_override.json`, `evaluation_override.json`, `simulated_user_override.json`
 
+**Fix Runner**: `scripts/run_colbench_fixes.py`
+- Applies fixes and re-runs evaluation for ColBench tasks
+- Uses `model_to_baseline_colbench.json` for model configs (3 models: gpt-4.1, o3-low, o4-mini-high)
+- **Default benchmark**: `colbench_frontend_design` (100 tasks with CLIP similarity evaluation)
+- **`--all-models` flag**: Runs each task with ALL models from config (creates jobs for every task × model combination)
+- **Parallel execution**: Use `--parallel N` to run N jobs concurrently
+- Model config includes separate `baseline_traces` for backend and frontend variants
+
+**Fix Runner Usage**:
+```bash
+# List available fixes
+python scripts/run_colbench_fixes.py --list-fixes
+
+# Run fixes for a specific task with all models (with Docker)
+python scripts/run_colbench_fixes.py --task-id 1 --all-models --prefix fixed_ --docker
+
+# Run all fixes with all models in parallel (with Docker)
+python scripts/run_colbench_fixes.py --all --all-models --parallel 3 --prefix iter1_ --docker
+
+# Run specific task with specific model (with Docker)
+python scripts/run_colbench_fixes.py --task-id 1 --model gpt-4.1-2025-04-14 --prefix test_ --docker
+
+# Dry run to see what would execute
+python scripts/run_colbench_fixes.py --all --all-models --dry-run
+```
+
 **Evaluation**:
 - Backend: Test case execution (scores 0-1, partial credit)
 - Frontend: CLIP similarity to ground truth image (scores 0-1)
@@ -654,6 +680,7 @@ Fix runner scripts apply the generated fixes and re-run HAL evaluations.
 | **ScienceAgentBench** | `scripts/run_scienceagentbench_fixes.py` | Active |
 | **CoreBench** | `scripts/run_corebench_fixes.py` | Active |
 | **USACO** | `scripts/run_usaco_fixes.py` | Active |
+| **ColBench** | `scripts/run_colbench_fixes.py` | Active |
 
 ### Fix Runner Usage
 

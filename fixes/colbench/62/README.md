@@ -1,48 +1,59 @@
-# Task 62: Non-profit Organization (Single Page) Frontend
+# Task 62: Sportscaster Rating Function
 
 ## IFE Analysis
 
-**Task Type:** Frontend Design (CLIP similarity evaluation)
+**Task Type:** Backend Programming (test case evaluation)
 
-**IFE Identified:** Yes - Multiple Infrastructure Issues
+**IFE Identified:** Yes - Arbitrary Implementation Details Not Recoverable from Dialogue
+
+### Problem Description
+```
+I want the LLM agent to write a python function to rate sportscasters based on certain
+attributes, but I am not sure what attributes to include and how to quantify their
+performance. The signature of the function is:
+def evaluate_sportscaster(tonal_clarity, wit, experience, on_air_appearance)
+```
+
+### Hidden Ground Truth
+```python
+def evaluate_sportscaster(tonal_clarity, wit, experience, on_air_appearance):
+    rating = 0
+    if tonal_clarity > 7:
+        rating += 2
+    if wit > 6:
+        rating += 2
+    if experience > 5:
+        rating += 1
+    if on_air_appearance > 6:
+        rating += 1
+    return rating
+```
 
 ### Evidence from Rubric Evaluations
 
-1. **Evaluation 2 (Grade 1.0):** "The run repeatedly fails due to an external code-parsing constraint that is inconsistent with the frontend task instructions. The harness demands a Python-style fenced block matching the regex..."
+1. **Evaluation 3 (Grade 1.0):** "The hidden ground truth is a specific threshold-based additive scoring rule (tonal_clarity>7 adds 2, wit>6 adds 2, experience>5 adds 1, on_air_appearance>6 adds 1). The simulated user is instructed to only answer using hidden info and otherwise say they don't know, but the user responses do not reveal any of these crucial thresholds/point increments."
 
-2. **Evaluation 5 (Grade 1.0):** "The task spec itself is underspecified for a CLIP-based exact-match frontend benchmark... Additionally, the simulated user behavior is incoherent: when the agent asked for concrete content/branding requirements, the 'user' instead responded with comparisons to a hidden ground-truth image"
+2. **Evaluation 10 (Grade 1.0):** "User responses instead specify an incompatible scheme: 'custom weights: tonal_clarity 0.3, wit 0.3, experience 0.2, on_air_appearance 0.2... final score should be in the range 0–10'"
 
 ### Root Cause
 
-1. **Parser Mismatch:** Same regex issue - harness expects Python code blocks but task requires HTML output
+The simulated user CANNOT provide the exact thresholds and point values because:
+1. Hidden info is code, not natural-language facts
+2. When asked about scoring rules, user says "I don't know" or provides invented schemes
+3. The specific thresholds (7, 6, 5, 6) and point increments (2, 2, 1, 1) are arbitrary
+4. No principled way to derive these from the task description
 
-2. **Broken Visual Loop:** Simulated user cannot see agent preview, returns generic responses
+### Why This is NOT Fixable at Task Level
 
-3. **Underspecified Task vs Exact-Match Evaluation:**
-   - Task: "a large hero image with a call-to-action button, a scrolling storytelling layout"
-   - Ground truth: Very specific layout with background image, centered text, blue Donate button
-   - Many valid designs satisfy the task description but only one matches the ground truth
+**Cannot be fixed without "nerfing"** - Any instruction clarification that reveals the exact thresholds would be giving away the answer. The problem is fundamental: the benchmark expects specific arbitrary constants but provides no mechanism for the agent to discover them through dialogue.
 
-### Ground Truth Analysis
+This is a benchmark design flaw where the hidden information contains implementation details that should be communicated to the agent but cannot be due to the simulated user constraints.
 
-The ground truth HTML shows:
-- Full-page background image using `style="background-image: url(...)"`
-- Centered container with an inset image
-- "Non-profit Organization" heading with paragraph
-- Single "Donate Now" button with blue styling
+## Fix Recommendation
 
-### Impact
+**No code fix applied** - The task has an intrinsic formation error that cannot be fixed without revealing the answer. The benchmark would need to either:
+1. Add the thresholds/scoring rules to the problem description
+2. Allow the simulated user to extract these constants from the hidden code
+3. Accept any reasonable threshold-based scoring scheme (not just the specific one)
 
-Agents following the collaborative dialogue will produce valid non-profit websites, but without pixel-perfect alignment to the hidden ground truth, CLIP scores suffer.
-
-## Fix Strategy
-
-This task has infrastructure IFEs (visual loop, parser) that cannot be fixed at task level.
-
-### No Code Fix Required
-
-The task specification is reasonable for a collaborative design task. The issues are:
-1. Infrastructure: visual comparison loop broken
-2. Evaluation method: CLIP similarity against single ground truth is too strict for underspecified design tasks
-
-**Note:** Adding instruction clarifications that describe the exact ground truth layout would be "making it easy" (revealing the answer) rather than "making it fair."
+Documenting as unfixable IFE.

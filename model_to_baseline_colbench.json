@@ -18,7 +18,7 @@
     "reasoning_effort": "low",
     "budget": 1000
   },
-  "o4-mini-2025-04-16-high": {
+  "openai/o4-mini-2025-04-16": {
     "model_id": "o4-mini-2025-04-16",
     "short_name": "o4-mini-high",
     "baseline_traces": {
