@@ -455,11 +455,16 @@ def run_claude_code(
     fix_dir: Path,
     quiet: bool = False,
 ) -> int:
-    """Run Claude Code CLI with the given prompt."""
+    """Run Claude Code CLI with the given prompt.
+
+    Uses stdin to pass the prompt to avoid 'Argument list too long' errors
+    when the prompt contains large conversation logs.
+    """
 
     base_cmd = [
         "claude",
         "--dangerously-skip-permissions",
+        "-p", "-",  # Read prompt from stdin
     ]
 
     if not quiet:
@@ -467,13 +472,12 @@ def run_claude_code(
     else:
         base_cmd.extend(["--output-format", "json"])
 
-    base_cmd.extend(["-p", prompt])
-
     log_path = fix_dir / "claude_session.jsonl"
 
     if not quiet:
         log(f"Running Claude Code CLI for {task_id}...")
         log(f"Working directory: {working_dir}")
+        log(f"Prompt size: {len(prompt):,} chars")
         print(f"\n{'='*60}")
         print(f"CLAUDE CODE SESSION: {task_id}")
         print(f"{'='*60}\n")
@@ -482,11 +486,16 @@ def run_claude_code(
             base_cmd,
             cwd=working_dir,
             env={**os.environ, "CLAUDE_CODE_TASK_ID": task_id},
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
         )
+
+        # Send prompt via stdin and close it
+        process.stdin.write(prompt)
+        process.stdin.close()
 
         try:
             with log_path.open("w") as log_file:
@@ -508,6 +517,7 @@ def run_claude_code(
             base_cmd,
             cwd=working_dir,
             env={**os.environ, "CLAUDE_CODE_TASK_ID": task_id},
+            input=prompt,  # Pass prompt via stdin
             capture_output=True,
             text=True,
         )
