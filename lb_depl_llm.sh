@@ -48,8 +48,11 @@ if [ ! -d ".venv" ]; then
     uv venv && source .venv/bin/activate
     uv pip install 'litellm[proxy]'
     uv pip install git+https://github.com/you-n-g/litellm@support_gpt_5 --upgrade
+    uv pip install gunicorn  # For stable sync workers instead of async
 else
     source .venv/bin/activate
+    # Ensure gunicorn is installed
+    python -c "import gunicorn" 2>/dev/null || uv pip install gunicorn
 fi
 
 # 5. Generate nginx config dynamically (port-specific files)

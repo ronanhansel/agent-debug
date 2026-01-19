@@ -7,21 +7,22 @@ Evaluates agent traces using benchmark-specific rubrics with:
 - Dynamic batch processing (by message count)
 - Turn-by-turn conversation deduplication
 - Support for multiple benchmarks via rubric templates
+- Direct Azure/TRAPI access by default (no proxy needed)
 
 Usage:
-    # Evaluate failed tasks with default settings
+    # Default: Uses Azure/TRAPI directly (recommended)
     python scripts/eval_rubric.py \
         --trace-file traces/colbench_*_binary_UPLOAD.json \
         --rubric rubric_templates/colbench.txt \
-        --rubric-model openai:gpt-4o \
+        --rubric-model openai:gpt-5.2 \
         --failed-only -y
 
-    # With fallback URLs (auto-switches on connection errors)
+    # With proxy/custom endpoint (overrides Azure default)
     python scripts/eval_rubric.py \
         --trace-file traces/*.json \
         --rubric rubric_templates/scicode.txt \
         --rubric-model openai:gpt-4o \
-        --openai-base-url "http://localhost:4000/v1,http://localhost:4001/v1,http://localhost:4002/v1" \
+        --openai-base-url "http://localhost:4000/v1,http://localhost:4001/v1" \
         --failed-only -y
 
     # Preview mode (stdout, limited tasks)
@@ -49,15 +50,176 @@ import sys
 import time
 from pathlib import Path
 
+# TRAPI deployment name mapping (from litellm.trapi.yaml)
+TRAPI_DEPLOYMENT_MAP = {
+    # GPT-5 series (NOTE: gpt-5 uses max_completion_tokens like o-series)
+    'gpt-5': 'gpt-5_2025-08-07',
+    'gpt-5-mini': 'gpt-5-mini_2025-08-07',
+    'gpt-5-nano': 'gpt-5-nano_2025-08-07',
+    'gpt-5-pro': 'gpt-5-pro_2025-10-06',
+    'gpt-5.2': 'gpt-5.2_2025-12-11',
+    'gpt-5.2-chat': 'gpt-5.2-chat_2025-12-11',
+
+    # GPT-4 series
+    'gpt-4o': 'gpt-4o_2024-11-20',
+    'gpt-4o-mini': 'gpt-4o-mini_2024-07-18',
+    'gpt-4.1': 'gpt-4.1_2025-04-14',
+    'gpt-4.1-mini': 'gpt-4.1-mini_2025-04-14',
+    'gpt-4.1-nano': 'gpt-4.1-nano_2025-04-14',
+    'gpt-4-turbo': 'gpt-4_turbo-2024-04-09',
+    'gpt-4-32k': 'gpt-4-32k_0613',
+    'gpt-4': 'gpt-4_turbo-2024-04-09',
+
+    # O-series (reasoning models)
+    'o1': 'o1_2024-12-17',
+    'o1-mini': 'o1-mini_2024-09-12',
+    'o3': 'o3_2025-04-16',
+    'o3-mini': 'o3-mini_2025-01-31',
+    'o4-mini': 'o4-mini_2025-04-16',
+
+    # GPT-5.1 series
+    'gpt-5.1': 'gpt-5.1_2025-11-13',
+    'gpt-5.1-chat': 'gpt-5.1-chat_2025-11-13',
+    'gpt-5.1-codex': 'gpt-5.1-codex_2025-11-13',
+    'gpt-5.1-codex-mini': 'gpt-5.1-codex-mini_2025-11-13',
+
+    # Other models
+    'grok-3.1': 'grok-3_1',
+    'llama-3.3': 'gcr-llama-33-70b-shared',
+    'llama-3.1-70b': 'gcr-llama-31-70b-shared',
+    'llama-3.1-8b': 'gcr-llama-31-8b-instruct',
+    'qwen3-8b': 'gcr-qwen3-8b',
+    'phi4': 'gcr-phi-4-shared',
+    'mistral': 'gcr-mistralai-8x7b-shared',
+    'deepseek-r1': 'deepseek-r1_1',
+    'deepseek': 'deepseek-r1_1',
+}
+
+# Azure CLI's public client ID (used for MSAL token refresh)
+AZURE_CLI_CLIENT_ID = '04b07795-8ddb-461a-bbee-02f9e1bf7b46'
+MICROSOFT_TENANT_ID = '72f988bf-86f1-41af-91ab-2d7cd011db47'
+
+
+def resolve_trapi_deployment(model: str) -> str:
+    """Resolve friendly model name to TRAPI deployment name."""
+    model = model.replace('azure/', '').replace('openai/', '').replace('openai:', '')
+    if model in TRAPI_DEPLOYMENT_MAP:
+        return TRAPI_DEPLOYMENT_MAP[model]
+    model_lower = model.lower()
+    if model_lower in TRAPI_DEPLOYMENT_MAP:
+        return TRAPI_DEPLOYMENT_MAP[model_lower]
+    for key, value in TRAPI_DEPLOYMENT_MAP.items():
+        if key in model_lower or model_lower in key:
+            return value
+    return model  # Return as-is if no mapping found
+
+
+def get_azure_token(scope: str = 'api://trapi/.default') -> str | None:
+    """Get Azure AD token using MSAL or azure-identity."""
+    # Try MSAL first (works without az CLI installed)
+    try:
+        import msal
+        cache_path = os.path.expanduser('~/.azure/msal_token_cache.json')
+        if os.path.exists(cache_path):
+            cache = msal.SerializableTokenCache()
+            with open(cache_path, 'r') as f:
+                cache.deserialize(f.read())
+            app = msal.PublicClientApplication(
+                AZURE_CLI_CLIENT_ID,
+                authority=f'https://login.microsoftonline.com/{MICROSOFT_TENANT_ID}',
+                token_cache=cache
+            )
+            accounts = app.get_accounts()
+            if accounts:
+                result = app.acquire_token_silent([scope], account=accounts[0])
+                if result and 'access_token' in result:
+                    print("[Azure] Using MSAL token (dynamic refresh)")
+                    return result['access_token']
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"[Azure] MSAL token refresh failed: {e}")
+
+    # Try azure-identity as fallback
+    try:
+        from azure.identity import AzureCliCredential, get_bearer_token_provider
+        credential = AzureCliCredential()
+        token_provider = get_bearer_token_provider(credential, scope)
+        token = token_provider()
+        print("[Azure] Using azure-identity token")
+        return token
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"[Azure] azure-identity failed: {e}")
+
+    return None
+
+
+def setup_azure_environment(rubric_model: str | None = None) -> bool:
+    """Set up environment for direct Azure/TRAPI access. Returns True if successful."""
+    endpoint = os.environ.get('TRAPI_ENDPOINT', 'https://trapi.research.microsoft.com/gcr/shared')
+    # Use 2025-03-01-preview for gpt-5.2 and newer models compatibility
+    api_version = os.environ.get('TRAPI_API_VERSION', '2025-03-01-preview')
+    scope = os.environ.get('TRAPI_SCOPE', 'api://trapi/.default')
+
+    token = get_azure_token(scope)
+    if not token:
+        print("[Azure] Could not obtain Azure AD token. Falling back to proxy.")
+        return False
+
+    # Set OpenAI environment variables for direct Azure access
+    # The base URL format for Azure OpenAI compatible endpoint
+    os.environ["OPENAI_BASE_URL"] = f"{endpoint}/openai"
+    os.environ["OPENAI_API_KEY"] = token
+    os.environ["OPENAI_API_VERSION"] = api_version
+
+    # Also set Azure-specific vars for azure_openai provider compatibility
+    os.environ["AZURE_OPENAI_ENDPOINT"] = endpoint
+    os.environ["AZURE_OPENAI_API_KEY"] = token
+    os.environ["AZURE_OPENAI_API_VERSION"] = api_version
+
+    print(f"[Azure] Direct TRAPI access configured: {endpoint}")
+    return True
+
+
 # Pre-parse --openai-base-url BEFORE importing rubric_evaluator
 # (the module reads OPENAI_BASE_URL at import time)
-# Supports comma-separated fallback URLs: localhost:4000,localhost:4001,localhost:4002
+# If not provided, use Azure/TRAPI directly
 _pre_parser = argparse.ArgumentParser(add_help=False)
-_pre_parser.add_argument("--openai-base-url", type=str, default="http://localhost:4000/v1")
+_pre_parser.add_argument("--openai-base-url", type=str, default=None)
+_pre_parser.add_argument("--rubric-model", type=str, default=None)
 _pre_args, _ = _pre_parser.parse_known_args()
-_all_urls = [u.strip() for u in _pre_args.openai_base_url.split(",")]
-os.environ["OPENAI_BASE_URL"] = _all_urls[0]  # Set first URL for initial import
-os.environ["OPENAI_FALLBACK_URLS"] = ",".join(_all_urls)  # Store all for fallback
+
+_using_azure_direct = False
+_resolved_model = None
+if _pre_args.openai_base_url is None:
+    # No proxy URL provided - use Azure/TRAPI directly
+    _using_azure_direct = setup_azure_environment(_pre_args.rubric_model)
+    if _using_azure_direct and _pre_args.rubric_model:
+        # Resolve model name to TRAPI deployment name AND switch to azure_openai provider
+        # The azure_openai provider uses AsyncAzureOpenAI which formats URLs correctly
+        if ':' in _pre_args.rubric_model:
+            provider, model_name = _pre_args.rubric_model.split(':', 1)
+            deployment_name = resolve_trapi_deployment(model_name)
+            # CRITICAL: Use azure_openai provider instead of openai
+            # openai provider uses wrong URL format for TRAPI
+            _resolved_model = f"azure_openai:{deployment_name}"
+            print(f"[Azure] Model resolved: {_pre_args.rubric_model} -> {_resolved_model}")
+        else:
+            deployment_name = resolve_trapi_deployment(_pre_args.rubric_model)
+            _resolved_model = f"azure_openai:{deployment_name}"
+            print(f"[Azure] Model resolved: {_pre_args.rubric_model} -> {_resolved_model}")
+    if not _using_azure_direct:
+        # Fallback to localhost proxy
+        os.environ["OPENAI_BASE_URL"] = "http://localhost:4000/v1"
+        os.environ["OPENAI_FALLBACK_URLS"] = "http://localhost:4000/v1"
+else:
+    # Proxy URL provided - use it (keep original provider)
+    _all_urls = [u.strip() for u in _pre_args.openai_base_url.split(",")]
+    os.environ["OPENAI_BASE_URL"] = _all_urls[0]
+    os.environ["OPENAI_FALLBACK_URLS"] = ",".join(_all_urls)
+    print(f"[Proxy] Using custom endpoint: {_all_urls[0]}")
 
 # Add repo root to path
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -187,12 +349,17 @@ def main():
     parser.add_argument(
         "--openai-base-url",
         type=str,
-        default="http://localhost:4000/v1",
-        help="OpenAI API base URL(s). Comma-separated for fallback on errors "
-             "(e.g., 'http://localhost:4000/v1,http://localhost:4001/v1,http://localhost:4002/v1')",
+        default=None,
+        help="OpenAI API base URL(s). If not provided, uses Azure/TRAPI directly. "
+             "Comma-separated for fallback on errors "
+             "(e.g., 'http://localhost:4000/v1,http://localhost:4001/v1')",
     )
 
     args = parser.parse_args()
+
+    # Use resolved model name for Azure direct access
+    if _using_azure_direct and _resolved_model and args.rubric_model:
+        args.rubric_model = _resolved_model
 
     # Set defaults for underlying CLI (removed from this script for simplicity)
     args.parallel = 1000  # Not used when max_batch_messages > 0

@@ -734,6 +734,256 @@ pip install -e hal-harness/[assistantbench]
 
 ---
 
+## Azure/TRAPI Direct Access
+
+This section documents the direct Azure/TRAPI access implementation, which bypasses LiteLLM proxy for faster and more reliable API calls.
+
+### TRAPI Configuration
+
+**Endpoint and Authentication**:
+```
+TRAPI_ENDPOINT=https://trapi.research.microsoft.com/gcr/shared
+TRAPI_API_VERSION=2025-03-01-preview  # Required for gpt-5.2 and newer models
+TRAPI_SCOPE=api://trapi/.default
+```
+
+**Azure CLI Constants**:
+```python
+AZURE_CLI_CLIENT_ID = '04b07795-8ddb-461a-bbee-02f9e1bf7b46'
+MICROSOFT_TENANT_ID = '72f988bf-86f1-41af-91ab-2d7cd011db47'
+```
+
+### TRAPI Deployment Name Mapping
+
+Model names must be mapped to TRAPI deployment names:
+
+```python
+# NOTE: Verify deployment availability on TRAPI before using!
+# gpt-5.2 VERIFIED WORKING: gpt-5.2_2025-12-11 (requires api_version 2025-03-01-preview)
+TRAPI_DEPLOYMENT_MAP = {
+    # GPT-5 series (VERIFIED WORKING: gpt-5_2025-08-07, gpt-5.2_2025-12-11)
+    # NOTE: GPT-5 uses max_completion_tokens like O-series
+    'gpt-5': 'gpt-5_2025-08-07',
+    'gpt-5-mini': 'gpt-5-mini_2025-08-07',
+    'gpt-5-nano': 'gpt-5-nano_2025-08-07',
+    'gpt-5-pro': 'gpt-5-pro_2025-10-06',
+    'gpt-5.2': 'gpt-5.2_2025-12-11',  # VERIFIED WORKING (2026-01-19)
+    'gpt-5.2-chat': 'gpt-5.2-chat_2025-12-11',
+
+    # GPT-4 series (VERIFIED WORKING)
+    'gpt-4o': 'gpt-4o_2024-11-20',
+    'gpt-4o-mini': 'gpt-4o-mini_2024-07-18',
+    'gpt-4.1': 'gpt-4.1_2025-04-14',
+    'gpt-4.1-mini': 'gpt-4.1-mini_2025-04-14',
+    'gpt-4.1-nano': 'gpt-4.1-nano_2025-04-14',
+
+    # O-series (reasoning models) (VERIFIED WORKING)
+    'o1': 'o1_2024-12-17',
+    'o1-mini': 'o1-mini_2024-09-12',
+    'o3': 'o3_2025-04-16',
+    'o3-mini': 'o3-mini_2025-01-31',
+    'o4-mini': 'o4-mini_2025-04-16',
+
+    # GPT-5.1 series (may not be available)
+    'gpt-5.1': 'gpt-5.1_2025-11-13',
+    'gpt-5.1-chat': 'gpt-5.1-chat_2025-11-13',
+    'gpt-5.1-codex': 'gpt-5.1-codex_2025-11-13',
+
+    # Other models
+    'deepseek-r1': 'deepseek-r1_1',
+    'grok-3.1': 'grok-3_1',
+    'llama-3.3': 'gcr-llama-33-70b-shared',
+}
+```
+
+### Authentication Methods (Priority Order)
+
+1. **MSAL Token Provider** (Works in Docker without az CLI):
+   ```python
+   import msal
+   cache_path = os.path.expanduser('~/.azure/msal_token_cache.json')
+   cache = msal.SerializableTokenCache()
+   with open(cache_path, 'r') as f:
+       cache.deserialize(f.read())
+   app = msal.PublicClientApplication(
+       AZURE_CLI_CLIENT_ID,
+       authority=f'https://login.microsoftonline.com/{MICROSOFT_TENANT_ID}',
+       token_cache=cache
+   )
+   accounts = app.get_accounts()
+   result = app.acquire_token_silent([scope], account=accounts[0])
+   token = result['access_token']
+   ```
+
+2. **Pre-fetched Token** (Fallback for containers):
+   ```python
+   token = os.environ.get('AZURE_OPENAI_AD_TOKEN')
+   ```
+
+3. **azure-identity** (Requires az CLI):
+   ```python
+   from azure.identity import AzureCliCredential, get_bearer_token_provider
+   credential = AzureCliCredential()
+   token_provider = get_bearer_token_provider(credential, scope)
+   ```
+
+### Azure OpenAI API Differences
+
+**Parameter Differences by Model Type**:
+
+| Model Type | Temperature | Stop | Max Tokens Parameter |
+|------------|-------------|------|---------------------|
+| GPT-4.x | `temperature=0.7` | Supported | `max_tokens=4096` |
+| GPT-5.x | Not tested | May vary | `max_completion_tokens=4096` |
+| O1, O3, O4 | Not supported | Limited | `max_completion_tokens=4096` |
+
+**IMPORTANT**: GPT-5 uses `max_completion_tokens` like O-series, NOT `max_tokens`!
+
+```python
+def _uses_max_completion_tokens(model_id: str) -> bool:
+    """O-series and GPT-5 use max_completion_tokens instead of max_tokens."""
+    model_lower = model_id.lower()
+    # O-series models
+    if model_lower.startswith("o1") or model_lower.startswith("o3") or model_lower.startswith("o4"):
+        return True
+    # GPT-5 also uses max_completion_tokens
+    if model_lower.startswith("gpt-5"):
+        return True
+    return False
+
+def _supports_temperature(model_id: str) -> bool:
+    """O-series models don't support temperature parameter."""
+    model_lower = model_id.lower()
+    return not (model_lower.startswith("o1") or model_lower.startswith("o3") or model_lower.startswith("o4"))
+```
+
+### smolagents Message Role Compatibility
+
+smolagents uses non-standard role names that must be converted for Azure OpenAI:
+
+```python
+# smolagents roles -> Azure OpenAI roles
+'tool-call' -> 'assistant'  # Model's tool invocation
+'tool-response' -> 'user'   # Tool output (can't use 'tool' without proper tool_calls structure)
+```
+
+**CRITICAL**: Cannot use `'tool'` role directly because Azure OpenAI requires:
+- A preceding assistant message with `tool_calls` array
+- The tool message must have `tool_call_id` matching one of the tool calls
+
+Since smolagents doesn't provide this structure, convert `'tool-response'` to `'user'` instead.
+
+### Docker Integration
+
+**Volume Mounts for Azure Credentials** (in `docker_runner.py`):
+```python
+azure_dir = os.path.expanduser("~/.azure")
+if os.path.isdir(azure_dir) and env_vars.get("USE_DIRECT_AZURE", "").lower() == "true":
+    volumes[azure_dir] = {"bind": "/root/.azure", "mode": "ro"}
+    env_vars["HOME"] = "/root"  # CRITICAL: MSAL looks for cache at $HOME/.azure
+```
+
+**Environment Variables for Direct Azure**:
+```python
+env_vars["USE_DIRECT_AZURE"] = "true"
+# Remove proxy URLs to prevent conflicts
+for key in ("OPENAI_BASE_URL", "OPENAI_API_BASE", "LITELLM_BASE_URL"):
+    env_vars.pop(key, None)
+```
+
+**Pre-fetch Token on Host** (for containers without MSAL):
+```python
+from azure.identity import AzureCliCredential, get_bearer_token_provider
+credential = AzureCliCredential()
+token_provider = get_bearer_token_provider(credential, scope)
+token = token_provider()
+env_vars["AZURE_OPENAI_AD_TOKEN"] = token
+```
+
+### Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `hal-harness/agents/hal_generalist_agent/azure_direct_model.py` | Direct Azure model for smolagents |
+| `hal-harness/hal/utils/docker_runner.py` | Docker integration with Azure credential mounting |
+| `scripts/eval_rubric.py` | Rubric evaluation with Azure default |
+
+### eval_rubric.py Behavior
+
+**Default**: Uses Azure/TRAPI directly (no proxy needed)
+```bash
+python scripts/eval_rubric.py \
+    --trace-file traces/*.json \
+    --rubric rubric_templates/colbench.txt \
+    --rubric-model openai:gpt-5.2 \
+    --failed-only -y
+# Output:
+# [Azure] Direct TRAPI access configured
+# [Azure] Model resolved: openai:gpt-5.2 -> azure_openai:gpt-5.2_2025-11-20
+```
+
+**CRITICAL**: The script automatically switches from `openai:` to `azure_openai:` provider because:
+- `openai` provider uses `AsyncOpenAI()` with URL format: `{base_url}/chat/completions`
+- `azure_openai` provider uses `AsyncAzureOpenAI()` with URL format: `{endpoint}/openai/deployments/{model}/chat/completions`
+- TRAPI requires the Azure URL format; using the wrong format results in "The request is blocked" error
+
+**With Proxy** (overrides Azure default, keeps original provider):
+```bash
+python scripts/eval_rubric.py \
+    --trace-file traces/*.json \
+    --rubric rubric_templates/colbench.txt \
+    --rubric-model openai:gpt-4o \
+    --openai-base-url http://localhost:5000/v1 \
+    --failed-only -y
+# Output: [Proxy] Using custom endpoint
+# Model stays as openai:gpt-4o (no provider switch)
+```
+
+### Common Errors and Fixes
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `PermissionDeniedError: The request is blocked` | Wrong URL format (openai vs azure_openai) | Use `azure_openai:` provider, not `openai:` |
+| `BadRequestError: Invalid value: 'tool-call'` | smolagents non-standard roles | Convert to 'assistant'/'user' |
+| `BadRequestError: 'max_tokens' not supported` | O-series model | Use `max_completion_tokens` |
+| `BadRequestError: messages with role 'tool' must be response to tool_calls` | Missing tool_calls structure | Convert 'tool-response' to 'user' |
+| `No accounts found in MSAL cache` | Wrong HOME in container | Set `HOME=/root` |
+| `MSAL token refresh failed` | Expired refresh token | Re-authenticate with `az login` |
+| `SharedTokenCacheCredential not available` | Container missing credentials | Mount `~/.azure` to `/root/.azure` |
+
+### Testing Azure Connection
+
+```bash
+# Test token acquisition
+python -c "
+from azure.identity import AzureCliCredential, get_bearer_token_provider
+credential = AzureCliCredential()
+provider = get_bearer_token_provider(credential, 'api://trapi/.default')
+token = provider()
+print(f'Token acquired: {len(token)} chars')
+"
+
+# Test MSAL cache
+python -c "
+import msal, os
+cache_path = os.path.expanduser('~/.azure/msal_token_cache.json')
+cache = msal.SerializableTokenCache()
+with open(cache_path) as f:
+    cache.deserialize(f.read())
+app = msal.PublicClientApplication(
+    '04b07795-8ddb-461a-bbee-02f9e1bf7b46',
+    authority='https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47',
+    token_cache=cache
+)
+accounts = app.get_accounts()
+print(f'Found {len(accounts)} account(s)')
+for acc in accounts:
+    print(f'  - {acc.get(\"username\", \"unknown\")}')
+"
+```
+
+---
+
 ## Debugging Tips
 
 ### Finding Failed Tasks
