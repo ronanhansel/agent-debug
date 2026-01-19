@@ -846,6 +846,60 @@ def _create_dynamic_batches(
     return batches
 
 
+def _get_fallback_urls() -> list[str]:
+    """Get list of fallback URLs from environment variable."""
+    fallback_env = os.getenv("OPENAI_FALLBACK_URLS", "")
+    if fallback_env:
+        return [u.strip() for u in fallback_env.split(",") if u.strip()]
+    # Default to current URL only
+    current = os.getenv("OPENAI_BASE_URL", "http://localhost:4000/v1")
+    return [current]
+
+
+def _switch_to_url(url: str) -> None:
+    """Switch OPENAI_BASE_URL to a new URL and reinitialize client if needed."""
+    os.environ["OPENAI_BASE_URL"] = url
+    # Try to reinitialize the OpenAI client in docent if possible
+    try:
+        from docent_core._llm_util.providers import openai as openai_provider
+        if hasattr(openai_provider, '_client'):
+            openai_provider._client = None  # Force recreation
+        if hasattr(openai_provider, 'get_client'):
+            # Some implementations cache the client
+            openai_provider._cached_client = None
+    except Exception:
+        pass  # Best effort - env var change should be picked up
+
+
+def _is_connection_error(error_str: str) -> bool:
+    """Check if error is a connection/timeout error that warrants URL fallback."""
+    connection_indicators = (
+        "timeout",
+        "timed out",
+        "connection refused",
+        "connection reset",
+        "connection error",
+        "connect error",
+        "unreachable",
+        "no route to host",
+        "name resolution",
+        "dns",
+        "eof",
+        "broken pipe",
+        "connection aborted",
+        "ssl",
+        "certificate",
+        "handshake",
+        "502",
+        "503",
+        "504",
+        "bad gateway",
+        "service unavailable",
+        "gateway timeout",
+    )
+    return any(indicator in error_str for indicator in connection_indicators)
+
+
 async def evaluate_environmental_barrier(
     agent_runs: Sequence["AgentRun"],
     rubric: "Rubric",
@@ -866,6 +920,12 @@ async def evaluate_environmental_barrier(
 
     evaluations: list[LocalRubricEvaluation] = []
 
+    # Get fallback URLs for connection error recovery
+    fallback_urls = _get_fallback_urls()
+    current_url_idx = 0
+    if len(fallback_urls) > 1:
+        print(f"  📡 Using {len(fallback_urls)} fallback URLs: {', '.join(fallback_urls)}")
+
     # Use dynamic batching if max_batch_messages is set
     if max_batch_messages > 0:
         batches = _create_dynamic_batches(agent_runs, max_batch_messages)
@@ -881,9 +941,11 @@ async def evaluate_environmental_barrier(
         print(f"  Processing batch {batch_idx + 1}/{len(batches)}: {len(batch)} tasks ({batch_msg_count} messages)...")
         response_format = {"type": "json_object"} if json_mode else None
 
-        # Retry logic with exponential backoff and rate limit detection
+        # Retry logic with exponential backoff, rate limit detection, and URL fallback
         outputs = None
         last_error = None
+        urls_tried = 0  # Track how many URLs we've tried for this batch
+
         for attempt in range(retries):
             try:
                 outputs = await evaluate_rubric(batch, rubric, response_format=response_format, use_cache=use_cache, max_concurrency=max_concurrency)
@@ -899,6 +961,20 @@ async def evaluate_environmental_barrier(
                     "too many requests" in error_str or
                     "token limit" in error_str
                 )
+
+                # Check for connection errors that warrant URL fallback
+                is_connection = _is_connection_error(error_str)
+
+                if is_connection and len(fallback_urls) > 1 and urls_tried < len(fallback_urls):
+                    # Try next fallback URL
+                    current_url_idx = (current_url_idx + 1) % len(fallback_urls)
+                    next_url = fallback_urls[current_url_idx]
+                    urls_tried += 1
+                    print(f"    ⚠️  Connection error: {e}")
+                    print(f"    🔄 Switching to fallback URL: {next_url}")
+                    _switch_to_url(next_url)
+                    # Retry immediately with new URL (no wait)
+                    continue
 
                 if is_rate_limit:
                     # Try to extract wait time from error message (e.g., "Try again in 44 seconds")
@@ -916,6 +992,8 @@ async def evaluate_environmental_barrier(
                 if attempt < retries - 1:
                     print(f"    Retrying in {wait_time}s...")
                     time.sleep(wait_time)
+                    # Reset URL tried counter for next retry round
+                    urls_tried = 0
 
         if outputs is None:
             print(f"    ❌ Batch failed after {retries} attempts: {last_error}")

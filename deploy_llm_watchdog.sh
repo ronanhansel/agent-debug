@@ -57,9 +57,11 @@ tmux new-session -d -s "$WATCHDOG_SESSION" bash -c "
     cd $WORKSPACE && source .venv/bin/activate
     export PATH=$WORKSPACE/deploy/helper_scripts/bin:\$PATH
     # Run watchdog with configurable parameters
-    CHECK_INTERVAL=${CHECK_INTERVAL:-15} \
-    MAX_FAILURES=${MAX_FAILURES:-2} \
-    RESTART_COOLDOWN=${RESTART_COOLDOWN:-60} \
+    CHECK_INTERVAL=${CHECK_INTERVAL:-5} \
+    MAX_FAILURES=${MAX_FAILURES:-3} \
+    HEALTH_TIMEOUT=${HEALTH_TIMEOUT:-5} \
+    STARTUP_WAIT=${STARTUP_WAIT:-20} \
+    DEFAULT_COOLDOWN=${DEFAULT_COOLDOWN:-60} \
     llm_watchdog.sh $PORT
     bash
 "
@@ -76,6 +78,12 @@ echo "Stop Proxy:    tmux kill-session -t $SESSION_NAME"
 echo "Stop Both:     tmux kill-session -t $WATCHDOG_SESSION; tmux kill-session -t $SESSION_NAME"
 echo ""
 echo "Watchdog Settings (set via env vars):"
-echo "  CHECK_INTERVAL=15      # Health check interval in seconds"
-echo "  MAX_FAILURES=2         # Failures before restart"
-echo "  RESTART_COOLDOWN=60    # Wait time after restart (matches rate limit window)"
+echo "  CHECK_INTERVAL=5       # Health check interval in seconds"
+echo "  MAX_FAILURES=3         # Failures before action (15s total)"
+echo "  HEALTH_TIMEOUT=5       # Timeout for each health check"
+echo "  STARTUP_WAIT=20        # Wait time after starting proxy"
+echo "  DEFAULT_COOLDOWN=60    # Fallback wait if can't parse 429 retry time"
+echo ""
+echo "Behavior:"
+echo "  - 429 rate limit: waits exact time from error message, no restart"
+echo "  - Other failures: restarts immediately, no delay"

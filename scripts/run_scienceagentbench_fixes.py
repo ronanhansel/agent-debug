@@ -385,7 +385,7 @@ def run_hal_eval(
 
     try:
         # Run from REPO_ROOT (like scicode) - let output stream to console
-        result = subprocess.run(cmd, cwd=REPO_ROOT, env=env, timeout=7200)
+        result = subprocess.run(cmd, cwd=REPO_ROOT, env=env, timeout=14400)  # 4 hours
 
         # Find output trace in REPO_ROOT/results
         trace_path = results_dir / f"{run_id}_UPLOAD.json"

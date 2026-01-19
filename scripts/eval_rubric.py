@@ -4,23 +4,24 @@ Docent-based rubric evaluation script (primary method).
 
 Evaluates agent traces using benchmark-specific rubrics with:
 - SQLite LLM response caching (no repeat API calls)
-- Batch processing with retry logic
+- Dynamic batch processing (by message count)
 - Turn-by-turn conversation deduplication
 - Support for multiple benchmarks via rubric templates
 
 Usage:
-    # SciCode: Evaluate Intrinsic Formation Errors
-    OPENAI_BASE_URL="http://localhost:4000/v1" python scripts/eval_rubric.py \
-        --trace-file traces/scicode_hal_generalist_agent_gpt4120250414_*.json \
-        --rubric rubric_templates/scicode.txt \
+    # Evaluate failed tasks with default settings
+    python scripts/eval_rubric.py \
+        --trace-file traces/colbench_*_binary_UPLOAD.json \
+        --rubric rubric_templates/colbench.txt \
         --rubric-model openai:gpt-4o \
         --failed-only -y
 
-    # CoreBench: Evaluate Environmental Barriers
-    OPENAI_BASE_URL="http://localhost:4000/v1" python scripts/eval_rubric.py \
-        --trace-file traces/corebench_hard_hal_generalist_agentgpt41_*.json \
-        --rubric rubric_templates/corebench.txt \
+    # With fallback URLs (auto-switches on connection errors)
+    python scripts/eval_rubric.py \
+        --trace-file traces/*.json \
+        --rubric rubric_templates/scicode.txt \
         --rubric-model openai:gpt-4o \
+        --openai-base-url "http://localhost:4000/v1,http://localhost:4001/v1,http://localhost:4002/v1" \
         --failed-only -y
 
     # Preview mode (stdout, limited tasks)
@@ -33,7 +34,7 @@ Usage:
 
 Output:
     CSV files go to rubrics_output/<rubric_name>/<trace_name>.csv
-    Example: rubrics_output/scicode/scicode_hal_generalist_agent_gpt41.csv
+    Example: rubrics_output/colbench/colbench_backend_gpt41_binary.csv
 
 See PIPELINE_README.md for full documentation.
 """
@@ -41,11 +42,22 @@ See PIPELINE_README.md for full documentation.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+# Pre-parse --openai-base-url BEFORE importing rubric_evaluator
+# (the module reads OPENAI_BASE_URL at import time)
+# Supports comma-separated fallback URLs: localhost:4000,localhost:4001,localhost:4002
+_pre_parser = argparse.ArgumentParser(add_help=False)
+_pre_parser.add_argument("--openai-base-url", type=str, default="http://localhost:4000/v1")
+_pre_args, _ = _pre_parser.parse_known_args()
+_all_urls = [u.strip() for u in _pre_args.openai_base_url.split(",")]
+os.environ["OPENAI_BASE_URL"] = _all_urls[0]  # Set first URL for initial import
+os.environ["OPENAI_FALLBACK_URLS"] = ",".join(_all_urls)  # Store all for fallback
 
 # Add repo root to path
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -130,22 +142,10 @@ def main():
         help="Skip confirmation prompt",
     )
     parser.add_argument(
-        "--parallel",
-        type=int,
-        default=4,
-        help="Number of parallel rubric evaluations (default: 4)",
-    )
-    parser.add_argument(
         "--max-batch-messages",
         type=int,
-        default=0,
-        help="Max total messages per batch (0=disabled). Dynamically adjusts batch size.",
-    )
-    parser.add_argument(
-        "--inter-batch-delay",
-        type=float,
-        default=0,
-        help="Seconds to wait between batches (default: 0).",
+        default=1000,
+        help="Max total messages per batch (default: 1000). Dynamically adjusts batch size.",
     )
     parser.add_argument(
         "--retries",
@@ -158,12 +158,6 @@ def main():
         type=int,
         default=65,
         help="Seconds to wait on rate limit errors (default: 65). Set to match your API rate limit window.",
-    )
-    parser.add_argument(
-        "--max-concurrency",
-        type=int,
-        default=10,
-        help="Max concurrent LLM requests within a batch (default: 10). Lower this to avoid overwhelming your API.",
     )
     parser.add_argument(
         "--sort-by-messages",
@@ -190,8 +184,20 @@ def main():
         action="store_true",
         help="Disable LLM response caching (force re-evaluation of all tasks).",
     )
+    parser.add_argument(
+        "--openai-base-url",
+        type=str,
+        default="http://localhost:4000/v1",
+        help="OpenAI API base URL(s). Comma-separated for fallback on errors "
+             "(e.g., 'http://localhost:4000/v1,http://localhost:4001/v1,http://localhost:4002/v1')",
+    )
 
     args = parser.parse_args()
+
+    # Set defaults for underlying CLI (removed from this script for simplicity)
+    args.parallel = 1000  # Not used when max_batch_messages > 0
+    args.max_concurrency = 1000  # High concurrency for throughput
+    args.inter_batch_delay = 0  # No delay between batches
 
     # Parse sleep duration
     sleep_seconds = 0
