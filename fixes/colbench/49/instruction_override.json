@@ -1,0 +1,6 @@
+{
+  "clarifications": [
+    "Note: The final design should be clean and minimal. Focus on a centered logo, prominent search bar, and an informational paragraph about the agency. The 'property listings grid' and 'right sidebar for filters' mentioned in the description are optional secondary features that may not be needed for the core landing page design."
+  ],
+  "notes": "The task description mentions 'property listings grid' and 'right sidebar for filters' but the ground truth HTML shows a minimal design with just logo, search bar, and text. This clarification aligns the task with what the ground truth actually expects while preserving the collaborative design challenge."
+}
