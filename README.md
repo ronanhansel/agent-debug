@@ -151,17 +151,143 @@ WANDB_API_KEY=...
 HF_TOKEN=hf_...
 ```
 
-### Step 8: Azure Authentication (for TRAPI)
+### Step 8: Setup TMPDIR and Azure Authentication
+
+**CRITICAL**: Azure CLI requires a writable temporary directory. On shared machines, `/tmp` is often full.
+
+#### Step 8.1: Check Disk Space and Setup TMPDIR
 
 ```bash
-# Login to Azure CLI
+# Check if /tmp has space
+df -h / | tail -1
+
+# If /tmp is near 100% full, use your home directory instead
+if [ $(df / | tail -1 | awk '{print $5}' | sed 's/%//') -gt 95 ]; then
+    echo "⚠️  Root partition is >95% full, using ~/tmp instead of /tmp"
+    mkdir -p ~/tmp
+    chmod 700 ~/tmp
+    TMPDIR_PATH=$(readlink -f ~/tmp)
+else
+    echo "✓ Root partition has space, using /tmp"
+    TMPDIR_PATH="/tmp"
+fi
+
+# Set TMPDIR permanently
+cat >> ~/.bashrc << EOF
+
+# Fix Azure CLI tmpdir issues (required for authentication)
+export TMPDIR=$TMPDIR_PATH
+export TMP=$TMPDIR_PATH
+export TEMP=$TMPDIR_PATH
+EOF
+
+# Apply to current shell
+source ~/.bashrc
+
+# Verify it's set
+echo "TMPDIR is now: $TMPDIR"
+```
+
+#### Step 8.2: Update hal-harness/.env with TMPDIR
+
+```bash
+# Get the TMPDIR value
+TMPDIR_PATH=$(readlink -f ~/tmp 2>/dev/null || echo "/tmp")
+
+# Update .env.azure with correct TMPDIR
+cat > hal-harness/.env << EOF
+# Direct Azure/TRAPI Configuration (no LiteLLM proxy)
+# Uses Azure CLI credentials (az login)
+
+# Enable direct Azure mode
+USE_DIRECT_AZURE=true
+
+# Fix tmpdir issues
+TMPDIR=$TMPDIR_PATH
+TMP=$TMPDIR_PATH
+TEMP=$TMPDIR_PATH
+
+# TRAPI Configuration
+TRAPI_ENDPOINT=https://trapi.research.microsoft.com/gcr/shared
+TRAPI_API_VERSION=2024-12-01-preview
+TRAPI_SCOPE=api://trapi/.default
+
+# Azure Cognitive Services (for other Azure endpoints)
+AZURE_ENDPOINT=https://msrasc-swe.cognitiveservices.azure.com/
+AZURE_API_VERSION=2024-10-21
+AZURE_SCOPE=https://cognitiveservices.azure.com/.default
+
+# Dummy key - Azure AD auth doesn't need a real key
+OPENAI_API_KEY=dummy
+
+# Other settings
+HAL_AUTOFIX_MODEL="azure/o3-mini"
+LOG_LEVEL=DEBUG
+HAL_DEBUGGER_LOG_LEVEL=DEBUG
+WANDB_API_KEY=your-wandb-key
+SERPAPI_API_KEY=DUMMY
+HF_TOKEN=your-hf-token
+
+# LiteLLM retry settings (used by smolagents internally)
+LITELLM_NUM_RETRIES=35
+LITELLM_REQUEST_TIMEOUT=600
+
+# HAL task-level retry settings
+HAL_RETRY_MAX_RETRIES=120
+HAL_RETRY_MAX_DELAY=60
+
+# Skip slow Weave trace downloads
+HAL_SKIP_WEAVE_DOWNLOAD=true
+EOF
+
+# IMPORTANT: Update with your actual keys
+echo "⚠️  Don't forget to update WANDB_API_KEY and HF_TOKEN in hal-harness/.env"
+```
+
+#### Step 8.3: Login to Azure
+
+```bash
+# Make sure TMPDIR is exported in current shell
+export TMPDIR=$TMPDIR
+export TMP=$TMPDIR
+export TEMP=$TMPDIR
+
+# Clear any stale tokens
+az logout
+
+# Login to Azure
 az login
 
 # Verify authentication
 az account show
 
-# The scripts will automatically use Azure CLI credentials for TRAPI
+# Test token acquisition for Azure Cognitive Services
+az account get-access-token --resource https://cognitiveservices.azure.com
+
+# Verify MSAL cache is populated
+ls -la ~/.azure/msal_token_cache.json
+# Should show a recent timestamp
+
+# The scripts will automatically use MSAL token cache for authentication
 ```
+
+#### Step 8.4: Verify Setup
+
+```bash
+# Check all environment variables are set
+echo "TMPDIR: $TMPDIR"
+cat hal-harness/.env | grep TMPDIR
+
+# Verify Azure authentication works
+az account show
+
+# Test token acquisition
+az account get-access-token --resource https://cognitiveservices.azure.com | python3 -c "import sys, json; d=json.load(sys.stdin); print(f'✓ Token acquired! Expires: {d[\"expiresOn\"]}')"
+
+# If you see errors, check the troubleshooting section
+```
+
+**If authentication still fails**, check the [Azure troubleshooting section](#azure-authentication-no-usable-temporary-directory-found) for detailed diagnosis steps.
 
 ### Step 9: Decrypt Benchmark Data (CoreBench)
 
@@ -172,7 +298,9 @@ gpg --output hal-harness/hal/benchmarks/corebench/core_test.json \
 # Passphrase: reproducibility
 ```
 
-### Step 10: Download SciCode Test Data
+### Step 10: Download Benchmark Datasets
+
+#### SciCode Test Data
 
 ```bash
 # Download test_data.h5 for SciCode evaluation
@@ -180,6 +308,37 @@ gpg --output hal-harness/hal/benchmarks/corebench/core_test.json \
 mkdir -p hal-harness/hal/benchmarks/SciCode/eval/data
 # Download from the SciCode dataset source
 ```
+
+#### ScienceAgentBench Datasets
+
+**CRITICAL**: ScienceAgentBench requires dataset files to be downloaded separately.
+
+```bash
+# Install gdown for Google Drive downloads
+pip install gdown
+
+# Download and extract ScienceAgentBench datasets (required for evaluation)
+cd hal-harness/hal/benchmarks/scienceagentbench/ScienceAgentBench_modified/benchmark/
+gdown 1IYVRVK0TSZXRVKiSc2D0wxV1LXoXhpfA
+
+# Extract with password: scienceagentbench
+unzip -P scienceagentbench benchmark.zip
+
+# Move files up one level (zip has nested benchmark/ directory)
+mv benchmark/* .
+rmdir benchmark
+
+# Clean up zip file (optional, saves 1.7GB)
+rm benchmark.zip
+
+# Verify datasets directory exists
+ls -la datasets/
+# Should show 78 folders including: ocean_profiles/, temperature_statistic/, ligand_protein/, etc.
+
+cd ../../../../..
+```
+
+**Note**: Without these datasets, ScienceAgentBench tasks will fail with "file not found" errors.
 
 ### Step 11: Verify Installation
 
@@ -346,6 +505,8 @@ python scripts/run_scicode_fixes.py --all-models --prefix fixed_ --docker
 
 ### CoreBench
 
+**Note**: CoreBench requires large capsule files (~2GB total). The fix runner automatically extracts them before running to prevent race conditions.
+
 ```bash
 # List IFE tasks
 python scripts/claude_fixer_corebench.py --rubric-dir rubrics_output/corebench --list-ife-tasks
@@ -357,7 +518,7 @@ python scripts/claude_fixer_corebench.py \
     --benchmark corebench_hard \
     --ife-only --tasks-per-batch 3
 
-# Apply fixes
+# Apply fixes (capsules auto-extracted, safe for high parallelism)
 python scripts/run_corebench_fixes.py --list-fixes
 python scripts/run_corebench_fixes.py --all-models --prefix fixed_ --docker --skip-rubrics
 ```
@@ -467,6 +628,21 @@ docker run --rm hal-agent-runner:latest bash -lc \
 
 ## Troubleshooting
 
+**Quick Issue Finder**:
+- [Evaluations hang after Weave initialization](#evaluations-hanging-after-weave-initialization) - No output after "Logged in as Weights & Biases user"
+- [Azure "No usable temporary directory"](#azure-authentication-no-usable-temporary-directory-found) - FileNotFoundError with /tmp
+- [Docker containers missing /tmp](#docker-containers-missing-tmp-directory) - Errors inside containers about temp directories
+- [Expired MSAL token cache](#expired-msal-token-cache) - Azure authentication failing silently
+- [High parallelism causing hangs](#high-parallelism-causing-system-instability) - System becomes unresponsive with many jobs
+- [CoreBench capsule extraction race condition](#corebench-capsule-extraction-race-condition) - Already fixed in `run_corebench_fixes.py`
+- [TLS/SSL errors](#tlsssl-errors) - Certificate verification issues
+- [Docker connection issues](#docker-connection-issues) - Cannot connect to Docker daemon
+- [Azure authentication general](#azure-authentication-issues) - General Azure login problems
+- [Model not found](#model-not-found) - Model key not in config
+- [Conda environment issues](#conda-environment-issues) - Package conflicts or import errors
+
+---
+
 ### TLS/SSL Errors
 
 ```bash
@@ -514,6 +690,350 @@ conda activate hal
 pip install -r requirements.txt
 pip install -e ./docent
 pip install -e ./hal-harness
+```
+
+### Evaluations Hanging After Weave Initialization
+
+**Symptoms**: Verbose logs show Weave initialization succeeding, then the process hangs with no further output:
+```
+→ Initializing logging with W&B Weave...
+Logged in as Weights & Biases user: <username>
+View Weave data at https://wandb.ai/...
+[HANGS HERE - no further output]
+```
+
+**Root Cause**: API connection issues - either:
+1. No LiteLLM proxy running when `.env` is configured for proxy mode
+2. Azure authentication failing when using direct Azure mode
+3. Wrong environment configuration loaded
+
+**Diagnosis**:
+
+```bash
+# Check which .env is being used
+cat hal-harness/.env | head -5
+
+# Check if using proxy mode (look for OPENAI_BASE_URL)
+cat hal-harness/.env | grep OPENAI_BASE_URL
+
+# Check if using direct Azure mode
+cat hal-harness/.env | grep USE_DIRECT_AZURE
+
+# Check if proxy is running (proxy mode only)
+curl http://localhost:4000/health
+
+# Check Azure authentication (Azure mode only)
+az account show
+```
+
+**Solution 1: Fix .env Configuration**
+
+If you see `OPENAI_BASE_URL=http://...` but no proxy is running, you have a mismatch:
+
+```bash
+# Option A: Start the proxy
+./deploy_llm_cluster.sh
+
+# Option B: Switch to Azure direct mode
+cp hal-harness/.env.azure hal-harness/.env
+
+# Option C: Use OpenAI API directly
+cat > hal-harness/.env << 'EOF'
+OPENAI_API_KEY=sk-your-key-here
+WANDB_API_KEY=your-wandb-key
+HF_TOKEN=your-hf-token
+SERPAPI_API_KEY=DUMMY
+EOF
+
+# Kill hanging processes
+pkill -f "hal-eval"
+pkill -f "run_.*_fixes"
+
+# Re-run
+python scripts/run_<benchmark>_fixes.py --all-models --prefix fixed_ --docker
+```
+
+**Solution 2: Fix Azure Authentication Issues**
+
+If using direct Azure mode (`USE_DIRECT_AZURE=true`) and evaluations hang:
+
+```bash
+# Check Azure login status
+az account show
+
+# If not logged in, authenticate
+az login
+
+# Verify token acquisition works
+az account get-access-token --resource api://trapi/.default
+
+# If token acquisition fails, check MSAL cache
+ls -la ~/.azure/msal_token_cache.json
+
+# Re-login to refresh tokens
+az logout
+az login
+```
+
+### Azure Authentication: "No usable temporary directory found"
+
+**Symptoms**:
+```
+AzureCliCredential.get_token_info failed:
+FileNotFoundError: [Errno 2] No usable temporary directory found in ['/tmp', '/var/tmp', '/usr/tmp', '/usr/bin']
+```
+
+**Root Cause**: Python cannot detect `/tmp` directory due to missing or incorrect `TMPDIR` environment variable.
+
+**Solution**:
+
+```bash
+# Check if your TMPDIR is set and writable
+echo "Current TMPDIR: $TMPDIR"
+touch $TMPDIR/test && rm $TMPDIR/test && echo "✓ TMPDIR is writable"
+
+# Check Python's temp directory detection
+python -c "import tempfile; print(tempfile.gettempdir())"
+
+# If not set, follow Step 8.1 to set up TMPDIR dynamically
+# (uses ~/tmp if disk is >95% full, otherwise /tmp)
+
+# Verify TMPDIR is in .bashrc
+grep TMPDIR ~/.bashrc
+
+# Verify TMPDIR is in .env
+grep TMPDIR hal-harness/.env
+
+# Test Azure CLI works now
+az account get-access-token --resource api://trapi/.default
+```
+
+### Docker Containers Missing /tmp Directory
+
+**Symptoms**: Errors inside Docker containers about missing temporary directories, even though host has `/tmp`.
+
+**Root Cause**: Docker containers don't inherit the host's `/tmp` filesystem by default.
+
+**Solution**: The docker_runner.py has been updated to automatically mount a tmpfs for `/tmp`:
+
+```python
+# Already implemented in hal-harness/hal/utils/docker_runner.py
+tmpfs = {"/tmp": "size=1G,mode=1777"}
+```
+
+If you see this issue in custom Docker runs, add the tmpfs mount:
+
+```bash
+docker run --tmpfs /tmp:size=1G,mode=1777 <image> <command>
+```
+
+### Expired MSAL Token Cache
+
+**Symptoms**: Using Azure direct mode but authentication fails with:
+```
+✗ Token acquisition failed: None
+```
+
+**Diagnosis**:
+```bash
+# Check MSAL cache exists
+ls -la ~/.azure/msal_token_cache.json
+
+# Test token acquisition with Python
+python << 'EOF'
+import msal
+import os
+
+cache_path = os.path.expanduser('~/.azure/msal_token_cache.json')
+cache = msal.SerializableTokenCache()
+with open(cache_path, 'r') as f:
+    cache.deserialize(f.read())
+
+app = msal.PublicClientApplication(
+    '04b07795-8ddb-461a-bbee-02f9e1bf7b46',
+    authority='https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47',
+    token_cache=cache
+)
+
+accounts = app.get_accounts()
+print(f'Found {len(accounts)} account(s)')
+if accounts:
+    result = app.acquire_token_silent(['api://trapi/.default'], account=accounts[0])
+    if result and 'access_token' in result:
+        print('✓ Token acquired successfully')
+    else:
+        print('✗ Token expired or invalid')
+EOF
+```
+
+**Solution**:
+```bash
+# IMPORTANT: Ensure TMPDIR is set (required for az CLI)
+# If not already set, follow Step 8.1 to set up TMPDIR
+echo "Current TMPDIR: $TMPDIR"
+
+# If TMPDIR is not set, set it temporarily
+if [ -z "$TMPDIR" ]; then
+    export TMPDIR=$(readlink -f ~/tmp 2>/dev/null || echo "/tmp")
+    export TMP=$TMPDIR
+    export TEMP=$TMPDIR
+fi
+
+# Re-authenticate to refresh MSAL cache
+az logout
+az login
+
+# Verify it works
+az account get-access-token --resource api://trapi/.default
+
+# Ensure TMPDIR is permanent (should already be done in Step 8.1)
+grep TMPDIR ~/.bashrc || echo "⚠️  TMPDIR not in .bashrc - follow Step 8.1"
+```
+
+### Complete Fix for Company Azure/TRAPI Setup
+
+**If you're running large-scale evaluations and nothing works**, follow these steps in order:
+
+```bash
+# Step 1: Set up TMPDIR dynamically (see Step 8.1 for details)
+# This automatically chooses ~/tmp if disk is >95% full, otherwise /tmp
+if [ $(df / | tail -1 | awk '{print $5}' | sed 's/%//') -gt 95 ]; then
+    mkdir -p ~/tmp
+    chmod 700 ~/tmp
+    TMPDIR_PATH=$(readlink -f ~/tmp)
+else
+    TMPDIR_PATH="/tmp"
+fi
+
+# Add to .bashrc if not already there
+if ! grep -q "export TMPDIR=" ~/.bashrc; then
+    cat >> ~/.bashrc << EOF
+# Fix Azure CLI tmpdir issues
+export TMPDIR=$TMPDIR_PATH
+export TMP=$TMPDIR_PATH
+export TEMP=$TMPDIR_PATH
+EOF
+fi
+source ~/.bashrc
+
+# Step 2: Add TMPDIR to hal-harness/.env if not already there
+if ! grep -q "^TMPDIR=" hal-harness/.env; then
+    cat >> hal-harness/.env << EOF
+
+# Fix tmpdir issues
+TMPDIR=$TMPDIR_PATH
+TMP=$TMPDIR_PATH
+TEMP=$TMPDIR_PATH
+EOF
+fi
+
+# Step 3: Verify TMPDIR is writable
+touch $TMPDIR/test && rm $TMPDIR/test && echo "✓ TMPDIR ($TMPDIR) works" || echo "✗ TMPDIR broken"
+
+# Step 4: Re-authenticate Azure
+az logout
+az login
+
+# Step 5: Verify authentication works
+az account show
+az account get-access-token --resource api://trapi/.default
+
+# Step 6: Verify hal-harness is using Azure direct mode
+cat hal-harness/.env | grep USE_DIRECT_AZURE
+# Should output: USE_DIRECT_AZURE=true
+
+# If not:
+cp hal-harness/.env.azure hal-harness/.env
+
+# Step 7: Kill any hung processes
+pkill -f "hal-eval"
+pkill -f "run_.*_fixes"
+
+# Step 8: Test with a small job
+python scripts/run_corebench_fixes.py \
+    --task-id capsule-1624349 \
+    --model openai/gpt-4.1-2025-04-14 \
+    --docker \
+    --skip-rubrics
+
+# Step 9: If test works, run full evaluation
+python scripts/run_corebench_fixes.py \
+    --all-models \
+    --prefix cb_azure \
+    --docker \
+    --skip-rubrics \
+    --max-parallel-capsules 5
+```
+
+**Debug checklist if still failing**:
+```bash
+# ✓ Check 1: TMPDIR is set
+echo $TMPDIR  # Should print your TMPDIR path (e.g., /tmp or ~/tmp)
+
+# ✓ Check 2: Azure is logged in
+az account show  # Should show your account
+
+# ✓ Check 3: Can get tokens
+az account get-access-token --resource api://trapi/.default  # Should return token
+
+# ✓ Check 4: Using Azure mode
+grep USE_DIRECT_AZURE hal-harness/.env  # Should be: true
+
+# ✓ Check 5: No proxy URLs in .env
+grep OPENAI_BASE_URL hal-harness/.env  # Should be empty or commented
+
+# ✓ Check 6: Docker /tmp mount added
+grep "tmpfs.*tmp" hal-harness/hal/utils/docker_runner.py  # Should find code
+
+# ✓ Check 7: MSAL cache exists
+ls -la ~/.azure/msal_token_cache.json  # Should exist with recent timestamp
+
+# ✓ Check 8: TMPDIR matches between shell and .env
+echo "Shell TMPDIR: $TMPDIR"
+grep TMPDIR hal-harness/.env  # Should match
+```
+
+### High Parallelism Causing System Instability
+
+**Symptoms**: Some evaluations complete, others hang, system becomes unresponsive.
+
+**Root Cause**: Too many concurrent Docker containers or API calls overwhelming the system.
+
+**Solution**:
+
+```bash
+# Check current load
+docker ps | wc -l  # Number of running containers
+ps aux | grep hal-eval | wc -l  # Number of HAL processes
+
+# Kill hung processes
+pkill -f "hal-eval"
+pkill -f "run_.*_fixes"
+
+# Reduce parallelism
+python scripts/run_<benchmark>_fixes.py \
+    --all-models \
+    --prefix fixed_ \
+    --docker \
+    --max-parallel-capsules 3  # Lower this value (default is often too high)
+```
+
+**Recommended Parallelism Limits**:
+- **Local machine**: `--max-parallel-capsules 3-5`
+- **Azure VM (Standard_D4s_v3)**: `--max-parallel-capsules 5-10`
+- **High-memory server**: `--max-parallel-capsules 10-20`
+
+**Monitor Resource Usage**:
+```bash
+# Check CPU and memory usage
+htop
+
+# Check Docker resource usage
+docker stats
+
+# Check disk space (Docker images are large)
+df -h
+docker system df
 ```
 
 ---

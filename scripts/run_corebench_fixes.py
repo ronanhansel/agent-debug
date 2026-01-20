@@ -1138,6 +1138,84 @@ def list_available_fixes(fixes_root: Path) -> List[str]:
     return sorted([p.name for p in fixes_root.iterdir() if p.is_dir() and not p.name.startswith(".")])
 
 
+def ensure_capsules_extracted(capsule_ids: Set[str], benchmark: str = "corebench_hard") -> None:
+    """
+    Ensure all required capsules are extracted before parallel execution.
+
+    This prevents race conditions when multiple processes try to extract the same
+    capsule simultaneously during parallel runs.
+
+    Args:
+        capsule_ids: Set of capsule IDs that need to be available
+        benchmark: Benchmark name (default: corebench_hard)
+    """
+    capsules_dir = REPO_ROOT / "hal-harness" / "hal" / "benchmarks" / "corebench" / "capsules"
+
+    # Check which capsules are missing
+    missing_capsules = []
+    for capsule_id in sorted(capsule_ids):
+        capsule_dir = capsules_dir / capsule_id
+        if not capsule_dir.exists():
+            missing_capsules.append(capsule_id)
+
+    if not missing_capsules:
+        print(f"[capsules] All {len(capsule_ids)} required capsules already extracted")
+        return
+
+    print(f"[capsules] Found {len(missing_capsules)} capsules that need extraction:")
+    for capsule_id in missing_capsules[:5]:  # Show first 5
+        print(f"[capsules]   - {capsule_id}")
+    if len(missing_capsules) > 5:
+        print(f"[capsules]   ... and {len(missing_capsules) - 5} more")
+
+    print(f"[capsules] Initializing benchmark to extract capsules (this may take a few minutes)...")
+
+    # Run a minimal hal-eval to trigger capsule extraction
+    # We use max_tasks=1 but the benchmark __init__ will still check/extract all capsules
+    agent_dir = REPO_ROOT / "hal-harness" / "agents" / "hal_generalist_agent"
+
+    try:
+        cmd = [
+            "hal-eval",
+            "--benchmark", benchmark,
+            "--agent_dir", str(agent_dir),
+            "--agent_function", "main.run",
+            "--agent_name", "capsule_extractor",
+            "--max_tasks", "0",  # Don't actually run any tasks
+            "-A", "model_name=gpt-4o",
+        ]
+
+        print(f"[capsules] Running: {' '.join(cmd)}")
+
+        # Run the command - it will initialize the benchmark which extracts capsules
+        # We expect this to fail since max_tasks=0, but capsules will be extracted
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
+        )
+
+        # Check if capsules were extracted successfully
+        still_missing = []
+        for capsule_id in missing_capsules:
+            capsule_dir = capsules_dir / capsule_id
+            if not capsule_dir.exists():
+                still_missing.append(capsule_id)
+
+        if still_missing:
+            print(f"[capsules] WARNING: {len(still_missing)} capsules still not extracted:")
+            for capsule_id in still_missing[:5]:
+                print(f"[capsules]   - {capsule_id}")
+            print(f"[capsules] Stderr: {result.stderr[:500]}")
+        else:
+            print(f"[capsules] ✓ Successfully extracted all {len(missing_capsules)} capsules")
+
+    except Exception as e:
+        print(f"[capsules] WARNING: Failed to pre-extract capsules: {e}")
+        print(f"[capsules] Will attempt extraction during individual runs (may cause race conditions)")
+
+
 def main() -> None:
     args = parse_args()
     fixes_root = Path(args.fixes_root)
@@ -1206,6 +1284,9 @@ def main() -> None:
         print(f"No fix directories found in {fixes_root}")
         return
     print(f"[fixes] Found {len(available_fixes)} fix directories")
+
+    # Pre-extract all required capsules to avoid race conditions during parallel execution
+    ensure_capsules_extracted(available_fixes, benchmark=args.benchmark)
 
     try:
         fixes_base = fixes_root.parent
