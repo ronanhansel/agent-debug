@@ -210,12 +210,32 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model-config",
-        default=str(REPO_ROOT / "model_to_baseline.json"),
-        help="Path to model_to_baseline.json mapping model names to agent_args.",
+        default=str(REPO_ROOT / "model_to_baseline_corebench.json"),
+        help="Path to model_to_baseline_corebench.json mapping model names to agent_args.",
     )
     parser.add_argument(
         "--model",
-        help="Force a specific model for all tasks (overrides rubric CSV). Use model key from model_to_baseline.json.",
+        help="Force a specific model for all tasks (overrides rubric CSV). Use model key from config.",
+    )
+    parser.add_argument(
+        "--all-models",
+        action="store_true",
+        help="Run all models from model config for each task with fixes.",
+    )
+    parser.add_argument(
+        "--list-fixes",
+        action="store_true",
+        help="List available fixes and exit.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Preview what would be done without running HAL eval.",
+    )
+    parser.add_argument(
+        "--verify-fixes",
+        action="store_true",
+        help="Verify fixes are applied correctly without running HAL eval.",
     )
     return parser.parse_args()
 
@@ -277,28 +297,41 @@ def load_rubric_task_models(csv_path: Path) -> List[Tuple[str, str]]:
 def get_agent_args_for_model(
     model_key: str,
     model_config: Dict[str, Dict[str, Any]],
-) -> Optional[Dict[str, object]]:
+) -> Optional[Tuple[Dict[str, object], str]]:
     """Get the agent_args for a specific model.
 
     Args:
-        model_key: The model name/key to look up
-        model_config: The model_to_baseline.json config
+        model_key: The model name/key to look up (used for pricing)
+        model_config: The model_to_baseline_corebench.json config
 
     Returns:
-        Agent args dict with model_name, reasoning_effort, etc.
+        Tuple of (agent_args dict, pricing_key) where:
+        - agent_args contains model_name (from model_id), reasoning_effort, etc.
+        - pricing_key is the config key used for pricing lookup
         Returns None if model not found in config.
     """
     if not model_key:
         return None
 
-    # Look up model config
+    # Direct lookup
+    pricing_key = model_key
     model_entry = model_config.get(model_key)
+
+    # Try matching by short_name
     if not model_entry:
-        # Try matching by short_name
         for key, entry in model_config.items():
             if entry.get("short_name") == model_key:
                 model_entry = entry
+                pricing_key = key
                 print(f"[model] Short name match: '{model_key}' -> '{key}'")
+                break
+
+    # Try matching by model_id
+    if not model_entry:
+        for key, entry in model_config.items():
+            if entry.get("model_id") == model_key:
+                model_entry = entry
+                pricing_key = key
                 break
 
     if not model_entry:
@@ -315,7 +348,7 @@ def get_agent_args_for_model(
         agent_args["reasoning_effort"] = model_entry["reasoning_effort"]
     if "max_steps" in model_entry:
         agent_args["max_steps"] = model_entry["max_steps"]
-    return agent_args
+    return agent_args, pricing_key
 
 
 def normalize_value(value: object) -> str:
@@ -1098,11 +1131,31 @@ def run_one_capsule(
                 print(f"[capsule][conda] WARNING: Failed to clean up isolated env {isolated_env_name}: {exc}")
 
 
+def list_available_fixes(fixes_root: Path) -> List[str]:
+    """List all task IDs that have fix directories."""
+    if not fixes_root.exists():
+        return []
+    return sorted([p.name for p in fixes_root.iterdir() if p.is_dir() and not p.name.startswith(".")])
+
+
 def main() -> None:
     args = parse_args()
+    fixes_root = Path(args.fixes_root)
+
+    # Handle --list-fixes early
+    if args.list_fixes:
+        available = list_available_fixes(fixes_root)
+        print(f"\n{'='*60}")
+        print(f"AVAILABLE FIXES in {fixes_root}")
+        print(f"{'='*60}")
+        print(f"\nFound {len(available)} fix directories:")
+        for fix_id in available:
+            print(f"  - {fix_id}")
+        print()
+        return
+
     if not args.skip_rubrics and not args.rubric_model:
         raise SystemExit("--rubric-model is required unless --skip-rubrics is set.")
-    fixes_root = Path(args.fixes_root)
     agent_dir = Path(args.agent_dir)
     dataset_source = resolve_corebench_dataset_path(args.corebench_dataset)
     rubric_output_dir = REPO_ROOT / "rubrics_output"
@@ -1116,19 +1169,22 @@ def main() -> None:
         print(f"[model] Available models: {list(model_config.keys())}")
     else:
         print(f"[model] ERROR: No model config found at {model_config_path}")
-        print(f"[model] All models must be defined in model_to_baseline.json")
+        print(f"[model] All models must be defined in model_to_baseline_corebench.json")
         return
 
     # Load task->model pairs from rubric CSV (each task can have multiple models)
     task_model_pairs: List[Tuple[str, str]] = []
-    if args.rubric_csv:
+    if args.all_models:
+        # Will be populated after loading available_fixes
+        print(f"[model] --all-models specified, will run all models for each task")
+    elif args.rubric_csv:
         rubric_csv_path = Path(args.rubric_csv)
         task_model_pairs = load_rubric_task_models(rubric_csv_path)
         print(f"[model] Loaded {len(task_model_pairs)} (task, model) pairs from {rubric_csv_path.name}")
     elif args.model:
         print(f"[model] Using forced model '{args.model}' for all tasks")
     else:
-        print(f"[model] WARNING: No --rubric-csv or --model specified, tasks without model match will be skipped")
+        print(f"[model] WARNING: No --rubric-csv, --model, or --all-models specified")
 
     if not args.skip_install:
         install_agent_requirements(agent_dir)
@@ -1153,12 +1209,15 @@ def main() -> None:
 
     try:
         fixes_base = fixes_root.parent
-        # capsule_jobs: (capsule_id, payload, env_override, task_agent_args)
-        capsule_jobs: List[tuple[str, str, Dict[str, str] | None, Dict[str, object]]] = []
+        # capsule_jobs: (capsule_id, payload, env_override, task_agent_args, pricing_key)
+        capsule_jobs: List[tuple[str, str, Dict[str, str] | None, Dict[str, object], str]] = []
         conda_env = "hal"
 
-        # If forced model, expand to all fixes with that model
-        if args.model:
+        # Build task_model_pairs based on flags
+        if args.all_models:
+            task_model_pairs = [(fix_id, model_key) for fix_id in available_fixes for model_key in model_config.keys()]
+            print(f"[model] --all-models: {len(model_config)} models × {len(available_fixes)} tasks = {len(task_model_pairs)} jobs")
+        elif args.model:
             task_model_pairs = [(fix_id, args.model) for fix_id in available_fixes]
             print(f"[model] Forced model '{args.model}' for all {len(task_model_pairs)} tasks")
 
@@ -1170,15 +1229,16 @@ def main() -> None:
             if capsule_id not in available_fixes:
                 continue
 
-            # Get agent_args for this model
-            task_agent_args = get_agent_args_for_model(model_key, model_config)
-            if task_agent_args is None:
+            # Get agent_args for this model (returns tuple of agent_args, pricing_key)
+            result = get_agent_args_for_model(model_key, model_config)
+            if result is None:
                 print(f"[skip] Skipping {capsule_id} + {model_key} - model not in config")
                 continue
+            task_agent_args, pricing_key = result
 
             print(f"\n=== Queuing {capsule_id} + {model_key} ===")
             print(f"[model] Will use: {task_agent_args.get('model_name')} "
-                  f"(reasoning_effort={task_agent_args.get('reasoning_effort', 'N/A')})")
+                  f"(reasoning_effort={task_agent_args.get('reasoning_effort', 'N/A')}, pricing_key={pricing_key})")
 
             if capsule_id not in capsule_map:
                 print(f"[WARN] Capsule {capsule_id} not found in dataset. Skipping.")
@@ -1208,10 +1268,49 @@ def main() -> None:
                 input_override=input_override,
             )
             task_agent_args["benchmark_name"] = args.benchmark
-            capsule_jobs.append((capsule_id, payload, env_override, task_agent_args))
+            capsule_jobs.append((capsule_id, payload, env_override, task_agent_args, pricing_key))
 
         if not capsule_jobs:
             print("No runnable capsules found after filtering.")
+            return
+
+        # Handle --dry-run
+        if args.dry_run:
+            print(f"\n{'='*60}")
+            print("DRY RUN - Would execute the following jobs:")
+            print(f"{'='*60}\n")
+            for capsule_id, payload, env_override, task_agent_args, pricing_key in capsule_jobs:
+                print(f"  - {capsule_id}")
+                print(f"      Model: {task_agent_args.get('model_name')}")
+                print(f"      Pricing key: {pricing_key}")
+                if env_override:
+                    print(f"      Env overrides: {list(env_override.keys())}")
+            print(f"\nTotal jobs: {len(capsule_jobs)}")
+            print(f"Prefix: {args.prefix or '(none)'}")
+            print(f"Docker: {args.docker}")
+            print(f"{'='*60}\n")
+            return
+
+        # Handle --verify-fixes
+        if args.verify_fixes:
+            print(f"\n{'='*60}")
+            print("VERIFY FIXES - Checking fix packages:")
+            print(f"{'='*60}\n")
+            for capsule_id, payload, env_override, task_agent_args, pricing_key in capsule_jobs:
+                print(f"\n--- {capsule_id} ---")
+                fix = fix_cache.get(capsule_id)
+                if fix:
+                    if fix.input_override:
+                        print(f"  input_override: present")
+                    if fix.env_override:
+                        print(f"  env_override: {list(fix.env_override.keys())}")
+                    if fix.agent_overlay:
+                        print(f"  agent_overlay: present")
+                    if fix.agent_patch:
+                        print(f"  agent_patch: present")
+                else:
+                    print(f"  (no fix loaded)")
+            print(f"\n{'='*60}\n")
             return
 
         # Ensure basic CLI dependencies (click) are available
@@ -1223,8 +1322,8 @@ def main() -> None:
         generated_traces: List[Path] = []
         max_workers = max(1, int(args.max_parallel_capsules))
         if max_workers <= 1 or len(capsule_jobs) <= 1:
-            for capsule_id, payload, env_override, task_agent_args in capsule_jobs:
-                print(f"\n=== Processing {capsule_id} ===")
+            for capsule_id, payload, env_override, task_agent_args, pricing_key in capsule_jobs:
+                print(f"\n=== Processing {capsule_id} (pricing_key={pricing_key}) ===")
                 generated_traces.append(
                     run_one_capsule(
                         capsule_id=capsule_id,
@@ -1273,8 +1372,8 @@ def main() -> None:
                         conda_env=conda_env,
                         use_isolated_env=args.isolated_env,
                         keep_isolated_env=args.keep_isolated_env,
-                    ): capsule_id
-                    for capsule_id, payload, env_override, task_agent_args in capsule_jobs
+                    ): (capsule_id, pricing_key)
+                    for capsule_id, payload, env_override, task_agent_args, pricing_key in capsule_jobs
                 }
                 for future in as_completed(futures):
                     try:
