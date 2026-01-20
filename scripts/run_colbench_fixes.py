@@ -49,6 +49,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+# Load .env file early to ensure Azure config is available
+from dotenv import load_dotenv
+load_dotenv()
+
+# Remove proxy URLs if USE_DIRECT_AZURE is enabled
+if os.environ.get('USE_DIRECT_AZURE', '').lower() == 'true':
+    for key in ['OPENAI_BASE_URL', 'OPENAI_API_BASE', 'LITELLM_BASE_URL']:
+        if key in os.environ:
+            del os.environ[key]
+    print("[INFO] Direct Azure mode: removed proxy URLs from environment")
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXES_DIR = REPO_ROOT / "fixes" / "colbench"
 TRACES_DIR = REPO_ROOT / "traces"

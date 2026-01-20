@@ -32,6 +32,17 @@ import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# Load .env file early to ensure Azure config is available
+from dotenv import load_dotenv
+load_dotenv()
+
+# Remove proxy URLs if USE_DIRECT_AZURE is enabled
+if os.environ.get('USE_DIRECT_AZURE', '').lower() == 'true':
+    for key in ['OPENAI_BASE_URL', 'OPENAI_API_BASE', 'LITELLM_BASE_URL']:
+        if key in os.environ:
+            del os.environ[key]
+    print("[INFO] Direct Azure mode: removed proxy URLs from environment")
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # Track temporary conda environments for cleanup
@@ -890,6 +901,102 @@ def install_agent_requirements(agent_dir: Path) -> None:
         except Exception:
             pass
 
+FAILED_TASKS_FILE = REPO_ROOT / ".tmp" / "corebench_failed_tasks.json"
+
+
+def is_retryable_error(error_msg: str) -> bool:
+    """Check if an error is retryable (TRAPI timeout, auth, rate limit)."""
+    retryable_patterns = [
+        # Timeouts
+        "timeout", "timed out", "connection reset", "connection refused", "connection error",
+        # HTTP errors
+        "503", "504", "502", "500", "429", "rate limit",
+        # Auth/Token errors (CRITICAL: TRAPI token expiration)
+        "401", "403", "unauthorized", "authentication",
+        "invalid token", "expired token", "invalid or expired token", "token expired", "authenticationerror",
+        # Other retryable errors
+        "invalid_request_error", "insufficient_quota", "overloaded", "overloaded_error",
+        "network error", "broken pipe", "EOF occurred", "service unavailable", "bad gateway",
+    ]
+    error_lower = str(error_msg).lower()
+    return any(pattern in error_lower for pattern in retryable_patterns)
+
+
+def save_failed_task(task_id: str, model_id: str, error: str) -> None:
+    """Save failed task to file for later retry."""
+    failed_tasks = {}
+    if FAILED_TASKS_FILE.exists():
+        try:
+            failed_tasks = json.loads(FAILED_TASKS_FILE.read_text())
+        except Exception:
+            pass
+
+    key = f"{task_id}_{model_id}"
+    failed_tasks[key] = {
+        "task_id": task_id,
+        "model_id": model_id,
+        "error": error,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+    FAILED_TASKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    FAILED_TASKS_FILE.write_text(json.dumps(failed_tasks, indent=2))
+
+
+def run_with_retry(
+    cmd: List[str],
+    env: Dict[str, str],
+    cwd: Path,
+    task_id: str,
+    model_id: str,
+    max_retries: int = 3,
+) -> Tuple[bool, str, Optional[subprocess.CompletedProcess]]:
+    """Run subprocess with retry logic for TRAPI timeouts and auth errors."""
+    import random
+
+    for attempt in range(max_retries):
+        try:
+            # Only print retry message on actual retries (not first attempt)
+            if attempt > 0:
+                print(f"[retry] Attempt {attempt + 1}/{max_retries}")
+            result = subprocess.run(
+                cmd, cwd=cwd, env=env, capture_output=True, text=True,
+            )
+
+            stderr, stdout = result.stderr or "", result.stdout or ""
+            combined_output = stderr + stdout
+
+            # Success
+            if result.returncode == 0:
+                return True, "Success", result
+
+            # Check if error is retryable
+            if is_retryable_error(combined_output):
+                wait_time = min(60, (2 ** attempt) + random.uniform(0, 5))
+                print(f"[retry] Retryable error detected. Waiting {wait_time:.1f}s before retry...")
+                print(f"[retry] Error snippet: {combined_output[:200]}")
+                time.sleep(wait_time)
+                continue
+            else:
+                print(f"[retry] Non-retryable error: {combined_output[:200]}")
+                save_failed_task(task_id, model_id, combined_output[:500])
+                return False, f"Exit code {result.returncode}", result
+
+        except Exception as e:
+            error_msg = str(e)
+            print(f"[retry] Exception on attempt {attempt + 1}/{max_retries}: {error_msg}")
+
+            if is_retryable_error(error_msg) and attempt < max_retries - 1:
+                wait_time = min(60, (2 ** attempt) + random.uniform(0, 5))
+                print(f"[retry] Retrying after {wait_time:.1f}s...")
+                time.sleep(wait_time)
+            else:
+                save_failed_task(task_id, model_id, error_msg)
+                return False, error_msg, None
+
+    save_failed_task(task_id, model_id, "Max retries exceeded")
+    return False, "Max retries exceeded", None
+
 
 def _slugify(value: str, fallback: str) -> str:
     # Keep readable identifiers for run_ids / filenames.
@@ -1079,19 +1186,28 @@ def run_one_capsule(
         elif wandb_mode:
             hal_env["WANDB_MODE"] = wandb_mode
 
-        proc = subprocess.run(
-            cmd,
-            cwd=REPO_ROOT,
+        # Use retry wrapper with exponential backoff
+        model_id_str = str(agent_args.get("model_name", "unknown"))
+        success, error_msg, proc = run_with_retry(
+            cmd=cmd,
             env=hal_env,
-            capture_output=True,
-            text=True,
+            cwd=REPO_ROOT,
+            task_id=capsule_id,
+            model_id=model_id_str,
+            max_retries=3,
         )
-        if proc.returncode != 0:
-            output = (proc.stdout or "") + "\n" + (proc.stderr or "")
-            output = output.strip()
+
+        if not success:
+            output = error_msg if proc is None else ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
             if output:
                 print(f"[hal-eval][error] capsule_id={capsule_id} run_id={run_id}\n{output}\n")
-            raise subprocess.CalledProcessError(proc.returncode, proc.args, output=proc.stdout, stderr=proc.stderr)
+            print(f"[hal-eval][failed] Failed after retries: {error_msg}")
+            raise subprocess.CalledProcessError(
+                proc.returncode if proc else 1,
+                cmd,
+                output=proc.stdout if proc else None,
+                stderr=proc.stderr if proc else error_msg
+            )
 
         results_dir = REPO_ROOT / "results" / benchmark / run_id
         trace_path = results_dir / f"{run_id}_UPLOAD.json"

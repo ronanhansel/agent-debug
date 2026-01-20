@@ -22,11 +22,6 @@
     "reasoning_effort": "high",
     "budget": 1000
   },
-  "deepseek-v3": {
-    "model_id": "deepseek-ai/DeepSeek-V3-0324",
-    "short_name": "deepseek-v3",
-    "budget": 1000
-  },
   "gpt-5-2025-08-07": {
     "model_id": "gpt-5_2025-08-07",
     "short_name": "gpt-5-medium",

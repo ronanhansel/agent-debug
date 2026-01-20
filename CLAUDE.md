@@ -861,10 +861,12 @@ TRAPI_DEPLOYMENT_MAP = {
 | Model Type | Temperature | Stop | Max Tokens Parameter |
 |------------|-------------|------|---------------------|
 | GPT-4.x | `temperature=0.7` | Supported | `max_tokens=4096` |
-| GPT-5.x | Not tested | May vary | `max_completion_tokens=4096` |
+| GPT-5.x | **Not supported** (only default=1) | May vary | `max_completion_tokens=4096` |
 | O1, O3, O4 | Not supported | Limited | `max_completion_tokens=4096` |
 
-**IMPORTANT**: GPT-5 uses `max_completion_tokens` like O-series, NOT `max_tokens`!
+**IMPORTANT**:
+- GPT-5 uses `max_completion_tokens` like O-series, NOT `max_tokens`
+- GPT-5 only supports `temperature=1` (default) - do NOT pass temperature parameter
 
 ```python
 def _uses_max_completion_tokens(model_id: str) -> bool:
@@ -879,9 +881,14 @@ def _uses_max_completion_tokens(model_id: str) -> bool:
     return False
 
 def _supports_temperature(model_id: str) -> bool:
-    """O-series models don't support temperature parameter."""
+    """O-series and GPT-5 models don't support temperature parameter."""
     model_lower = model_id.lower()
-    return not (model_lower.startswith("o1") or model_lower.startswith("o3") or model_lower.startswith("o4"))
+    if model_lower.startswith("o1") or model_lower.startswith("o3") or model_lower.startswith("o4"):
+        return False
+    # GPT-5 only supports temperature=1 (default)
+    if model_lower.startswith("gpt-5"):
+        return False
+    return True
 ```
 
 ### smolagents Message Role Compatibility

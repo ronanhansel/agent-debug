@@ -49,6 +49,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+# Load .env file early to ensure Azure config is available
+from dotenv import load_dotenv
+load_dotenv()
+
+# Remove proxy URLs if USE_DIRECT_AZURE is enabled
+if os.environ.get('USE_DIRECT_AZURE', '').lower() == 'true':
+    for key in ['OPENAI_BASE_URL', 'OPENAI_API_BASE', 'LITELLM_BASE_URL']:
+        if key in os.environ:
+            del os.environ[key]
+    print("[INFO] Direct Azure mode: removed proxy URLs from environment")
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXES_DIR = REPO_ROOT / "fixes" / "scienceagentbench"
 TRACES_DIR = REPO_ROOT / "traces"
@@ -56,11 +67,118 @@ HAL_HARNESS = REPO_ROOT / "hal-harness"
 DEFAULT_MODEL_CONFIG = REPO_ROOT / "model_to_baseline_scienceagentbench.json"
 TMP_DIR = REPO_ROOT / ".tmp"
 TMP_DIR.mkdir(exist_ok=True)
+FAILED_TASKS_FILE = REPO_ROOT / ".tmp" / "scienceagentbench_failed_tasks.json"
 
 
 def log(msg: str, prefix: str = "main") -> None:
     ts = datetime.now().strftime("%H:%M:%S")
     print(f"[{ts}] [{prefix}] {msg}", flush=True)
+
+
+def is_retryable_error(error_msg: str) -> bool:
+    """Check if an error is retryable (TRAPI timeout, auth, rate limit)."""
+    retryable_patterns = [
+        # Timeouts
+        "timeout", "timed out", "connection reset", "connection refused", "connection error",
+        # HTTP errors
+        "503", "504", "502", "500", "429", "rate limit",
+        # Auth/Token errors (CRITICAL: TRAPI token expiration)
+        "401", "403", "unauthorized", "authentication",
+        "invalid token", "expired token", "invalid or expired token", "token expired", "authenticationerror",
+        # Other retryable errors
+        "invalid_request_error", "insufficient_quota", "overloaded", "overloaded_error",
+        "network error", "broken pipe", "EOF occurred", "service unavailable", "bad gateway",
+    ]
+    error_lower = str(error_msg).lower()
+    return any(pattern in error_lower for pattern in retryable_patterns)
+
+
+def save_failed_task(task_id: str, model_id: str, error: str) -> None:
+    """Save failed task to file for later retry."""
+    failed_tasks = {}
+    if FAILED_TASKS_FILE.exists():
+        try:
+            failed_tasks = json.loads(FAILED_TASKS_FILE.read_text())
+        except Exception:
+            pass
+
+    key = f"{task_id}_{model_id}"
+    failed_tasks[key] = {
+        "task_id": task_id,
+        "model_id": model_id,
+        "error": error,
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+
+    FAILED_TASKS_FILE.write_text(json.dumps(failed_tasks, indent=2))
+
+
+def run_with_retry(
+    cmd: List[str],
+    env: Dict[str, str],
+    cwd: Path,
+    task_id: str,
+    model_id: str,
+    max_retries: int = 3,
+    base_timeout: int = 14400,
+) -> Tuple[bool, str, Optional[subprocess.CompletedProcess]]:
+    """Run subprocess with retry logic for TRAPI timeouts and auth errors."""
+    import random
+
+    for attempt in range(max_retries):
+        timeout = base_timeout * (attempt + 1)  # Increase timeout on retries
+
+        try:
+            # Only print retry message on actual retries (not first attempt)
+            if attempt > 0:
+                log(f"Attempt {attempt + 1}/{max_retries} (timeout={timeout}s)", "retry")
+            result = subprocess.run(
+                cmd, cwd=cwd, env=env, timeout=timeout, capture_output=True, text=True,
+            )
+
+            stderr, stdout = result.stderr or "", result.stdout or ""
+            combined_output = stderr + stdout
+
+            # Success
+            if result.returncode == 0:
+                return True, "Success", result
+
+            # Check if error is retryable
+            if is_retryable_error(combined_output):
+                wait_time = min(60, (2 ** attempt) + random.uniform(0, 5))
+                log(f"Retryable error detected. Waiting {wait_time:.1f}s before retry...", "retry")
+                log(f"Error snippet: {combined_output[:200]}", "retry")
+                time.sleep(wait_time)
+                continue
+            else:
+                log(f"Non-retryable error: {combined_output[:200]}", "retry")
+                save_failed_task(task_id, model_id, combined_output[:500])
+                return False, f"Exit code {result.returncode}", result
+
+        except subprocess.TimeoutExpired:
+            log(f"Timeout on attempt {attempt + 1}/{max_retries}", "retry")
+            if attempt < max_retries - 1:
+                wait_time = min(30, (2 ** attempt) + random.uniform(0, 3))
+                log(f"Retrying after {wait_time:.1f}s...", "retry")
+                time.sleep(wait_time)
+            else:
+                save_failed_task(task_id, model_id, "Timeout after retries")
+                return False, "Timeout after retries", None
+
+        except Exception as e:
+            error_msg = str(e)
+            log(f"Exception on attempt {attempt + 1}/{max_retries}: {error_msg}", "retry")
+
+            if is_retryable_error(error_msg) and attempt < max_retries - 1:
+                wait_time = min(60, (2 ** attempt) + random.uniform(0, 5))
+                log(f"Retrying after {wait_time:.1f}s...", "retry")
+                time.sleep(wait_time)
+            else:
+                save_failed_task(task_id, model_id, error_msg)
+                return False, error_msg, None
+
+    save_failed_task(task_id, model_id, "Max retries exceeded")
+    return False, "Max retries exceeded", None
 
 
 def _slugify(value: str, fallback: str) -> str:
@@ -383,46 +501,47 @@ def run_hal_eval(
     results_dir = REPO_ROOT / "results" / benchmark / run_id
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    try:
-        # Run from REPO_ROOT (like scicode) - let output stream to console
-        result = subprocess.run(cmd, cwd=REPO_ROOT, env=env, timeout=14400)  # 4 hours
+    # Use retry wrapper with exponential backoff
+    task_id_str = task_id or "unknown"
+    model_id_str = str(agent_args.get("model_name", "unknown"))
+    success, error_msg, result = run_with_retry(
+        cmd=cmd,
+        env=env,
+        cwd=REPO_ROOT,
+        task_id=task_id_str,
+        model_id=model_id_str,
+        max_retries=3,
+        base_timeout=14400,  # 4 hours
+    )
 
-        # Find output trace in REPO_ROOT/results
-        trace_path = results_dir / f"{run_id}_UPLOAD.json"
+    if not success:
+        log(f"HAL eval failed after retries: {error_msg}", "hal")
+        return False, error_msg, None
 
-        # Also check HAL_HARNESS results as fallback
-        if not trace_path.exists():
-            hal_results_dir = HAL_HARNESS / "results" / benchmark / run_id
-            alt_trace = hal_results_dir / f"{run_id}_UPLOAD.json"
-            if alt_trace.exists():
-                results_dir.mkdir(parents=True, exist_ok=True)
-                shutil.copy(alt_trace, trace_path)
-                # Also copy logs if they exist
-                for log_file in hal_results_dir.glob("*.log"):
-                    shutil.copy(log_file, results_dir / log_file.name)
+    # Find output trace in REPO_ROOT/results
+    trace_path = results_dir / f"{run_id}_UPLOAD.json"
 
-        if result.returncode == 0:
-            if trace_path.exists():
-                # Copy trace to our traces directory with prefix
-                dest = TRACES_DIR / f"{output_prefix}_{trace_path.name}"
-                TRACES_DIR.mkdir(parents=True, exist_ok=True)
-                shutil.copy(trace_path, dest)
-                log(f"Trace saved to: {dest}", "hal")
-                log(f"Results in: {results_dir}", "hal")
-                return True, "Success", dest
-            return True, "Success (no trace found)", None
-        else:
-            log(f"HAL eval failed with exit code {result.returncode}", "hal")
-            # Check for verbose log to find error
-            verbose_log = results_dir / f"{run_id}_verbose.log"
-            if verbose_log.exists():
-                log(f"Check verbose log: {verbose_log}", "hal")
-            return False, f"Exit code {result.returncode}", None
+    # Also check HAL_HARNESS results as fallback
+    if not trace_path.exists():
+        hal_results_dir = HAL_HARNESS / "results" / benchmark / run_id
+        alt_trace = hal_results_dir / f"{run_id}_UPLOAD.json"
+        if alt_trace.exists():
+            results_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy(alt_trace, trace_path)
+            # Also copy logs if they exist
+            for log_file in hal_results_dir.glob("*.log"):
+                shutil.copy(log_file, results_dir / log_file.name)
 
-    except subprocess.TimeoutExpired:
-        return False, "Timeout", None
-    except Exception as e:
-        return False, str(e), None
+    if trace_path.exists():
+        # Copy trace to our traces directory with prefix
+        dest = TRACES_DIR / f"{output_prefix}_{trace_path.name}"
+        TRACES_DIR.mkdir(parents=True, exist_ok=True)
+        shutil.copy(trace_path, dest)
+        log(f"Trace saved to: {dest}", "hal")
+        log(f"Results in: {results_dir}", "hal")
+        return True, "Success", dest
+
+    return True, "Success (no trace found)", None
 
 
 def main():
