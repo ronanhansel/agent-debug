@@ -159,14 +159,70 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_trace(path: Path) -> Dict[str, Any]:
+def load_trace(path: Path, allow_missing: bool = False) -> Dict[str, Any] | None:
+    """Load a trace file from disk.
+
+    Args:
+        path: Path to the trace file
+        allow_missing: If True, return None instead of raising FileNotFoundError
+
+    Returns:
+        The loaded trace dict, or None if allow_missing=True and file doesn't exist
+    """
     log(f"Loading local trace: {path}")
+    if not path.exists():
+        if allow_missing:
+            log(f"  Warning: File not found (will extract task IDs from other sources): {path}")
+            return None
+        raise FileNotFoundError(f"Trace file not found: {path}")
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
 
 
-def merge_local_traces(paths: List[Path], run_id: str) -> Dict[str, Any]:
-    if not paths:
+def _extract_task_id_from_path(path: Path) -> str | None:
+    """Extract task ID from a trace file path like *_<task_id>_*_UPLOAD.json."""
+    name = path.stem  # Remove .json
+    # Pattern: ..._{task_id}_scienceagentbench_... or ..._{task_id}_scicode_...
+    parts = name.split("_")
+    for i, part in enumerate(parts):
+        if part in ("scienceagentbench", "scicode", "corebench", "usaco", "assistantbench", "colbench"):
+            # Task ID should be the part just before the benchmark name
+            if i > 0 and parts[i - 1].isdigit():
+                return parts[i - 1]
+    return None
+
+
+def merge_local_traces(
+    paths: List[Path],
+    run_id: str,
+    missing_merge_inputs: List[Path] | None = None,
+    individual_trace_paths: List[Path] | None = None,
+) -> Dict[str, Any]:
+    """Merge multiple trace files into a single trace.
+
+    Args:
+        paths: List of trace files to merge (existing files only)
+        run_id: The run identifier for the merged trace
+        missing_merge_inputs: List of merge-input files that were not found.
+            Task IDs will be extracted from individual traces and marked as failed.
+        individual_trace_paths: List of individual trace files (e.g., *_UPLOAD.json)
+            used to extract task IDs when merge inputs are missing.
+    """
+    missing_merge_inputs = missing_merge_inputs or []
+    individual_trace_paths = individual_trace_paths or []
+
+    # Extract task IDs from individual traces when merge inputs are missing
+    task_ids_from_individual_traces: set[str] = set()
+    if missing_merge_inputs and individual_trace_paths:
+        log(f"Missing merge-input files: {[p.name for p in missing_merge_inputs]}")
+        log(f"Extracting task IDs from {len(individual_trace_paths)} individual trace files...")
+        for trace_path in individual_trace_paths:
+            task_id = _extract_task_id_from_path(trace_path)
+            if task_id:
+                task_ids_from_individual_traces.add(task_id)
+        log(f"Found {len(task_ids_from_individual_traces)} task IDs from individual traces: {sorted(task_ids_from_individual_traces, key=lambda x: int(x) if x.isdigit() else x)}")
+
+    if not paths and not task_ids_from_individual_traces:
         log(f"No local traces found for run_id={run_id}.")
         return {
             "config": {
@@ -190,10 +246,22 @@ def merge_local_traces(paths: List[Path], run_id: str) -> Dict[str, Any]:
             "git_info": None,
         }
 
-    first_trace = load_trace(paths[0])
-    config = json.loads(json.dumps(first_trace.get("config", {})))
+    # Initialize config from first available trace or create minimal config
+    config: Dict[str, Any] = {}
+    git_info = None
+    if paths:
+        first_trace = load_trace(paths[0])
+        if first_trace:
+            config = json.loads(json.dumps(first_trace.get("config", {})))
+            git_info = first_trace.get("git_info")
+    if not config:
+        config = {
+            "date": datetime.now().strftime("%Y-%m-%d"),
+        }
     config["run_id"] = run_id
     config["source_traces"] = [p.name for p in paths]
+    if missing_merge_inputs:
+        config["missing_merge_inputs"] = [p.name for p in missing_merge_inputs]
 
     merged_results: Dict[str, Any] = {
         "successful_tasks": [],
@@ -209,11 +277,17 @@ def merge_local_traces(paths: List[Path], run_id: str) -> Dict[str, Any]:
     written_total = vision_total = 0
 
     # Track tasks that have been classified
-    successful_tasks_set = set()
-    failed_tasks_set = set()
+    successful_tasks_set: set[str] = set()
+    failed_tasks_set: set[str] = set()
+
+    # Track tasks that have eval results (to detect missing results)
+    tasks_with_eval_results: set[str] = set()
 
     for path in paths:
         data = load_trace(path)
+        if data is None:
+            continue
+
         results = data.get("results", {})
 
         # Extract successful/failed tasks from results lists
@@ -226,6 +300,7 @@ def merge_local_traces(paths: List[Path], run_id: str) -> Dict[str, Any]:
         raw_eval = data.get("raw_eval_results", {})
         eval_results = raw_eval.get("eval_result", {})
         for task_id, eval_data in eval_results.items():
+            tasks_with_eval_results.add(str(task_id))
             if isinstance(eval_data, dict):
                 success_rate = eval_data.get("success_rate", 0)
                 if success_rate > 0:
@@ -277,12 +352,20 @@ def merge_local_traces(paths: List[Path], run_id: str) -> Dict[str, Any]:
         capsule_eval = data.get("raw_eval_results") or {}
         for task_id, stats in capsule_eval.items():
             raw_eval_results[task_id] = stats
-            written_correct += stats.get("correct_written_answers", 0)
-            vision_correct += stats.get("correct_vision_answers", 0)
-            written_total += stats.get("total_written_questions", 0)
-            vision_total += stats.get("total_vision_questions", 0)
+            if isinstance(stats, dict):
+                written_correct += stats.get("correct_written_answers", 0)
+                vision_correct += stats.get("correct_vision_answers", 0)
+                written_total += stats.get("total_written_questions", 0)
+                vision_total += stats.get("total_vision_questions", 0)
 
         raw_logging_results.extend(data.get("raw_logging_results") or [])
+
+    # Handle tasks from missing merge-inputs: mark as failed if they have traces but no eval results
+    if task_ids_from_individual_traces:
+        for task_id in task_ids_from_individual_traces:
+            if task_id not in tasks_with_eval_results and task_id not in successful_tasks_set:
+                log(f"Task {task_id} has traces but no eval results in merge-input -> marking as failed")
+                failed_tasks_set.add(task_id)
 
     # Convert sets to sorted lists
     merged_results["successful_tasks"] = sorted(successful_tasks_set, key=lambda x: int(x) if x.isdigit() else x)
@@ -307,7 +390,7 @@ def merge_local_traces(paths: List[Path], run_id: str) -> Dict[str, Any]:
         "raw_logging_results": raw_logging_results,
         "total_usage": total_usage,
         "total_cost": total_cost,
-        "git_info": first_trace.get("git_info"),
+        "git_info": git_info,
     }
 
 
@@ -622,16 +705,40 @@ def main() -> None:
         # (avoid matching partial prefixes)
         local_paths = [p for p in local_paths if prefix in p.name]
 
+        # Keep a copy of individual trace paths before adding merge-inputs
+        # These are used to extract task IDs if merge-input files are missing
+        individual_trace_paths = list(local_paths)
+
         # Positional matching: i-th prefix gets i-th merge-input file
         extra_for_prefix = [extra_paths[i]] if i < len(extra_paths) else []
-        if extra_for_prefix:
-            log(f"Merge-input file for {prefix}: {[p.name for p in extra_for_prefix]}")
-        merged_by_name = {p.name: p for p in local_paths}
+
+        # Check which merge-input files exist vs missing
+        existing_merge_inputs: List[Path] = []
+        missing_merge_inputs: List[Path] = []
         for path in extra_for_prefix:
+            if path.exists():
+                existing_merge_inputs.append(path)
+            else:
+                missing_merge_inputs.append(path)
+
+        if existing_merge_inputs:
+            log(f"Merge-input file for {prefix}: {[p.name for p in existing_merge_inputs]}")
+        if missing_merge_inputs:
+            log(f"WARNING: Missing merge-input files for {prefix}: {[p.name for p in missing_merge_inputs]}")
+            log(f"  Will extract task IDs from individual traces and mark as failed")
+
+        merged_by_name = {p.name: p for p in local_paths}
+        for path in existing_merge_inputs:
             merged_by_name[path.name] = path
         local_paths = sorted(p.resolve() for p in merged_by_name.values())
         log(f"Local traces found: {len(local_paths)}")
-        merged = merge_local_traces(local_paths, run_id=prefix)
+
+        merged = merge_local_traces(
+            local_paths,
+            run_id=prefix,
+            missing_merge_inputs=missing_merge_inputs,
+            individual_trace_paths=individual_trace_paths,
+        )
 
         filtered_calls = [
             c for c in all_calls
@@ -649,6 +756,43 @@ def main() -> None:
                 merged["total_cost"] = total_cost
                 merged["results"]["total_cost"] = total_cost
             log(f"Latencies computed for {len(merged['results']['latencies'])} tasks.")
+
+            # If merge-inputs were missing, also extract task IDs from fetched weave calls
+            # and mark tasks with traces but no eval results as failed
+            if missing_merge_inputs:
+                task_ids_from_weave: set[str] = set()
+                for call in filtered_calls:
+                    task_id = call.get("weave_task_id")
+                    if task_id:
+                        task_ids_from_weave.add(str(task_id))
+
+                if task_ids_from_weave:
+                    log(f"Found {len(task_ids_from_weave)} task IDs from Weave calls: {sorted(task_ids_from_weave, key=lambda x: int(x) if x.isdigit() else x)}")
+
+                    # Check which tasks have traces but no eval results
+                    existing_eval_tasks = set(merged["raw_eval_results"].keys()) if merged.get("raw_eval_results") else set()
+                    existing_success_tasks = set(str(t) for t in (merged.get("results", {}).get("successful_tasks") or []))
+                    existing_failed_tasks = set(str(t) for t in (merged.get("results", {}).get("failed_tasks") or []))
+
+                    newly_failed = []
+                    for task_id in task_ids_from_weave:
+                        if (task_id not in existing_eval_tasks and
+                            task_id not in existing_success_tasks and
+                            task_id not in existing_failed_tasks):
+                            newly_failed.append(task_id)
+
+                    if newly_failed:
+                        log(f"Marking {len(newly_failed)} tasks from Weave traces as failed (no eval results in missing merge-input)")
+                        # Add to failed_tasks list
+                        current_failed = set(str(t) for t in (merged.get("results", {}).get("failed_tasks") or []))
+                        current_failed.update(newly_failed)
+                        merged["results"]["failed_tasks"] = sorted(current_failed, key=lambda x: int(x) if x.isdigit() else x)
+
+                        # Recalculate accuracy
+                        total_tasks = len(merged["results"].get("successful_tasks") or []) + len(merged["results"]["failed_tasks"])
+                        merged["results"]["accuracy"] = (
+                            len(merged["results"].get("successful_tasks") or []) / total_tasks if total_tasks else 0.0
+                        )
         else:
             log("No remote calls; keeping merged local raw_logging_results.")
 
