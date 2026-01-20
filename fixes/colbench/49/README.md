@@ -1,58 +1,73 @@
-# Task 49: Real Estate Agency Frontend
+# Task 49: Saab Car Horsepower Categorization (Backend)
 
 ## IFE Analysis
 
-**Task Type:** Frontend Design (CLIP similarity evaluation)
+**Task Type:** Backend Programming (Python function)
 
-**IFE Identified:** Yes - Simulated User Visual Comparison Loop Broken + Parser Mismatch
+**IFE Identified:** Yes - Hidden Information Not Discoverable Through Dialogue
 
 ### Evidence from Rubric Evaluations
 
-1. **Evaluation 2 (Grade 1.0):** "The task is explicitly a frontend HTML/Tailwind generation task, but the system's code-parsing layer expects a Python-marked code block matching the regex... This is incompatible with the requirement to output raw HTML wrapped in `<html>` tags."
+**All 3 models (GPT-4.1, O3-low, O4-mini) graded 1.0 (IFE confirmed)**
 
-2. **Evaluation 5 (Grade 1.0):** "The simulated user is mis-formed and does not behave like a cooperative human providing needed content; instead it returns meta-evaluation text about image differences"
+1. **GPT-4.1:** "The user explicitly does not know the ranges and provides no authoritative source. Any numeric thresholds the agent chooses are therefore arbitrary. If the benchmark has hidden, fixed horsepower cutoffs, those constitute undocumented magic numbers not inferable from the prompt/dialogue."
+
+2. **O3-low:** "The simulated user cannot provide the missing ground-truth details (they repeatedly state they don't know). No agent could reliably match hidden thresholds because neither the prompt nor the simulated user provides the required constants."
+
+3. **O4-mini-high:** "The agent implemented exactly the mutually agreed-upon ranges from the dialogue, but the run still failed, indicating evaluation/test expectations differ from the suggested thresholds."
+
+### Dialogue Evidence
+
+User statements:
+- "I'm not sure what those ranges are"
+- "I don't know the specific horsepower ranges for Saab car models"
+- "I don't know the approximate minimum and maximum horsepower for Saab models"
+- "I need your help to define those"
+
+Agent response:
+- Suggested ranges: 120-180 (Linear), 180-240 (Aero), 240-300 (Turbo X)
+- User accepted: "Equal ranges for the three categories would work fine"
+
+### Ground Truth (Hidden)
+
+```python
+def classify_saab_car(horsepower):
+    if horsepower < 200:
+        return 'Linear'
+    elif horsepower < 240:
+        return 'Aero'
+    else:
+        return 'Unknown'
+```
+
+**Actual ranges:** < 200 (Linear), 200-240 (Aero), >= 240 (Unknown)
+
+### Discrepancies
+
+| Aspect | Agent Implementation | Ground Truth |
+|--------|---------------------|--------------|
+| Linear threshold | < 180 | < 200 |
+| Aero range | 180-240 | 200-240 |
+| High-end category | "Turbo X" | "Unknown" |
+| Edge handling | < 120 returns "Below Saab Range" | No lower bound check |
+
+**Score:** 0.6 (partial credit - some ranges overlap by coincidence)
 
 ### Root Cause
 
-Two interacting defects:
+The test cases evaluate against **arbitrary hidden thresholds** that:
+1. Were never mentioned in the problem description
+2. The simulated user couldn't provide (explicitly said "I don't know")
+3. The agent had to invent based on external knowledge/guessing
+4. Differ from the agent's reasonable proposal
 
-1. **Parser Mismatch:** The harness expects ````(?:py|python)?\s*\n(.*?)\n```` but task requires HTML output. Parser error: "Your code snippet is invalid, because the regex pattern was not found in it"
-
-2. **Contradictory Simulated User:** The simulated user's ground truth description contradicts the task spec:
-   - Task spec: "property listings grid, and a right sidebar for filters"
-   - User feedback: "desired design is minimalistic, with no property card or filters"
-
-### Ground Truth Analysis
-
-Looking at the actual ground truth HTML for Task 49:
-```html
-<body class="bg-gray-100">
-  <div class="container mx-auto px-4 py-8">
-    <div class="flex justify-center items-center h-64">
-      <img src="..." alt="Real Estate Logo" class="h-32">
-    </div>
-    <div class="flex justify-center items-center h-16">
-      <input type="text" placeholder="Search for properties..." ...>
-    </div>
-    <div class="flex justify-center items-center h-64">
-      <p class="text-center text-gray-800">...</p>
-    </div>
-  </div>
-</body>
-```
-
-The ground truth is indeed minimalistic (no property grid, no sidebar), but the task description says to include "a property listings grid, and a right sidebar for filters". This is a **task specification vs ground truth mismatch**.
-
-### Impact
-
-1. Agents following the task description will produce layouts with grids and sidebars
-2. The ground truth lacks these elements
-3. CLIP similarity will penalize agents that followed the specification
+This is a **Hidden Information Design Issue** (rubric category 2a/2c): The task requires specific numeric constants that are impossible to discover through the dialogue.
 
 ## Fix Strategy
 
-This task has both infrastructure IFE (visual loop) AND a task/ground-truth specification mismatch.
+**Instruction Override:** Provide the actual horsepower ranges in the problem description.
 
-### Fix Needed: Instruction Clarification
-
-The task description should align with what the ground truth actually shows.
+This makes the task:
+- ✅ **FAIR**: Agent knows what ranges to implement
+- ✅ **Still requires skill**: Agent must implement the conditional logic correctly
+- ❌ **Not easier**: The challenge is writing correct code, not guessing arbitrary numbers
