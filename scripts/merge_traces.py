@@ -95,6 +95,29 @@ def is_scicode_trace(data: Dict[str, Any]) -> bool:
     return False
 
 
+def is_colbench_trace(data: Dict[str, Any]) -> bool:
+    """Detect if a trace is from colbench benchmark."""
+    config = data.get("config") or {}
+    benchmark_name = config.get("benchmark_name", "")
+    return benchmark_name.startswith("colbench")
+
+
+def extract_colbench_task_id(run_id: str) -> Optional[str]:
+    """Extract task ID from ColBench run_id.
+
+    Examples:
+        col_tommy_gpt-4_1-2025-04-14_1_colbench_backend_programming -> '1'
+        col_tommy_o3-2025-04-16_low_292_colbench_backend_programming -> '292'
+    """
+    import re
+    # Pattern: prefix_model_taskid_colbench_...
+    # Task ID is the number right before 'colbench'
+    match = re.search(r'_(\d+)_colbench_', run_id)
+    if match:
+        return match.group(1)
+    return None
+
+
 def merge_scicode_traces(
     paths: List[Path],
     *,
@@ -276,6 +299,145 @@ def merge_scicode_traces(
     return merged
 
 
+def merge_colbench_traces(
+    paths: List[Path],
+    *,
+    run_id: Optional[str],
+    agent_name: Optional[str],
+    run_date: Optional[str],
+) -> Dict[str, Any]:
+    """Merge ColBench-specific trace files.
+
+    ColBench traces have:
+    - raw_eval_results: list of scores (one per task)
+    - Task ID embedded in run_id
+    - results.average_correctness and results.accuracy
+    """
+    first_trace = load_trace(paths[0])
+    config = json.loads(json.dumps(first_trace.get("config", {})))
+    if run_id:
+        config["run_id"] = run_id
+    else:
+        config.setdefault("run_id", Path(paths[0]).stem)
+    if agent_name:
+        config["agent_name"] = agent_name
+    if run_date:
+        config["date"] = run_date
+    config["source_traces"] = [Path(p).name for p in paths]
+
+    # ColBench: Build task_id -> score mapping
+    task_scores: Dict[str, float] = {}
+    successful_tasks: Set[str] = set()
+    failed_tasks: Set[str] = set()
+    total_cost = 0.0
+    total_usage: Dict[str, Dict[str, float]] = {}
+    raw_logging_results: List[Any] = []
+    merged_latencies: Dict[str, Any] = {}
+
+    for path in paths:
+        data = load_trace(path)
+        trace_config = data.get("config", {})
+        trace_run_id = trace_config.get("run_id", "")
+        results = data.get("results", {})
+
+        # Extract task ID from run_id
+        task_id = extract_colbench_task_id(trace_run_id)
+
+        # Get score from raw_eval_results (list with one element for single-task traces)
+        raw_eval = data.get("raw_eval_results") or []
+        if isinstance(raw_eval, list) and len(raw_eval) > 0:
+            score = float(raw_eval[0])
+            if task_id:
+                task_scores[task_id] = score
+                if score == 1.0:
+                    successful_tasks.add(task_id)
+                else:
+                    failed_tasks.add(task_id)
+
+        # Merge latencies
+        if results.get("latencies"):
+            for key, value in results["latencies"].items():
+                if isinstance(value, dict):
+                    existing = merged_latencies.setdefault(
+                        key,
+                        {
+                            "first_call_timestamp": value.get("first_call_timestamp"),
+                            "last_call_timestamp": value.get("last_call_timestamp"),
+                        },
+                    )
+                    first_ts = value.get("first_call_timestamp")
+                    last_ts = value.get("last_call_timestamp")
+                    if first_ts and (
+                        not existing.get("first_call_timestamp")
+                        or first_ts < existing["first_call_timestamp"]
+                    ):
+                        existing["first_call_timestamp"] = first_ts
+                    if last_ts and (
+                        not existing.get("last_call_timestamp")
+                        or last_ts > existing["last_call_timestamp"]
+                    ):
+                        existing["last_call_timestamp"] = last_ts
+                else:
+                    merged_latencies[key] = merged_latencies.get(key, 0) + value
+
+        # Merge logging results
+        source_logging = data.get("raw_logging_results") or results.get("raw_logging_results")
+        if source_logging:
+            raw_logging_results.extend(source_logging)
+
+        total_cost += results.get("total_cost") or data.get("total_cost") or 0.0
+
+        # Merge usage
+        usage = data.get("total_usage") or {}
+        for model_name, usage_stats in usage.items():
+            bucket = total_usage.setdefault(
+                model_name, {"input_tokens": 0, "output_tokens": 0}
+            )
+            bucket["input_tokens"] += usage_stats.get("input_tokens", 0)
+            bucket["output_tokens"] += usage_stats.get("output_tokens", 0)
+
+    # Remove successful tasks from failed tasks (in case of duplicates)
+    failed_tasks -= successful_tasks
+
+    # Sort task lists numerically
+    successful_list = sorted(successful_tasks, key=lambda x: int(x) if x.isdigit() else float('inf'))
+    failed_list = sorted(failed_tasks, key=lambda x: int(x) if x.isdigit() else float('inf'))
+
+    # Calculate ColBench metrics
+    all_scores = list(task_scores.values())
+    total_tasks = len(all_scores)
+    average_correctness = sum(all_scores) / total_tasks if total_tasks else 0.0
+    accuracy = len(successful_list) / total_tasks if total_tasks else 0.0
+
+    # Build raw_eval_results as dict (task_id -> score) for easier rubric grading
+    # Also include as list for compatibility
+    raw_eval_results_dict: Dict[str, float] = task_scores
+    raw_eval_results_list: List[float] = [
+        task_scores.get(str(i), 0.0) for i in range(max(int(k) for k in task_scores.keys()) + 1)
+    ] if task_scores else []
+
+    merged_results: Dict[str, Any] = {
+        "successful_tasks": successful_list,
+        "failed_tasks": failed_list,
+        "latencies": merged_latencies,
+        "average_correctness": average_correctness,
+        "accuracy": accuracy,
+        "total_cost": total_cost,
+    }
+
+    merged: Dict[str, Any] = {
+        "config": config,
+        "results": merged_results,
+        "raw_eval_results": raw_eval_results_dict,  # Dict format for rubric grading
+        "raw_eval_results_list": raw_eval_results_list,  # List format for compatibility
+        "raw_logging_results": raw_logging_results,
+        "total_usage": total_usage,
+        "total_cost": total_cost,
+        "git_info": first_trace.get("git_info"),
+    }
+    return merged
+
+
 def merge_corebench_traces(
     paths: List[Path],
     *,
@@ -402,11 +564,15 @@ def merge_traces(
     agent_name: Optional[str],
     run_date: Optional[str],
 ) -> Dict[str, Any]:
-    """Merge trace files, auto-detecting scicode vs corebench format."""
+    """Merge trace files, auto-detecting colbench vs scicode vs corebench format."""
     # Check first trace to determine type
     first_trace = load_trace(paths[0])
 
-    if is_scicode_trace(first_trace):
+    if is_colbench_trace(first_trace):
+        return merge_colbench_traces(
+            paths, run_id=run_id, agent_name=agent_name, run_date=run_date
+        )
+    elif is_scicode_trace(first_trace):
         return merge_scicode_traces(
             paths, run_id=run_id, agent_name=agent_name, run_date=run_date
         )

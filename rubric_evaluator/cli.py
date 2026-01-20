@@ -460,11 +460,12 @@ def dataset_overview(data: dict[str, Any]) -> None:
 
 
 def group_entries_by_task(raw_entries: Sequence[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-    """Group raw logging entries by their weave_task_id."""
+    """Group raw logging entries by their weave_task_id or task_id (ColBench)."""
     tasks: dict[str, list[dict[str, Any]]] = {}
     for entry in raw_entries:
         task_id = (
-            entry.get("attributes", {}).get("weave_task_id")
+            entry.get("task_id")  # ColBench format: {"task_id": "1", "dialogue_history": [...]}
+            or entry.get("attributes", {}).get("weave_task_id")
             or entry.get("weave_task_id")
             or entry.get("inputs", {}).get("task_id")
             or "unknown"
@@ -614,6 +615,24 @@ def build_assistant_message(entry: dict[str, Any]) -> TraceMessage | None:
 
 def extract_task_messages(task_id: str, entries: list[dict[str, Any]]) -> TaskConversation:
     """Convert task-specific entries into an ordered conversation with deduplication."""
+    # Special handling for ColBench format: entries have dialogue_history directly
+    if len(entries) == 1 and "dialogue_history" in entries[0]:
+        colbench_entry = entries[0]
+        dialogue = colbench_entry.get("dialogue_history", [])
+        conversation: list[TraceMessage] = []
+        for idx, msg in enumerate(dialogue):
+            role = msg.get("role", "user")
+            content = normalize_content(msg.get("content", ""))
+            if content:
+                conversation.append(TraceMessage(
+                    role=role,
+                    content=content,
+                    entry_id=f"colbench_{task_id}_{idx}",
+                    timestamp=None
+                ))
+        return TaskConversation(task_id=task_id, entries=entries, messages=conversation)
+
+    # Standard Weave format processing
     ordered_entries = sort_entries(entries)
     conversation: list[TraceMessage] = []
     previous_message_count = 0
