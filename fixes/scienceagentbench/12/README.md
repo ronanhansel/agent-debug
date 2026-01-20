@@ -1,47 +1,58 @@
-# Task 12: DAVIS DTI Drug Repurposing - IFE Analysis
-
-## Task Description
-Train a drug-target interaction model using the DAVIS dataset to predict binding affinities between antiviral drugs and COVID-19 targets using DeepPurpose library.
+# Task 12 Fix: DeepPurpose DAVIS DTI Drug Repurposing
 
 ## Root Cause Analysis
 
-### Docker Execution Error
-```
-ImportError: cannot import name 'models' from 'DeepPurpose'
-(/opt/miniconda3/lib/python3.10/site-packages/DeepPurpose/__...)
-```
+**IFE Type**: Sandbox Import Restriction + pipreqs Detection Failure + Package Structure
 
-### Analysis
+### Problem Description
+Task requires using DeepPurpose library for drug-target interaction (DTI) prediction on the DAVIS dataset.
 
-**This IS an Intrinsic Formation Error (IFE)** - a Docker environment issue.
+### Why This Was Failing
 
-The error shows that DeepPurpose is installed but its `models` submodule cannot be imported. This is a known issue with the DeepPurpose package structure.
+1. **Agent Sandbox Blocks Imports**: The smolagents sandbox blocks `DeepPurpose` imports
+2. **pipreqs Detection Failure**: Without proper imports, pipreqs doesn't detect DeepPurpose → descriptastorus not installed
+3. **Package Structure**: DeepPurpose has an unusual structure - note the capitalization `DeepPurpose` not `deeppurpose`
 
-### Root Cause
-DeepPurpose has an unusual package structure. The standard import `from DeepPurpose import utils, models` may fail due to:
-1. Missing dependencies during installation (descriptastorus, etc.)
-2. Import order issues within the package
-3. PyTorch/DGL version incompatibilities
+### Evidence from Verdict
+"DeepPurpose is unavailable/unusable due to dependency incompatibilities (TensorFlow/Keras stack)"
 
-The Dockerfile attempts to install `descriptastorus` when DeepPurpose is detected:
-```dockerfile
-if echo "$extracted_pkgs" | grep -q 'DeepPurpose'; then \
-    /opt/miniconda3/bin/pip install git+https://github.com/bp-kelley/descriptastorus; \
-fi;
-```
-
-But this may not be sufficient.
+**CORRECTION**: The Docker base image has **TensorFlow 2.17** and **torch 2.3** pre-installed. The issue was:
+1. pipreqs not detecting DeepPurpose
+2. descriptastorus (required dependency) not being installed as a result
 
 ## Fix Applied
 
-### Environment Override (`env_override.json`)
-Ensures proper DeepPurpose installation with all dependencies.
+### 1. Instruction Override
+Added critical clarifications:
+- **MUST include proper imports** with correct capitalization
+- DeepPurpose package structure: `from DeepPurpose import utils, models`
+- How to use DTI module for drug-target interaction
 
-## Preserves Scientific Rigor
-- The task still requires training a DTI model from scratch
-- No hints about model architecture or hyperparameters
-- No pre-computed embeddings or results
-- Only fixes package installation, not the scientific problem
+### 2. Critical Imports for pipreqs Detection
+```python
+from DeepPurpose import utils
+from DeepPurpose import dataset
+from DeepPurpose import DTI
+from DeepPurpose import models
+import torch
+import pandas as pd
+import numpy as np
+```
 
-## Expected Outcome
-After fix, `from DeepPurpose import utils, models` should work, allowing agents to implement the full DTI pipeline.
+**IMPORTANT**: The capitalization must be `DeepPurpose` not `deeppurpose` for pipreqs to detect it correctly.
+
+When pipreqs detects `DeepPurpose` in imports, the Docker harness automatically installs:
+- `git+https://github.com/bp-kelley/descriptastorus` (required dependency)
+
+## Why This Fix is Fair
+
+- Agent still must understand DTI modeling and drug-target interaction prediction
+- No hints about model architecture, encoders, or training
+- Only clarifies import structure that agents cannot discover without testing
+
+## Expected Outcome After Fix
+
+- Agents write code with properly capitalized `DeepPurpose` imports
+- pipreqs detects DeepPurpose → descriptastorus installed
+- DeepPurpose models module properly importable
+- DTI prediction pipeline works

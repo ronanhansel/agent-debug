@@ -1,47 +1,60 @@
-# Task 74 - OGGM Glacier Area and Thickness Change
+# Task 74 Fix: OGGM Glacier Area and Thickness Distribution
 
 ## Root Cause Analysis
 
-**Error**: `ImportError: cannot import name 'distribute_2d' from 'oggm.core.flowline'`
+**IFE Type**: Sandbox Import Restriction + pipreqs Detection Failure + API Location Confusion
 
-The agent's generated code attempts to import `distribute_2d` from the wrong location:
-```python
-from oggm.core.flowline import distribute_2d  # WRONG
-```
+### Problem Description
+Task requires using OGGM's 2D distribution functionality to compute and visualize glacier thickness distribution.
 
-The correct import path is:
-```python
-from oggm.sandbox import distribute_2d  # CORRECT
-```
+### Why This Was Failing
 
-### Why This Happened
+1. **Agent Sandbox Blocks Imports**: The smolagents sandbox blocks `oggm` and `salem` imports
+2. **pipreqs Detection Failure**: Without proper `import oggm`, pipreqs doesn't detect OGGM → dependencies not added
+3. **API Location Confusion**: `distribute_2d` is in `oggm.sandbox.distribute_2d`, NOT `oggm.core.flowline`
 
-1. **Agent Sandbox Limitation**: The smolagents CodeAgent runs in a sandboxed Python environment with a restricted import allowlist. This sandbox does NOT allow importing `oggm`, preventing the agent from testing its code during development.
+### Evidence from Verdict
+"oggm missing; salem explicitly blocked"
 
-2. **Incorrect Guess**: Without ability to test imports, the agent guessed `oggm.core.flowline` which seems logical but is incorrect. The `distribute_2d` module is actually in the `oggm.sandbox` namespace because it's experimental functionality.
-
-### Is This an IFE?
-
-**Partially Yes**: The agent sandbox restriction prevented the agent from discovering the correct import path through testing. This is an infrastructure limitation that affects all agents equally.
-
-**However**: The OGGM documentation does document the correct import path, so a sufficiently capable agent could find this information without testing.
+The agents were also trying to import from the wrong location (`oggm.core.flowline` instead of `oggm.sandbox.distribute_2d`).
 
 ## Fix Applied
 
-**Instruction Clarification**: Added a note about the correct OGGM API structure to help agents find the right import paths.
+### 1. Instruction Override
+Added critical clarifications:
+- **MUST include proper imports** for oggm and salem
+- **IMPORTANT**: The correct import path is `from oggm.sandbox.distribute_2d import distribute_thickness_from_simulation`
+- This is publicly documented but agents cannot discover it through testing
 
-This fix is FAIR because:
-- It doesn't give away the solution algorithm
-- It only clarifies API structure that's publicly documented
-- It compensates for the agent's inability to test imports in the sandbox
+### 2. Critical Imports for pipreqs Detection
+```python
+import oggm
+from oggm import cfg, workflow
+from oggm.sandbox.distribute_2d import distribute_thickness_from_simulation
+import matplotlib.pyplot as plt
+import salem
+import geopandas as gpd
+```
 
-## Expected Outcome
+When pipreqs detects `oggm` in imports, the Docker harness automatically adds:
+- salem
+- tables
+- geopandas
 
-After applying this fix, agents should be able to:
-1. Find the correct import path for `distribute_2d`
-2. Successfully generate glacier thickness plots
-3. Pass the figure evaluation
+### 3. Environment Override
+- Extended timeout for potential network operations
+- Network access enabled
 
-## Files Changed
+## Why This Fix is Fair
 
-- `instruction_override.json`: Added clarification about OGGM's module structure
+- Agent still must understand glacier thickness computation and 2D distribution
+- No hints about the scientific implementation
+- Only clarifies API location that agents cannot discover without testing imports
+- The `oggm.sandbox` namespace is publicly documented for experimental features
+
+## Expected Outcome After Fix
+
+- Agents write code with correct import paths
+- pipreqs detects oggm → salem, tables, geopandas installed
+- distribute_2d functionality properly imported
+- Thickness distribution visualization works

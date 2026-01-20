@@ -1,61 +1,50 @@
-# Task 97 Fix: DeepChem CGCNN Model for Formation Energy Prediction
+# Task 97 Fix: DeepChem CGCNN for Formation Energy Prediction
 
 ## Root Cause Analysis
 
-**Task Requirement**: Train a formation energy prediction model using DeepChem's CGCNN (Crystal Graph Convolutional Neural Network) model on perovskite structure data stored in `.pkl` files.
+**IFE Type**: Sandbox Import Restriction + pipreqs Detection Failure
 
-**Identified IFE**: The agent development sandbox (smolagents) blocks importing `deepchem` and `pickle` modules, preventing agents from developing and testing code that uses these required libraries. All 4 models (GPT-4.1, O3, O4-mini-high, O4-mini-low) failed with the same import restriction errors.
+### Problem Description
+Task requires training a DeepChem CGCNN (Crystal Graph Convolutional Neural Network) model for formation energy prediction on perovskite structures.
 
-**Evidence from rubric evaluations**:
-- "Import of deepchem is not allowed. Authorized imports are: [...]"
-- "Import of pickle is not allowed. Authorized imports are: [...]"
-- Dataset files are `.pkl` format requiring unpickling with DeepChem classes
+### Why This Was Failing
 
-## Analysis of Docker Evaluation Environment
+1. **Agent Sandbox Blocks Imports**: The smolagents sandbox blocks `deepchem` and `pickle` imports
+2. **pipreqs Detection Failure**: Agent code without proper imports → pipreqs doesn't detect deepchem → DGL not installed
+3. **CGCNN Requires DGL**: The CGCNN model specifically requires DGL (Deep Graph Library) for graph operations
 
-The Docker harness (`dockerfiles.py`) already has special handling for DeepChem:
-```bash
-if echo "$extracted_pkgs" | grep -q 'deepchem'; then \
-    /opt/miniconda3/bin/pip install dgl -f https://data.dgl.ai/wheels/torch-2.3/cu121/repo.html; \
-fi;
-```
+### Evidence from Verdict
+"importing deepchem / CGCNN fails with ModuleNotFoundError: no tensorflow"
 
-This means IF an agent can produce code that imports deepchem, the Docker evaluation will properly install DGL for CGCNN.
+**CORRECTION**: The Docker base image has **TensorFlow 2.17** pre-installed. The issue was the DGL post-install hook not triggering because pipreqs didn't detect deepchem imports.
 
 ## Fix Applied
 
-**Environment Override** (`env_override.json`): Ensures deepchem and required dependencies are properly installed in the Docker evaluation container.
+### 1. Instruction Override
+Added critical clarifications:
+- **MUST include proper imports** for deepchem and CGCNN
+- How to load pickled NumpyDataset files
+- API for CGCNNModel and CGCNNFeaturizer
 
-## Why This Preserves Task Difficulty
+### 2. Critical Imports for pipreqs Detection
+```python
+import deepchem as dc
+from deepchem.models import CGCNNModel
+from deepchem.feat import CGCNNFeaturizer
+import pickle
+import numpy as np
+```
 
-This fix does NOT:
-- Provide hints about how to solve the scientific problem
-- Simplify the CGCNN model architecture
-- Pre-compute any results
-- Reduce the complexity of the formation energy prediction task
+When pipreqs detects `deepchem` in imports, the Docker harness automatically adds DGL.
 
-This fix ONLY ensures:
-- The required packages are available in the evaluation environment
-- The task can be fairly evaluated if an agent produces correct code
+## Why This Fix is Fair
 
-## Expected Outcome
+- Agent still must understand CGCNN architecture and crystal structure featurization
+- No hints about model configuration or training
+- Only compensates for sandbox limitation
 
-With proper package availability, an agent that correctly:
-1. Loads the pickled NumpyDataset
-2. Initializes a DeepChem CGCNNModel
-3. Trains the model
-4. Generates predictions
+## Expected Outcome After Fix
 
-Should have their code properly evaluated rather than failing due to missing dependencies.
-
-## Note on Agent Sandbox
-
-The agent sandbox (smolagents) import restrictions are a separate infrastructure issue that prevents agents from developing code interactively. This fix addresses the Docker evaluation environment only.
-
-## Implementation Notes
-
-For this fix to take effect, the Docker harness (`dockerfiles.py`) should be modified to pre-install deepchem and DGL unconditionally for tasks that require them, OR the agent sandbox should be configured to allow these imports.
-
-Currently, the harness installs deepchem dependencies only when `pipreqs` detects `deepchem` in the agent's submitted code - but agents cannot write code with deepchem imports because their sandbox blocks the import during development.
-
-**Recommended Docker harness change**: Add task-specific package pre-installation based on task requirements, not just code analysis.
+- Agents write code with proper deepchem imports
+- pipreqs detects deepchem → DGL installed via post-install hook
+- CGCNN model can be properly instantiated and trained

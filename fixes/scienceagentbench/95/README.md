@@ -1,70 +1,50 @@
-# Task 95 - DeepChem ScScore Synthetic Feasibility Modeling
+# Task 95 Fix: DeepChem ScScore Synthetic Complexity Model
 
 ## Root Cause Analysis
 
-**Execution Result**: valid_program: 0
+**IFE Type**: Sandbox Import Restriction + pipreqs Detection Failure
 
-The Docker execution shows:
-```
-No normalization for SPS. Feature removed!
-No normalization for AvgIpc. Feature removed!
-tensorflow/cuda warnings...
-```
+### Problem Description
+Task requires using DeepChem's ScScoreModel for predicting synthetic complexity scores using ECFP fingerprints.
 
-### Task Requirements
+### Why This Was Failing
 
-The task requires:
-1. Load molecules from `.pkl` files (train_mols.pkl, test_mols.pkl)
-2. Use DeepChem's ScScore model
-3. Featurize with ECFP fingerprints (radius 2, 512 dimensions, with chirality)
-4. Train on 100,000 molecule pairs for 20 epochs
-5. Predict complexity scores and save to `.npy` file
+1. **Agent Sandbox Blocks Imports**: The smolagents sandbox blocks `deepchem` and `pickle` imports during development
+2. **Cannot Load Data**: Without `pickle`, agents cannot even conceptualize loading the `.pkl` files
+3. **pipreqs Detection Failure**: Agent code without proper imports → pipreqs doesn't detect deepchem → DGL not installed
 
-### Why This Happened
+### Evidence from Verdict
+"importing deepchem fails immediately with ModuleNotFoundError: no module named 'tensorflow'"
 
-1. **Agent Sandbox Limitation**: The smolagents CodeAgent sandbox blocks importing:
-   - `pickle` - required to load the .pkl dataset files
-   - `deepchem` modules - required for ScScore, CircularFingerprint, NumpyDataset
-
-2. **Result**: The agent cannot:
-   - Load the provided dataset (.pkl files require pickle)
-   - Use the required DeepChem functionality
-   - Test any of its code during development
-
-3. **Execution Warnings**: The "No normalization" messages suggest the DeepChem featurizer is removing some molecular descriptors, but this may be expected behavior.
-
-## Is This an IFE?
-
-**Yes** - This is an **Agent Sandbox Environment Mismatch** issue.
-
-The task requires libraries that are completely blocked in the agent sandbox:
-- `pickle` - Standard library, blocked by sandbox
-- `deepchem` - Required domain library, blocked by sandbox
-
-Without these, the agent cannot:
-1. Load the input data
-2. Implement the required solution
+**CORRECTION**: The Docker base image has **TensorFlow 2.17** pre-installed. The real issue was pipreqs not detecting deepchem because agents couldn't write proper import statements.
 
 ## Fix Applied
 
-**Instruction Override**: Added clarifications about:
-1. Using pickle to load the .pkl files
-2. Correct DeepChem API for ScScore model
-3. Expected imports and their usage
+### 1. Instruction Override
+Added critical clarifications:
+- **MUST include proper imports** at the top of code
+- Explicit API usage for ScScoreModel and CircularFingerprint
+- How to load pickle files
 
-This fix is FAIR because:
-- It doesn't give away the algorithm or solution
-- It only clarifies API usage that the agent cannot discover
-- The agent sandbox makes normal development impossible
+### 2. Critical Imports for pipreqs Detection
+```python
+import deepchem as dc
+from deepchem.models import ScScoreModel
+from deepchem.feat import CircularFingerprint
+import pickle
+import numpy as np
+```
 
-## Expected Outcome
+When pipreqs detects `deepchem` in imports, the Docker harness automatically adds DGL.
 
-After applying this fix, agents should:
-1. Correctly load the .pkl dataset files
-2. Use proper DeepChem ScScore API
-3. Generate valid complexity score predictions
+## Why This Fix is Fair
 
-## Files Changed
+- Agent still must understand ScScore model architecture
+- No hints about training strategy or hyperparameters
+- Only compensates for sandbox limitation preventing normal development
 
-- `instruction_override.json`: Added DeepChem API clarifications
-- `README.md`: This documentation
+## Expected Outcome After Fix
+
+- Agents write code with proper deepchem imports
+- pipreqs detects deepchem → DGL installed
+- Code executes properly in evaluation container

@@ -1,85 +1,77 @@
-# Task 102 Fix: MODNet Model for Refractive Index Prediction
+# Task 102 Fix: MODNet Refractive Index Prediction
 
 ## Root Cause Analysis
 
-**Task Requirement**: Train a MODNet (Material Optimal Descriptor Network) model for predicting the refractive index of materials using the provided training data, then predict refractive index for materials in the MP_2018.6 dataset.
+**IFE Type**: Missing Package Handler in Docker Harness + Pickle Deserialization Failure
 
-**Identified IFE**:
-1. The agent development sandbox (smolagents) blocks importing `modnet`, `pickle`, and even `glob` modules
-2. **CRITICAL**: The Docker harness (`dockerfiles.py`) has NO special handling for MODNet, unlike DeepChem, Scanpy, etc.
-3. The dataset files are pickled objects that require MODNet classes to deserialize (pandas.read_pickle fails with "No module named 'modnet'")
+### Problem Description
+Task requires using MODNet (Material Optimal Descriptor Network) to predict refractive index from materials data. The training data is stored in pickle files that contain MODNet-specific objects.
 
-**Evidence from rubric evaluations**:
-- "Import from modnet.models is not allowed"
-- "Import of pickle is not allowed"
-- "Import of glob is not allowed"
-- "Could not read train.pkl with pandas: No module named 'modnet'" - showing the pickle contains MODNet-specific objects
-- Even PyTorch falls back failed: "ImproperlyConfigured: Requested settings, but settings are not configured" (Django settings error from torch import)
+### Why This Was Failing - CRITICAL ISSUE
 
-## Analysis of Docker Evaluation Environment
+1. **No Special Handler**: Unlike DeepChem, OGGM, and Scanpy, **MODNet has NO special handling** in the Docker harness's Dockerfile
+2. **Pickle Deserialization Failure**: The training data pickles contain MODNet class instances - they CANNOT be loaded without MODNet installed
+3. **Agent Sandbox Blocks Imports**: The smolagents sandbox blocks `modnet` and `pickle` imports
 
-**This is the most significant IFE among the four tasks.**
+### Evidence from Verdict
+"ModuleNotFoundError: No module named 'modnet'" and "the dataset pickles require MODNet classes to unpickle"
 
-Unlike DeepChem and Scanpy which have special handling in `dockerfiles.py`, MODNet has NONE:
-
-```bash
-# DeepChem handling exists:
-if echo "$extracted_pkgs" | grep -q 'deepchem'; then \
-    /opt/miniconda3/bin/pip install dgl -f https://data.dgl.ai/wheels/torch-2.3/cu121/repo.html; \
-fi;
-
-# Scanpy handling exists:
-if echo "$extracted_pkgs" | grep -q 'scanpy'; then \
-    echo 'scikit-misc' >> /testbed/instance_requirements.txt && \
-    echo 'leidenalg' >> /testbed/instance_requirements.txt; \
-fi;
-
-# MODNet handling: DOES NOT EXIST
-```
-
-MODNet requires:
-- `modnet` package from PyPI
-- `pymatgen` for materials structure handling
-- `matminer` for feature extraction
-- TensorFlow/Keras backend
+This is the ONLY task where even loading the input data is impossible without the package installed.
 
 ## Fix Applied
 
-**Environment Override** (`env_override.json`): Adds MODNet and its dependencies to ensure proper installation in the Docker evaluation container.
+### 1. Added MODNet Handler to Docker Harness
 
-**This fix requires corresponding changes to the Docker harness** to add MODNet-specific handling similar to DeepChem and Scanpy.
-
-## Why This Preserves Task Difficulty
-
-This fix does NOT:
-- Provide hints about MODNet architecture or hyperparameters
-- Pre-compute any material features
-- Simplify the refractive index prediction task
-- Give the agent the model configuration (300 input features, 128/64/32 neurons, 'elu' activation)
-
-This fix ONLY ensures:
-- MODNet package is installed in the evaluation environment
-- The pickled MODNet data objects can be properly deserialized
-- The task can be fairly evaluated if an agent produces correct code
-
-## Expected Outcome
-
-With MODNet properly installed, an agent that correctly:
-1. Loads the MODNet training data from md_ref_index_train
-2. Initializes a MODNetModel with specified architecture (300 features, 128/64/32 neurons, elu activation)
-3. Trains the model
-4. Predicts refractive index for MP_2018.6 dataset
-5. Saves results to pred_results/ref_index_predictions_pred.csv
-
-Should have their code properly evaluated rather than failing due to missing dependencies.
-
-## Required Harness Modification
-
-The Docker harness should be updated to include:
-
+**Modified `dockerfiles.py`** to add MODNet detection:
 ```bash
 if echo "$extracted_pkgs" | grep -q 'modnet'; then \
-    echo 'pymatgen' >> /testbed/instance_requirements.txt && \
+    echo 'pymatgen<=2024.5.1' >> /testbed/instance_requirements.txt && \
     echo 'matminer' >> /testbed/instance_requirements.txt; \
 fi;
 ```
+
+This ensures when pipreqs detects `modnet` imports, the required dependencies (pymatgen, matminer) are also installed.
+
+### 2. Instruction Override
+Added critical clarifications:
+- **MUST include proper imports** for modnet, pymatgen
+- How to load MODData objects from pickle
+- MODNetModel architecture specification
+
+### 3. Critical Imports for pipreqs Detection
+```python
+from modnet.models import MODNetModel
+from modnet.preprocessing import MODData
+import pymatgen
+from pymatgen.core import Structure
+import pandas as pd
+import numpy as np
+import pickle
+```
+
+## Why This Fix is Fair
+
+- Agent still must understand MODNet architecture and materials property prediction
+- No hints about model configuration or training
+- Only addresses the missing Docker handler that makes the task impossible
+
+## Expected Outcome After Fix
+
+- Docker harness detects `modnet` imports
+- pymatgen and matminer are added as dependencies
+- MODNet package is installed
+- Pickle files with MODData objects can be loaded
+- Refractive index prediction pipeline works
+
+## Technical Notes
+
+MODNet requires:
+- `modnet` - The main package
+- `pymatgen` - For crystal structure handling
+- `matminer` - For material feature extraction
+- TensorFlow/Keras backend (already in base image)
+
+The pickle files contain serialized MODData objects which reference:
+- `modnet.preprocessing.MODData` class
+- pymatgen Structure objects
+- matminer featurizer outputs

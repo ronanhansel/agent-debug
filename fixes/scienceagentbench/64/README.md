@@ -1,41 +1,60 @@
-# Task 64: OGGM Flowline Mass Balance Plotting Fix
+# Task 64 Fix: OGGM Flowline Mass Balance Plotting
 
 ## Root Cause Analysis
 
-### Observed Failure
-- **valid_program**: 0 (code failed to execute)
-- **success_rate**: 0
-- **Log**: Shows OGGM trying to download from `https://github.com/OGGM/oggm-sample-data/archive/...`
+**IFE Type**: Sandbox Import Restriction + pipreqs Detection Failure + Configuration Unclear
 
-### Failure Reason
-The agent's code triggered OGGM's default behavior of downloading sample data from GitHub, rather than using the locally provided pre-computed glacier data (`RGI60-11.00001.tar.gz`).
+### Problem Description
+Task requires using OGGM (Open Global Glacier Model) to compute and visualize glacier mass balance using local pre-computed glacier data.
 
-The execution log was cut off, but this typically indicates:
-1. Network download timeout/failure in Docker
-2. Missing configuration to point OGGM to local data directory
-3. OGGM requires internet access for climate data even with local glacier data
+### Why This Was Failing
 
-### Is This an IFE?
+1. **Agent Sandbox Blocks Imports**: The smolagents sandbox blocks `oggm` and `salem` imports
+2. **pipreqs Detection Failure**: Without proper `import oggm`, pipreqs doesn't detect OGGM → salem/tables/geopandas not added
+3. **Configuration Unclear**: Task provides local glacier data but doesn't explain how to configure OGGM to use it instead of downloading
 
-**Yes** - This is an infrastructure/configuration issue:
-1. The task provides local glacier data but doesn't specify how to configure OGGM to use it
-2. OGGM's default behavior downloads data from the internet
-3. Docker containers may have network restrictions
-4. The domain knowledge doesn't explain OGGM configuration for offline/local data use
+### Evidence from Verdict
+"importing oggm fails immediately with ModuleNotFoundError: No module named 'oggm'"
 
-### Fix Type: Instruction Clarification + Environment
+The Docker harness DOES have special handling for OGGM (adds salem, tables, geopandas) - but only if pipreqs detects 'oggm' in the agent's code.
 
-Add clarification about configuring OGGM to use local data and ensure network access.
+## Fix Applied
 
-## Why This Preserves Task Difficulty
+### 1. Instruction Override
+Added critical clarifications:
+- **MUST include proper imports** for oggm and salem
+- How to initialize OGGM configuration
+- How to configure working directory for local data
+- Location of local glacier data files
 
-- The scientific computation remains unchanged (calculate mass balance, create plot)
-- The fix only provides configuration guidance, not solution implementation
-- The agent still needs to understand OGGM API and create the correct visualization
+### 2. Critical Imports for pipreqs Detection
+```python
+import oggm
+from oggm import cfg, workflow, tasks, utils
+from oggm.core.massbalance import MultipleFlowlineMassBalance
+import matplotlib.pyplot as plt
+import salem
+import geopandas as gpd
+```
 
-## Expected Outcome
+When pipreqs detects `oggm` in imports, the Docker harness automatically adds:
+- salem
+- tables
+- geopandas
 
-After clarification, agents should:
-1. Configure OGGM working directory to point to the provided data
-2. Or use cfg.PATHS to specify local directories
-3. Extract and use the provided tar.gz data files
+### 3. Environment Override
+- Extended timeout for potential network operations
+- Network access enabled for climate data if needed
+
+## Why This Fix is Fair
+
+- Agent still must understand glacier mass balance computation
+- No hints about the actual scientific implementation
+- Only clarifies configuration that agents cannot discover without testing imports
+
+## Expected Outcome After Fix
+
+- Agents write code with proper oggm imports
+- pipreqs detects oggm → salem, tables, geopandas installed
+- OGGM initialized with local data configuration
+- Mass balance computation and visualization works
