@@ -487,7 +487,7 @@ hal-eval --benchmark assistantbench \
 
 # ScienceAgentBench
 hal-eval --benchmark scienceagentbench \
-    --agent_dir hal/benchmarks/scienceagentbench/ScienceAgentBench/ \
+    --agent_dir hal/benchmarks/scienceagentbench/ScienceAgentBench_modified/ \
     --agent_function agent.run
 ```
 

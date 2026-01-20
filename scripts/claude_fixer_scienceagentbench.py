@@ -192,7 +192,7 @@ Process each task sequentially, creating fixes as needed. Be THOROUGH in your an
 
 **First, read these files to understand the benchmark:**
 - `hal-harness/hal/benchmarks/scienceagentbench.py` - Main benchmark class
-- `hal-harness/hal/benchmarks/scienceagentbench/ScienceAgentBench/` - Evaluation harness
+- `hal-harness/hal/benchmarks/scienceagentbench/ScienceAgentBench_modified/` - Evaluation harness
 
 **How Evaluation Works:**
 1. Agent produces Python code for a scientific task
