@@ -575,8 +575,8 @@ def main():
     parser.add_argument(
         "--pattern",
         type=str,
-        default="*.csv",
-        help="Glob pattern to match CSV files (e.g., 'scicode_*', '*.csv')",
+        action='append',
+        help="Glob pattern to match CSV files (can be used multiple times, e.g., '--pattern prop_* --pattern iter1_*')",
     )
     parser.add_argument(
         "--rubric-dir",
@@ -649,10 +649,16 @@ def main():
         print(f"Error: Rubric directory not found: {rubric_dir}")
         sys.exit(1)
 
-    # Find CSV files
-    csv_files = find_csv_files(rubric_dir, args.pattern)
+    # Find CSV files (handle multiple patterns)
+    patterns = args.pattern if args.pattern else ["*.csv"]
+    csv_files = []
+    for pattern in patterns:
+        csv_files.extend(find_csv_files(rubric_dir, pattern))
+    # Remove duplicates and sort
+    csv_files = sorted(set(csv_files))
+
     if not csv_files:
-        print(f"Error: No CSV files matching '{args.pattern}' found in {rubric_dir}")
+        print(f"Error: No CSV files matching patterns {patterns} found in {rubric_dir}")
         sys.exit(1)
 
     print(f"Found {len(csv_files)} CSV files:")
@@ -686,9 +692,10 @@ def main():
         if not output_path.is_absolute():
             output_path = REPO_ROOT / output_path
     else:
-        # Extract prefix from pattern: keep only letters, numbers, and underscores
+        # Extract prefix from first pattern: keep only letters, numbers, and underscores
         # e.g., "scicode_potato_*" -> "scicode_potato"
-        pattern_prefix = re.sub(r'[^a-zA-Z0-9_]', '', args.pattern.split('*')[0].split('?')[0])
+        first_pattern = patterns[0] if patterns else "*.csv"
+        pattern_prefix = re.sub(r'[^a-zA-Z0-9_]', '', first_pattern.split('*')[0].split('?')[0])
         pattern_prefix = pattern_prefix.rstrip('_')  # Remove trailing underscore
         if pattern_prefix:
             output_path = REPO_ROOT / "judge_output" / f"{pattern_prefix}_verdict.csv"

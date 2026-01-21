@@ -1,10 +1,33 @@
 #!/bin/bash
 # FINAL MERGE + WEAVE + RUBRIC COMMANDS
 # Based on actual trace files that exist
+#
+# Usage:
+#   ./FINAL_COMMANDS.sh              # Run all benchmarks
+#   ./FINAL_COMMANDS.sh scicode      # Run only SciCode
+#   ./FINAL_COMMANDS.sh corebench    # Run only CoreBench
+#   ./FINAL_COMMANDS.sh sab          # Run only ScienceAgentBench
+#   ./FINAL_COMMANDS.sh colbench     # Run only ColBench
+
+BENCHMARK="${1:-all}"
+
+case "$BENCHMARK" in
+    all|scicode|corebench|sab|colbench)
+        echo "Running: $BENCHMARK"
+        ;;
+    *)
+        echo "Error: Unknown benchmark '$BENCHMARK'"
+        echo "Usage: $0 [all|scicode|corebench|sab|colbench]"
+        exit 1
+        ;;
+esac
 
 # ============================================================
 # SCICODE
 # ============================================================
+
+if [ "$BENCHMARK" = "all" ] || [ "$BENCHMARK" = "scicode" ]; then
+echo "=== SCICODE ==="
 
 # SCICODE_HONEY (4 models)
 python scripts/merge_traces.py --input 'traces/scicode_honey__scicode_honey_openai_gpt-4_1_2025-04-14_*_UPLOAD.json' --output traces/scicode_honey_openai_gpt-4_1_MERGED_UPLOAD.json --force && \
@@ -58,9 +81,15 @@ python scripts/extract_weave_traces.py \
     --merge-input traces/scicode_lady_DeepSeek-R1_MERGED_UPLOAD.json \
     --merge-input traces/scicode_lady_deepseek-v3_MERGED_UPLOAD.json
 
+echo "✓ SciCode completed"
+fi
+
 # ============================================================
 # COREBENCH
 # ============================================================
+
+if [ "$BENCHMARK" = "all" ] || [ "$BENCHMARK" = "corebench" ]; then
+echo "=== COREBENCH ==="
 
 # PROP (10 models)
 python scripts/merge_traces.py --input 'traces/prop_openai_gpt-4_1_2025-04-14_capsule-*_UPLOAD.json' --output traces/prop_openai_gpt-4_1_MERGED_UPLOAD.json --force && \
@@ -114,9 +143,15 @@ python scripts/extract_weave_traces.py \
     --merge-input traces/iter1_openai_o4-mini_high_MERGED_UPLOAD.json \
     --merge-input traces/iter1_openai_o4-mini_low_MERGED_UPLOAD.json
 
+echo "✓ CoreBench completed"
+fi
+
 # ============================================================
 # SAB
 # ============================================================
+
+if [ "$BENCHMARK" = "all" ] || [ "$BENCHMARK" = "sab" ]; then
+echo "=== SAB ==="
 
 # SAB_MATE (6 models)
 python scripts/merge_traces.py --input 'traces/sab_mate__sab_mate_openai_gpt-5_2025-08-07_medium_*_UPLOAD.json' --output traces/sab_mate_openai_gpt-5_medium_MERGED_UPLOAD.json --force && \
@@ -166,9 +201,15 @@ python scripts/extract_weave_traces.py \
     --prefix sab_husky_openai_gpt-4_1 \
     --merge-input traces/sab_husky_openai_gpt-4_1_MERGED_UPLOAD.json
 
+echo "✓ SAB completed"
+fi
+
 # ============================================================
 # COLBENCH
 # ============================================================
+
+if [ "$BENCHMARK" = "all" ] || [ "$BENCHMARK" = "colbench" ]; then
+echo "=== COLBENCH ==="
 
 # COL_IVY (9 models)
 python scripts/merge_traces.py --input 'traces/col_ivy__col_ivy_gpt-4_1_2025-04-14_*_UPLOAD.json' --output traces/col_ivy_gpt-4_1_MERGED_UPLOAD.json --force && \
@@ -183,15 +224,15 @@ python scripts/merge_traces.py --input 'traces/col_ivy__col_ivy_DeepSeek-R1_1_*_
 
 python scripts/extract_weave_traces.py \
     --project ronanhansel-hanoi-university-of-science-and-technology/col_ivy_colbench_backendprogramming \
-    --prefix col_ivy_gpt-4_1 \
-    --prefix col_ivy_o3_2025 \
+    --prefix col_ivy_gpt-4_1_2025-04-14 \
+    --prefix col_ivy_o3_2025-04-16_medium \
     --prefix col_ivy_o4-mini_2025-04-16_high \
     --prefix col_ivy_o4-mini_2025-04-16_low \
-    --prefix col_ivy_gpt-5_2025 \
-    --prefix col_ivy_gpt-5-mini_2025 \
-    --prefix col_ivy_gpt-4o_2024 \
-    --prefix col_ivy_o3-mini_2025 \
-    --prefix col_ivy_DeepSeek-R1 \
+    --prefix col_ivy_gpt-5_2025-08-07_medium \
+    --prefix col_ivy_gpt-5-mini_2025-08-07 \
+    --prefix col_ivy_gpt-4o_2024-11-20 \
+    --prefix col_ivy_o3-mini_2025-01-31_high \
+    --prefix col_ivy_DeepSeek-R1_1 \
     --merge-input traces/col_ivy_gpt-4_1_MERGED_UPLOAD.json \
     --merge-input traces/col_ivy_o3_medium_MERGED_UPLOAD.json \
     --merge-input traces/col_ivy_o4-mini_high_MERGED_UPLOAD.json \
@@ -209,15 +250,88 @@ python scripts/merge_traces.py --input 'traces/col_zuck__col_zuck_o4-mini-2025-0
 
 python scripts/extract_weave_traces.py \
     --project ronanhansel-hanoi-university-of-science-and-technology/col_zuck_colbench_backendprogramming \
-    --prefix col_zuck_gpt-4_1 \
-    --prefix col_zuck_o3-2025 \
-    --prefix col_zuck_o4-mini-2025 \
+    --prefix col_zuck_gpt-4_1-2025-04-14 \
+    --prefix col_zuck_o3-2025-04-16_low \
+    --prefix col_zuck_o4-mini-2025-04-16_high \
     --merge-input traces/col_zuck_gpt-4_1_MERGED_UPLOAD.json \
     --merge-input traces/col_zuck_o3_low_MERGED_UPLOAD.json \
     --merge-input traces/col_zuck_o4-mini_high_MERGED_UPLOAD.json
 
+echo "✓ ColBench completed"
+fi
+
+echo ""
 echo "============================================================"
 echo "MERGE + WEAVE COMPLETE!"
 echo "============================================================"
 echo ""
-echo "Now run RUBRIC EVALUATION - see RUBRIC_COMMANDS.sh"
+
+# Print summary of traces with/without remote calls
+echo "=== TRACE SUMMARY ==="
+echo ""
+
+python3 << 'PYTHON_SUMMARY'
+import json
+import glob
+from pathlib import Path
+
+traces = []
+for pattern in ["scicode_honey_*.json", "scicode_lady_*.json", "prop_*.json", "iter1_*.json",
+                "sab_mate_*.json", "sab_cow_*.json", "sab_husky_*.json", "col_ivy_*.json", "col_zuck_*.json"]:
+    for f in glob.glob(f"traces/{pattern}"):
+        if "_MERGED_UPLOAD.json" in f:
+            continue
+        traces.append(f)
+
+traces_with_calls = []
+traces_without_calls = []
+traces_with_logs = []
+traces_without_logs = []
+
+for trace_path in sorted(traces):
+    try:
+        with open(trace_path) as f:
+            data = json.load(f)
+
+        # Check if it has conversation logs
+        raw_logging = data.get("raw_logging_results", [])
+        has_logs = len(raw_logging) > 0
+
+        # Check if it mentions remote calls (from weave)
+        config = data.get("config", {})
+
+        name = Path(trace_path).name
+
+        if has_logs:
+            traces_with_logs.append((name, len(raw_logging)))
+        else:
+            traces_without_logs.append(name)
+
+    except Exception as e:
+        pass
+
+print(f"✅ Traces WITH conversation logs: {len(traces_with_logs)}")
+print(f"❌ Traces WITHOUT conversation logs: {len(traces_without_logs)}")
+
+if traces_without_logs and len(traces_without_logs) <= 20:
+    print(f"\nTraces without logs:")
+    for name in traces_without_logs:
+        print(f"  {name}")
+elif traces_without_logs:
+    # Group by prefix
+    by_prefix = {}
+    for name in traces_without_logs:
+        prefix = name.split('_')[0] + '_' + name.split('_')[1] if '_' in name else name
+        by_prefix.setdefault(prefix, []).append(name)
+    print(f"\nTraces without logs (grouped by prefix):")
+    for prefix, files in sorted(by_prefix.items()):
+        print(f"  {prefix}: {len(files)} traces")
+
+print(f"\nTotal traces processed: {len(traces_with_logs) + len(traces_without_logs)}")
+PYTHON_SUMMARY
+
+echo ""
+echo "============================================================"
+echo "Next step: Run RUBRIC EVALUATION"
+echo "  ./RUBRIC_COMMANDS.sh $BENCHMARK"
+echo "============================================================"

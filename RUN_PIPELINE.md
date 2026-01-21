@@ -9,10 +9,37 @@ export WANDB_API_KEY=your_key_here
 
 ---
 
-## Step 1: Merge Local Traces + Extract from Weave
+## Usage
+
+All scripts now support running specific benchmarks or all at once:
 
 ```bash
+# Run all benchmarks
 ./FINAL_COMMANDS.sh
+./RUBRIC_COMMANDS.sh
+./JUDGE_COMMANDS.sh
+
+# Run only ColBench
+./FINAL_COMMANDS.sh colbench
+./RUBRIC_COMMANDS.sh colbench
+./JUDGE_COMMANDS.sh colbench
+
+# Other options: scicode, corebench, sab
+./FINAL_COMMANDS.sh scicode
+./FINAL_COMMANDS.sh corebench
+./FINAL_COMMANDS.sh sab
+```
+
+---
+
+## Step-by-Step
+
+### Step 1: Merge Local Traces + Extract from Weave
+
+```bash
+./FINAL_COMMANDS.sh scicode      # SciCode, CoreBench, SAB
+./FINAL_COMMANDS.sh corebench
+./FINAL_COMMANDS.sh sab
 ```
 
 This will:
@@ -20,14 +47,32 @@ This will:
 - Extract conversation logs from Weave
 - Create final trace files with complete data
 
-**Output**: 36 trace files in `traces/` directory
+**Output**: Trace files in `traces/` directory
+
+### Step 1b: ColBench - Extract Dialogues from Results (SPECIAL PROCESS)
+
+**ColBench does NOT use Weave extraction.** Instead, it extracts dialogue history from the `results/` directory:
+
+```bash
+# First, merge the traces
+./FINAL_COMMANDS.sh colbench
+
+# Then, add dialogue history from results directory
+./CREATE_COLBENCH_DIALOGUES.sh
+```
+
+This creates `_WITH_DIALOGUES.json` files from `results/colbench_backend_programming/`
+
+**Output**: `traces/*_WITH_DIALOGUES.json` files
 
 ---
 
-## Step 2: Run Rubric Evaluation
+### Step 2: Run Rubric Evaluation
 
 ```bash
-./RUBRIC_COMMANDS.sh
+./RUBRIC_COMMANDS.sh              # All benchmarks
+# OR
+./RUBRIC_COMMANDS.sh colbench     # Just ColBench
 ```
 
 This evaluates each failed task against rubrics to identify benchmark defects.
@@ -36,10 +81,12 @@ This evaluates each failed task against rubrics to identify benchmark defects.
 
 ---
 
-## Step 3: Aggregate Verdicts
+### Step 3: Aggregate Verdicts
 
 ```bash
-./JUDGE_COMMANDS.sh
+./JUDGE_COMMANDS.sh              # All benchmarks
+# OR
+./JUDGE_COMMANDS.sh colbench     # Just ColBench
 ```
 
 This aggregates rubric evaluations across models into final verdicts.
@@ -62,6 +109,7 @@ This aggregates rubric evaluations across models into final verdicts.
 
 **Fixed Issues**:
 - ✅ Removed all hardcoded API keys from scripts
-- ✅ Fixed `extract_weave_traces.py` type checking bugs
+- ✅ Fixed `extract_weave_traces.py` type checking for raw_eval_results (handles both dict and list)
 - ✅ Fixed `run_corebench_fixes.py` prefix handling for merged traces
+- ✅ Added benchmark selection flags to all scripts
 - ✅ Identified correct model names for each project
