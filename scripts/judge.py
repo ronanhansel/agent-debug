@@ -567,6 +567,53 @@ def parse_model_string(model_str: str) -> tuple[str, str]:
     return "openai", model_str
 
 
+def apply_priority_override(
+    evaluations: dict[str, list[TaskEvaluation]],
+    high_priority_pattern: str,
+    low_priority_pattern: str
+) -> dict[str, list[TaskEvaluation]]:
+    """
+    Apply priority override: for each task, if evaluations exist from high_priority_pattern,
+    remove evaluations from low_priority_pattern.
+
+    Args:
+        evaluations: Dict mapping task_id to list of evaluations
+        high_priority_pattern: Glob pattern for high priority files (e.g., "sab_husky_*")
+        low_priority_pattern: Glob pattern for low priority files (e.g., "sab_cow_*")
+
+    Returns:
+        Filtered evaluations dict with overrides applied
+    """
+    from fnmatch import fnmatch
+
+    filtered_evaluations = {}
+    override_count = 0
+
+    for task_id, evals in evaluations.items():
+        # Check if any evaluations match high priority pattern
+        has_high_priority = any(fnmatch(ev.source_file, high_priority_pattern) for ev in evals)
+
+        if has_high_priority:
+            # Filter out low priority evaluations
+            filtered_evals = [
+                ev for ev in evals
+                if not fnmatch(ev.source_file, low_priority_pattern)
+            ]
+            removed_count = len(evals) - len(filtered_evals)
+            if removed_count > 0:
+                override_count += 1
+            filtered_evaluations[task_id] = filtered_evals
+        else:
+            # No high priority evaluations, keep all
+            filtered_evaluations[task_id] = evals
+
+    if override_count > 0:
+        print(f"Applied priority override: {high_priority_pattern} > {low_priority_pattern}")
+        print(f"  Overridden {override_count} tasks")
+
+    return filtered_evaluations
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Judge aggregates rubric evaluations and produces final verdicts."
@@ -637,6 +684,12 @@ def main():
         type=str,
         help="Custom OpenAI API base URL (overrides Azure/TRAPI default)",
     )
+    parser.add_argument(
+        "--priority-override",
+        nargs=2,
+        metavar=("HIGH_PRIORITY", "LOW_PRIORITY"),
+        help="Override evaluations: if a task has evaluations from HIGH_PRIORITY pattern, remove LOW_PRIORITY evaluations for that task (e.g., 'sab_husky_*' 'sab_cow_*')",
+    )
 
     args = parser.parse_args()
 
@@ -668,6 +721,11 @@ def main():
     # Read evaluations
     evaluations = read_evaluations(csv_files)
     print(f"\nLoaded evaluations for {len(evaluations)} unique tasks")
+
+    # Apply priority override if specified
+    if args.priority_override:
+        high_priority, low_priority = args.priority_override
+        evaluations = apply_priority_override(evaluations, high_priority, low_priority)
 
     # Limit tasks if requested
     task_ids = list(evaluations.keys())

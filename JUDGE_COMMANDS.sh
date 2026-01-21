@@ -30,7 +30,8 @@ echo ""
 if [ "$BENCHMARK" = "all" ] || [ "$BENCHMARK" = "scicode" ]; then
 echo "=== SciCode ==="
 python scripts/judge.py \
-    --pattern "scicode_*" \
+    --pattern "scicode_lady_*" \
+    --pattern "scicode_honey_*" \
     --rubric-dir rubrics_output/scicode \
     --output judge_output/scicode_verdict.csv \
     --model openai:gpt-5.2 \
@@ -46,7 +47,6 @@ echo "=== CoreBench ==="
 python scripts/judge.py \
     --pattern "prop_*" \
     --pattern "iter1_*" \
-    --pattern "earth_*" \
     --rubric-dir rubrics_output/corebench \
     --output judge_output/corebench_verdict.csv \
     --model openai:gpt-5.2 \
@@ -60,8 +60,10 @@ fi
 if [ "$BENCHMARK" = "all" ] || [ "$BENCHMARK" = "sab" ]; then
 echo "=== SAB ==="
 python scripts/judge.py \
-    --pattern "sab_*" \
-    --pattern "scienceagentbench_*" \
+    --pattern "sab_mate_*" \
+    --pattern "sab_cow_*" \
+    --pattern "sab_husky_*" \
+    --priority-override "sab_husky_*" "sab_cow_*" \
     --rubric-dir rubrics_output/scienceagentbench \
     --output judge_output/scienceagentbench_verdict.csv \
     --model openai:gpt-5.2 \

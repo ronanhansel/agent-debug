@@ -40,30 +40,20 @@ All scripts now support running specific benchmarks or all at once:
 ./FINAL_COMMANDS.sh scicode      # SciCode, CoreBench, SAB
 ./FINAL_COMMANDS.sh corebench
 ./FINAL_COMMANDS.sh sab
+./FINAL_COMMANDS.sh colbench     # ColBench (automatically adds dialogues)
 ```
 
 This will:
 - Merge all local trace files for each model
-- Extract conversation logs from Weave
+- Extract conversation logs from Weave (SciCode, CoreBench, SAB)
+- Extract dialogue history from `results/` directory (ColBench only)
 - Create final trace files with complete data
 
-**Output**: Trace files in `traces/` directory
+**Output**:
+- SciCode/CoreBench/SAB: Trace files in `traces/` directory
+- ColBench: `traces/*_WITH_DIALOGUES.json` files
 
-### Step 1b: ColBench - Extract Dialogues from Results (SPECIAL PROCESS)
-
-**ColBench does NOT use Weave extraction.** Instead, it extracts dialogue history from the `results/` directory:
-
-```bash
-# First, merge the traces
-./FINAL_COMMANDS.sh colbench
-
-# Then, add dialogue history from results directory
-./CREATE_COLBENCH_DIALOGUES.sh
-```
-
-This creates `_WITH_DIALOGUES.json` files from `results/colbench_backend_programming/`
-
-**Output**: `traces/*_WITH_DIALOGUES.json` files
+**Note**: ColBench uses a special process - dialogue history is extracted from `results/colbench_backend_programming/` directory, not from Weave
 
 ---
 

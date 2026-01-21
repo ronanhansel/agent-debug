@@ -14,6 +14,69 @@ Automated Item Fixing Pipeline for benchmark evaluation. The core innovation is 
 
 ---
 
+## Quick Start: Trace Extraction and Rubric Evaluation
+
+### Standard Workflow (SciCode, CoreBench, ScienceAgentBench)
+
+```bash
+# Set API key
+export WANDB_API_KEY=your_key_here
+
+# Step 1: Merge traces + extract from Weave
+./FINAL_COMMANDS.sh scicode      # Or: corebench, sab
+
+# Step 2: Run rubric evaluation
+./RUBRIC_COMMANDS.sh scicode
+
+# Step 3: Aggregate verdicts
+./JUDGE_COMMANDS.sh scicode
+```
+
+### ColBench Special Workflow
+
+ColBench uses a **different process** - dialogue history comes from `results/` directory, NOT Weave:
+
+```bash
+# Step 1: Merge traces + extract dialogues from results/
+./FINAL_COMMANDS.sh colbench
+
+# This automatically:
+# 1. Merges individual traces
+# 2. Extracts dialogue history from results/colbench_backend_programming/
+# 3. Creates *_WITH_DIALOGUES.json files
+
+# Step 2: Run rubric evaluation (uses _WITH_DIALOGUES.json files)
+./RUBRIC_COMMANDS.sh colbench
+
+# Step 3: Aggregate verdicts
+./JUDGE_COMMANDS.sh colbench
+```
+
+**Why ColBench is different**: ColBench dialogue history is saved in `results/{run_id}/0/output.json`, not uploaded to Weave as LLM call traces. The `add_colbench_dialogues.py` script extracts these dialogues and embeds them in `raw_logging_results`.
+
+### Available Flags
+
+All scripts support running specific benchmarks:
+```bash
+./FINAL_COMMANDS.sh [all|scicode|corebench|sab|colbench]
+./RUBRIC_COMMANDS.sh [all|scicode|corebench|sab|colbench]
+./JUDGE_COMMANDS.sh [all|scicode|corebench|sab|colbench]
+```
+
+### Output Files
+
+**After FINAL_COMMANDS.sh**:
+- SciCode/CoreBench/SAB: `traces/{prefix}_openai_{model}.json` (with Weave logs)
+- ColBench: `traces/{prefix}_openai_{model}_WITH_DIALOGUES.json`
+
+**After RUBRIC_COMMANDS.sh**:
+- `rubrics_output/{benchmark}/*.csv` (per-model rubric grades)
+
+**After JUDGE_COMMANDS.sh**:
+- `judge_output/{benchmark}_verdict.csv` (aggregated final verdicts)
+
+---
+
 ## Fresh Machine Setup
 
 ### Prerequisites

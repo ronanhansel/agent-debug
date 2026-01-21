@@ -431,6 +431,150 @@ hal-eval --benchmark colbench_frontend_design \
 
 **Model Configuration**: `model_to_baseline_colbench.json`
 
+**CRITICAL: ColBench Dialogue Extraction**:
+
+ColBench uses a **different workflow** than other benchmarks for extracting conversation logs:
+
+- **SciCode/CoreBench/SAB**: Extract logs from Weave using `extract_weave_traces.py`
+- **ColBench**: Extract dialogue history from `results/` directory using `add_colbench_dialogues.py`
+
+This is because ColBench dialogues are saved in:
+```
+results/colbench_backend_programming/{run_id}/0/output.json
+```
+
+Each output.json contains:
+- `dialogue_history`: Full agent-user conversation turns
+- `answer`: Final agent answer
+- `task`: Task specification
+
+**To extract ColBench dialogues**:
+```bash
+python scripts/add_colbench_dialogues.py \
+    traces/col_ivy_gpt-4_1_MERGED_UPLOAD.json \
+    --results-dir results/colbench_backend_programming \
+    --run-pattern "col_ivy_gpt-4_1_2025-04-14_*" \
+    --output traces/col_ivy_openai_gpt-4_1_WITH_DIALOGUES.json
+```
+
+This creates `_WITH_DIALOGUES.json` files with the conversation logs embedded in `raw_logging_results`.
+
+**Important**: The `FINAL_COMMANDS.sh` script automatically handles this for ColBench - just run `./FINAL_COMMANDS.sh colbench` and it will merge traces AND extract dialogues.
+
+---
+
+## Trace Extraction and Merging Pipeline
+
+### Workflow Overview
+
+The complete pipeline for processing evaluation results:
+
+1. **Merge Local Traces**: Combine individual task traces into model-level merged files
+2. **Extract from Weave** (SciCode/CoreBench/SAB): Fetch conversation logs from W&B Weave
+3. **Extract Dialogues** (ColBench only): Pull dialogue history from results directory
+4. **Rubric Evaluation**: Grade failures against benchmark-specific rubrics
+5. **Judge Aggregation**: Combine cross-model verdicts into final IFE classifications
+
+### Automated Scripts
+
+| Script | Purpose | Usage |
+|--------|---------|-------|
+| `FINAL_COMMANDS.sh` | Merge traces + extract logs/dialogues | `./FINAL_COMMANDS.sh [benchmark]` |
+| `RUBRIC_COMMANDS.sh` | Run rubric evaluation | `./RUBRIC_COMMANDS.sh [benchmark]` |
+| `JUDGE_COMMANDS.sh` | Aggregate verdicts | `./JUDGE_COMMANDS.sh [benchmark]` |
+
+**Examples**:
+```bash
+# Run all benchmarks
+./FINAL_COMMANDS.sh
+./RUBRIC_COMMANDS.sh
+./JUDGE_COMMANDS.sh
+
+# Run only ColBench
+./FINAL_COMMANDS.sh colbench
+./RUBRIC_COMMANDS.sh colbench
+./JUDGE_COMMANDS.sh colbench
+```
+
+### Trace Naming Conventions
+
+**Double vs Single Prefix**:
+- **Individual trace filenames**: Use double prefix (e.g., `col_ivy__col_ivy_gpt-4_1_...`)
+- **Config run_id inside trace**: Uses single prefix (e.g., `col_ivy_gpt-4_1_...`)
+- **Weave run_id**: Matches config (single prefix)
+- **Merged trace output**: Uses single prefix
+
+This is why Weave extraction queries use **single prefix** patterns.
+
+**Prefix Patterns by Benchmark**:
+```bash
+# SciCode: Double prefix in filename, single in Weave
+Filename: scicode_honey__scicode_honey_openai_gpt-4_1_2025-04-14_12_scicode_*_UPLOAD.json
+Weave:    scicode_honey_openai_gpt-4_1_2025-04-14_12_scicode_*
+
+# CoreBench: Single prefix (capsule format)
+Filename: prop_openai_gpt-4_1_2025-04-14_capsule-1624349_*_UPLOAD.json
+Weave:    prop_openai_gpt-4_1_2025-04-14_capsule-1624349_*
+
+# ColBench: Double prefix in filename, single in Weave
+Filename: col_ivy__col_ivy_gpt-4_1_2025-04-14_15_*_UPLOAD.json
+Weave:    col_ivy_gpt-4_1_2025-04-14_15_*
+```
+
+### ColBench Special Handling
+
+ColBench requires TWO steps:
+
+1. **Merge traces** (creates `*_MERGED_UPLOAD.json`)
+2. **Add dialogues** from results directory (creates `*_WITH_DIALOGUES.json`)
+
+The `add_colbench_dialogues.py` script:
+- Reads merged trace to get task IDs and scores
+- Finds corresponding `results/colbench_backend_programming/{run_id}/0/output.json`
+- Extracts dialogue_history, answer, and task data
+- Embeds them in `raw_logging_results` for rubric evaluation
+
+**Why this is needed**: ColBench dialogue history is stored in the results directory, NOT uploaded to Weave as LLM API call traces.
+
+### Trace File Formats
+
+**ColBench Specifics** (`raw_eval_results` as list):
+```json
+{
+  "raw_eval_results": [0.75],  // Single score for single-task trace
+  "raw_logging_results": []     // Empty until dialogues are added
+}
+```
+
+**Other Benchmarks** (`raw_eval_results` as dict):
+```json
+{
+  "raw_eval_results": {
+    "task_12": {"success_rate": 0.8},
+    "task_35": {"success_rate": 0.0}
+  },
+  "raw_logging_results": [...]  // Populated from Weave
+}
+```
+
+The `extract_weave_traces.py` script handles both formats via type checking:
+```python
+if isinstance(raw_eval, dict):
+    eval_results = raw_eval.get("eval_result", {})
+else:
+    eval_results = {}  # Skip if list (ColBench format)
+```
+
+### Bug Fixes
+
+**Fixed `run_corebench_fixes.py` Prefix Handling**:
+- Issue: Merged trace run_id was missing prefix (e.g., `prop_corebench_hard_*` instead of `prop_h_corebench_hard_*`)
+- Fix: Added prefix_part calculation before merge loop (lines 1610-1612)
+
+**Fixed `extract_weave_traces.py` Type Safety**:
+- Issue: Crashed when `raw_eval_results` was a list (ColBench format) instead of dict
+- Fix: Added `isinstance()` checks before calling `.get()` or `.items()` (lines 301-304, 355-357)
+
 ---
 
 ## Common Commands
