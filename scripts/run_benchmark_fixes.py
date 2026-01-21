@@ -2,8 +2,16 @@
 """
 Unified Benchmark Fix Runner
 
-This script runs HAL evaluations for benchmarks that have fixes available.
-It automatically detects which tasks have fixes and runs them ALL.
+This script runs HAL evaluations for benchmarks with optional fix application.
+
+Modes:
+    1. Run only tasks with fixes (default): Only runs tasks that have fixes defined
+    2. Run all tasks with --all-tasks: Runs ENTIRE benchmark, applying fixes where available
+
+Parallelism:
+    --parallel-models N   Run N model configurations concurrently
+    --parallel-tasks N    Run N tasks concurrently within each HAL evaluation
+                          (uses HAL's --max_concurrent flag)
 
 Usage:
     # List available configurations for a benchmark
@@ -12,33 +20,22 @@ Usage:
     # List all benchmarks with fixes
     python scripts/run_benchmark_fixes.py --list-benchmarks
 
-    # Run ALL models on ALL benchmarks that have fixes
-    python scripts/run_benchmark_fixes.py --all-benchmarks --all-configs --prefix iter1_ --docker
+    # Run ALL tasks in benchmark, applying fixes where available
+    python scripts/run_benchmark_fixes.py --benchmark scicode --all-configs \
+        --all-tasks --prefix iter1_ --docker --parallel-tasks 5
 
-    # Run a specific configuration on a specific benchmark
+    # Run ALL benchmarks, ALL tasks, with fixes applied where available
+    python scripts/run_benchmark_fixes.py --all-benchmarks --all-configs \
+        --all-tasks --prefix iter1_ --docker --parallel-models 2 --parallel-tasks 5
+
+    # Run only tasks with fixes (original behavior)
     python scripts/run_benchmark_fixes.py --benchmark scicode \
         --config gpt-5_scicode_tool_calling \
         --prefix test_ \
         --docker
 
-    # Run all configurations for a single benchmark
-    python scripts/run_benchmark_fixes.py --benchmark scicode \
-        --all-configs \
-        --prefix iter1_ \
-        --docker
-
-    # Filter by agent
-    python scripts/run_benchmark_fixes.py --benchmark scicode \
-        --agent scicode_tool_calling_agent \
-        --prefix test_
-
-    # Filter by model pattern
-    python scripts/run_benchmark_fixes.py --benchmark scicode \
-        --model-filter gpt-5 \
-        --prefix test_
-
     # Dry run
-    python scripts/run_benchmark_fixes.py --all-benchmarks --all-configs --dry-run
+    python scripts/run_benchmark_fixes.py --all-benchmarks --all-configs --all-tasks --dry-run
 """
 
 from __future__ import annotations
@@ -62,11 +59,60 @@ import threading
 from dotenv import load_dotenv
 load_dotenv()
 
-# If using direct Azure, remove proxy URLs
+# If using direct Azure, remove proxy URLs and validate tokens
 if os.environ.get('USE_DIRECT_AZURE', '').lower() == 'true':
     for key in ('OPENAI_BASE_URL', 'OPENAI_API_BASE', 'OPENAI_API_BASE_URL', 'LITELLM_BASE_URL'):
         os.environ.pop(key, None)
     print("[INFO] Direct Azure mode: removed proxy URLs from environment")
+
+    # Validate Azure token at startup
+    def _check_azure_token():
+        """Check if Azure MSAL tokens are available and valid."""
+        try:
+            import msal
+            cache_path = os.path.expanduser('~/.azure/msal_token_cache.json')
+            if not os.path.exists(cache_path):
+                print("[WARN] Azure MSAL cache not found at ~/.azure/msal_token_cache.json")
+                print("[WARN] Run 'az login' to authenticate")
+                return False
+
+            cache = msal.SerializableTokenCache()
+            with open(cache_path, 'r') as f:
+                cache.deserialize(f.read())
+
+            app = msal.PublicClientApplication(
+                '04b07795-8ddb-461a-bbee-02f9e1bf7b46',  # Azure CLI client ID
+                authority='https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47',
+                token_cache=cache
+            )
+
+            accounts = app.get_accounts()
+            if not accounts:
+                print("[WARN] No Azure accounts found in MSAL cache")
+                print("[WARN] Run 'az login' to authenticate")
+                return False
+
+            # Try to acquire token silently (will refresh if needed)
+            scope = os.environ.get('TRAPI_SCOPE', 'api://trapi/.default')
+            result = app.acquire_token_silent([scope], account=accounts[0])
+
+            if result and 'access_token' in result:
+                print(f"[OK] Azure token valid (account: {accounts[0].get('username', 'unknown')})")
+                return True
+            else:
+                error = result.get('error_description', 'unknown') if result else 'no result'
+                print(f"[WARN] Azure token refresh failed: {error}")
+                print("[WARN] Run 'az login' to re-authenticate")
+                return False
+
+        except ImportError:
+            print("[WARN] msal package not installed - cannot validate Azure tokens")
+            return True  # Assume it's fine if we can't check
+        except Exception as e:
+            print(f"[WARN] Azure token check failed: {e}")
+            return True  # Don't block on check failures
+
+    _check_azure_token()
 
 # =============================================================================
 # Path Configuration
@@ -82,6 +128,20 @@ TMP_DIR.mkdir(exist_ok=True)
 # Add shared module to path
 sys.path.insert(0, str(HAL_HARNESS / "agents"))
 
+# Try to import model utilities for quirks handling
+try:
+    from shared.model_utils import (
+        supports_temperature,
+        supports_reasoning_effort,
+        uses_max_completion_tokens,
+        supports_stop,
+        is_reasoning_model,
+    )
+    MODEL_UTILS_AVAILABLE = True
+except ImportError:
+    MODEL_UTILS_AVAILABLE = False
+    print("[WARNING] shared.model_utils not available - model quirks may not be applied")
+
 # =============================================================================
 # Benchmark to HAL benchmark name mapping
 # =============================================================================
@@ -95,6 +155,28 @@ BENCHMARK_HAL_NAME_MAP = {
     # ColBench: ONLY backend is supported, frontend uses CLIP which is different
     "colbench": "colbench_backend_programming",
     "colbench_backend_programming": "colbench_backend_programming",
+}
+
+# Environment variables used by HAL benchmarks for custom datasets
+BENCHMARK_DATASET_ENV_VAR = {
+    "scicode": "SCICODE_DATASET_PATH",
+    "scienceagentbench": "SCIENCEAGENTBENCH_DATASET_PATH",
+    "corebench": "HAL_COREBENCH_DATASET_PATH",
+    "corebench_hard": "HAL_COREBENCH_DATASET_PATH",
+    "colbench": "COLBENCH_BACKEND_DATASET_PATH",
+    "colbench_backend_programming": "COLBENCH_BACKEND_DATASET_PATH",
+    # USACO uses local files, handled differently
+}
+
+# Task ID field names for different benchmarks
+BENCHMARK_TASK_ID_FIELD = {
+    "scicode": "problem_id",
+    "scienceagentbench": "instance_id",
+    "corebench": "capsule_id",
+    "corebench_hard": "capsule_id",
+    "colbench": "id",
+    "colbench_backend_programming": "id",
+    "usaco": "problem_id",
 }
 
 # ColBench warning - frontend is NOT supported
@@ -114,6 +196,340 @@ def log(msg: str, prefix: str = "main") -> None:
     """Log with timestamp."""
     ts = datetime.now().strftime("%H:%M:%S")
     print(f"[{ts}] [{prefix}] {msg}", flush=True)
+
+
+# =============================================================================
+# Model Quirks Handling
+# =============================================================================
+
+def get_model_quirks(model_id: str) -> Dict[str, bool]:
+    """
+    Get model quirks/capabilities.
+
+    Returns dict with:
+        - supports_temperature: bool
+        - supports_stop: bool
+        - supports_reasoning_effort: bool
+        - uses_max_completion_tokens: bool
+        - is_reasoning_model: bool
+    """
+    if MODEL_UTILS_AVAILABLE:
+        return {
+            'supports_temperature': supports_temperature(model_id),
+            'supports_stop': supports_stop(model_id),
+            'supports_reasoning_effort': supports_reasoning_effort(model_id),
+            'uses_max_completion_tokens': uses_max_completion_tokens(model_id),
+            'is_reasoning_model': is_reasoning_model(model_id),
+        }
+
+    # Fallback implementation
+    model_lower = model_id.lower()
+    is_o_series = any(model_lower.startswith(p) for p in ['o1', 'o3', 'o4'])
+    is_gpt5 = 'gpt-5' in model_lower or model_lower.startswith('gpt-5')
+    is_deepseek_r1 = 'deepseek-r1' in model_lower or 'deepseek_r1' in model_lower
+
+    return {
+        'supports_temperature': not (is_o_series or is_gpt5 or is_deepseek_r1),
+        'supports_stop': not (is_o_series or is_gpt5),
+        'supports_reasoning_effort': is_o_series or is_gpt5,
+        'uses_max_completion_tokens': is_o_series or is_gpt5,
+        'is_reasoning_model': is_o_series or is_gpt5 or is_deepseek_r1,
+    }
+
+
+def validate_model_config(config_key: str, entry: Dict[str, Any]) -> List[str]:
+    """
+    Validate model configuration against quirks.
+    Returns list of warnings/issues.
+    """
+    warnings = []
+    model_id = entry.get('model_id', '')
+    quirks = get_model_quirks(model_id)
+
+    # Check temperature
+    if 'temperature' in entry and not quirks['supports_temperature']:
+        warnings.append(f"  [WARN] {config_key}: temperature={entry['temperature']} will be ignored (model doesn't support it)")
+
+    # Check reasoning_effort
+    if 'reasoning_effort' in entry and not quirks['supports_reasoning_effort']:
+        warnings.append(f"  [WARN] {config_key}: reasoning_effort={entry['reasoning_effort']} will be ignored (model doesn't support it)")
+
+    # Suggest reasoning_effort for reasoning models that don't have it set
+    if quirks['is_reasoning_model'] and 'reasoning_effort' not in entry:
+        warnings.append(f"  [INFO] {config_key}: reasoning model without reasoning_effort - will use default")
+
+    return warnings
+
+
+# =============================================================================
+# Dataset Loading
+# =============================================================================
+
+def load_benchmark_dataset(benchmark: str) -> List[Dict[str, Any]]:
+    """
+    Load the full dataset for a benchmark.
+
+    Args:
+        benchmark: Benchmark config name (scicode, scienceagentbench, corebench, colbench)
+
+    Returns:
+        List of task dictionaries
+    """
+    try:
+        if benchmark == "scicode":
+            try:
+                from datasets import load_dataset
+                dataset = list(load_dataset("SciCode1/SciCode", split="test"))
+                log(f"Loaded {len(dataset)} tasks from SciCode (HuggingFace)", "data")
+                return dataset
+            except ImportError:
+                log("ERROR: 'datasets' package required for SciCode", "data")
+                return []
+
+        elif benchmark == "scienceagentbench":
+            try:
+                from datasets import load_dataset
+                dataset = list(load_dataset("osunlp/ScienceAgentBench", split="validation"))
+                log(f"Loaded {len(dataset)} tasks from ScienceAgentBench (HuggingFace)", "data")
+                return dataset
+            except ImportError:
+                log("ERROR: 'datasets' package required for ScienceAgentBench", "data")
+                return []
+
+        elif benchmark in ("corebench", "corebench_hard"):
+            # CoreBench loads from local core_test.json file
+            core_test_path = HAL_HARNESS / "hal" / "benchmarks" / "corebench" / "core_test.json"
+            if not core_test_path.exists():
+                encrypted_file = HAL_HARNESS / "hal" / "benchmarks" / "corebench" / "core_test.json.gpg"
+                if encrypted_file.exists():
+                    log(f"ERROR: core_test.json not found. Decrypt with:", "data")
+                    log(f"  gpg --output {core_test_path} --decrypt {encrypted_file}", "data")
+                    log(f"  Password: reproducibility", "data")
+                else:
+                    log(f"ERROR: core_test.json not found at {core_test_path}", "data")
+                return []
+
+            dataset = json.loads(core_test_path.read_text())
+            log(f"Loaded {len(dataset)} tasks from CoreBench (local JSON)", "data")
+            return dataset
+
+        elif benchmark in ("colbench", "colbench_backend_programming"):
+            # ColBench loads from local JSONL file
+            colbench_path = HAL_HARNESS / "hal" / "benchmarks" / "colbench" / "data" / "backend_test.jsonl"
+            if not colbench_path.exists():
+                log(f"ERROR: ColBench data not found at {colbench_path}", "data")
+                log("Download ColBench data to hal/benchmarks/colbench/data/", "data")
+                return []
+
+            tasks = []
+            with open(colbench_path, "r") as f:
+                for i, line in enumerate(f):
+                    task = json.loads(line)
+                    task["id"] = str(i)  # Add task ID based on line number
+                    tasks.append(task)
+
+            log(f"Loaded {len(tasks)} tasks from ColBench backend (local JSONL)", "data")
+            return tasks
+
+        else:
+            log(f"Unknown benchmark: {benchmark} - cannot load dataset", "data")
+            return []
+
+    except Exception as e:
+        log(f"Failed to load dataset for {benchmark}: {e}", "data")
+        import traceback
+        traceback.print_exc()
+        return []
+
+
+def load_fix_package(task_id: str, benchmark: str) -> Optional[Dict[str, Any]]:
+    """
+    Load fix package for a specific task.
+
+    Args:
+        task_id: Task identifier
+        benchmark: Benchmark config name
+
+    Returns:
+        Fix dictionary or None if no fix exists
+    """
+    # Determine fixes directory
+    if benchmark == "colbench":
+        fix_dirs = [FIXES_DIR / "colbench", FIXES_DIR / "colbench_backend_programming"]
+    elif benchmark == "corebench":
+        fix_dirs = [FIXES_DIR / "corebench_hard"]
+    else:
+        fix_dirs = [FIXES_DIR / benchmark]
+
+    for fix_dir in fix_dirs:
+        task_fix_dir = fix_dir / str(task_id)
+        if task_fix_dir.exists():
+            fix = {"task_id": task_id, "fix_dir": task_fix_dir}
+
+            # Load all override types
+            for override_name in [
+                "instruction_override", "dependency_override",
+                "evaluation_override", "env_override", "input_override"
+            ]:
+                override_path = task_fix_dir / f"{override_name}.json"
+                if override_path.exists():
+                    try:
+                        fix[override_name] = json.loads(override_path.read_text())
+                    except json.JSONDecodeError as e:
+                        log(f"Warning: Failed to parse {override_path}: {e}", "fix")
+
+            # Load problem statement override if exists
+            problem_stmt_path = task_fix_dir / "problem_statement.txt"
+            if problem_stmt_path.exists():
+                fix["problem_statement"] = problem_stmt_path.read_text()
+
+            return fix
+
+    return None
+
+
+def load_all_fixes(benchmark: str) -> Dict[str, Dict[str, Any]]:
+    """
+    Load all fixes for a benchmark.
+
+    Args:
+        benchmark: Benchmark config name
+
+    Returns:
+        Dictionary mapping task_id -> fix dict
+    """
+    fixes = {}
+    task_ids = get_task_ids_with_fixes(benchmark)
+
+    for task_id in task_ids:
+        fix = load_fix_package(task_id, benchmark)
+        if fix:
+            fixes[task_id] = fix
+
+    log(f"Loaded {len(fixes)} fixes for {benchmark}", "fix")
+    return fixes
+
+
+def apply_fix_to_task(task: Dict[str, Any], fix: Dict[str, Any], benchmark: str) -> Tuple[Dict[str, Any], List[str]]:
+    """
+    Apply a fix to a task.
+
+    This is a simplified version that handles the common fix types.
+    Benchmark-specific complex fixes may need the full runners.
+
+    Args:
+        task: Original task dictionary
+        fix: Fix dictionary with override fields
+        benchmark: Benchmark name
+
+    Returns:
+        Tuple of (modified_task, list of changes made)
+    """
+    import copy
+    modified = copy.deepcopy(task)
+    changes = []
+
+    # Get task ID field for this benchmark
+    id_field = BENCHMARK_TASK_ID_FIELD.get(benchmark, "id")
+    task_id = str(task.get(id_field, ""))
+
+    # Apply instruction_override
+    if fix.get("instruction_override"):
+        instr = fix["instruction_override"]
+
+        # Add clarifications to task description/instruction
+        if instr.get("clarifications"):
+            clarifications = instr["clarifications"]
+            clarification_text = "\n\nCLARIFICATIONS:\n" + "\n".join(f"- {c}" for c in clarifications)
+
+            # Different benchmarks use different fields for instructions
+            for field in ["instruction", "task_inst", "problem_statement", "description", "task"]:
+                if field in modified:
+                    modified[field] = str(modified[field]) + clarification_text
+                    changes.append(f"Added {len(clarifications)} clarifications to {field}")
+                    break
+
+        # Handle step-specific overrides (for SciCode)
+        if instr.get("overrides"):
+            modified["_fix_overrides"] = instr["overrides"]
+            changes.append(f"Added step overrides: {list(instr['overrides'].keys())}")
+
+        if instr.get("step_overrides"):
+            modified["_fix_step_overrides"] = instr["step_overrides"]
+            changes.append(f"Added step overrides: {list(instr['step_overrides'].keys())}")
+
+    # Apply problem_statement override
+    if fix.get("problem_statement"):
+        for field in ["problem_statement", "instruction", "task_inst", "description"]:
+            if field in modified:
+                modified[field] = fix["problem_statement"]
+                changes.append(f"Replaced {field} with fix problem_statement")
+                break
+
+    # Apply dependency_override (store for agent to use)
+    if fix.get("dependency_override"):
+        modified["_fix_dependencies"] = fix["dependency_override"]
+        changes.append(f"Added dependency override: {list(fix['dependency_override'].keys())}")
+
+    # Apply evaluation_override (store for evaluation)
+    if fix.get("evaluation_override"):
+        modified["_fix_evaluation"] = fix["evaluation_override"]
+        changes.append(f"Added evaluation override: {list(fix['evaluation_override'].keys())}")
+
+    # Apply env_override (store for environment setup)
+    if fix.get("env_override"):
+        modified["_fix_env"] = fix["env_override"]
+        changes.append(f"Added env override: {list(fix['env_override'].keys())}")
+
+    # Apply input_override (for SciCode)
+    if fix.get("input_override"):
+        modified["_fix_input"] = fix["input_override"]
+        changes.append(f"Added input override")
+
+    return modified, changes
+
+
+def create_modified_dataset(
+    dataset: List[Dict[str, Any]],
+    fixes: Dict[str, Dict[str, Any]],
+    benchmark: str,
+    verbose: bool = True,
+) -> Tuple[List[Dict[str, Any]], Dict[str, List[str]], int, int]:
+    """
+    Create a modified dataset with fixes applied.
+
+    Args:
+        dataset: Original dataset
+        fixes: Dictionary of task_id -> fix
+        benchmark: Benchmark name
+        verbose: Whether to log changes
+
+    Returns:
+        Tuple of (modified_dataset, changes_dict, tasks_with_fixes, tasks_without_fixes)
+    """
+    id_field = BENCHMARK_TASK_ID_FIELD.get(benchmark, "id")
+    modified_dataset = []
+    all_changes = {}
+    tasks_with_fixes = 0
+    tasks_without_fixes = 0
+
+    for task in dataset:
+        task_id = str(task.get(id_field, ""))
+
+        if task_id in fixes:
+            modified, changes = apply_fix_to_task(task, fixes[task_id], benchmark)
+            modified_dataset.append(modified)
+            all_changes[task_id] = changes
+            tasks_with_fixes += 1
+
+            if verbose and changes:
+                log(f"Applied {len(changes)} fix(es) to task {task_id}", "fix")
+        else:
+            # No fix - add task as-is
+            modified_dataset.append(task)
+            tasks_without_fixes += 1
+
+    return modified_dataset, all_changes, tasks_with_fixes, tasks_without_fixes
 
 
 # =============================================================================
@@ -216,13 +632,36 @@ def get_agent_info(entry: Dict[str, Any]) -> Tuple[Path, str]:
 
 
 def build_agent_args(entry: Dict[str, Any]) -> Dict[str, Any]:
-    """Build agent_args dict from model entry."""
+    """Build agent_args dict from model entry, respecting model quirks."""
+    model_id = entry.get("model_id", "")
+    quirks = get_model_quirks(model_id)
+
     args: Dict[str, Any] = {}
 
-    if "model_id" in entry:
-        args["model_name"] = entry["model_id"]
+    if model_id:
+        args["model_name"] = model_id
 
-    for key in ["reasoning_effort", "temperature", "max_steps", "budget"]:
+    # Only add temperature if model supports it
+    if "temperature" in entry:
+        if quirks['supports_temperature']:
+            args["temperature"] = entry["temperature"]
+        else:
+            log(f"Skipping temperature for {model_id} (not supported)", "quirks")
+
+    # Only add reasoning_effort if model supports it
+    if "reasoning_effort" in entry:
+        if quirks['supports_reasoning_effort']:
+            args["reasoning_effort"] = entry["reasoning_effort"]
+        else:
+            log(f"Skipping reasoning_effort for {model_id} (not supported)", "quirks")
+
+    # Always pass these through (agent-specific parameters)
+    passthrough_keys = [
+        "max_steps", "budget", "max_tokens",
+        "use_self_debug", "use_knowledge",  # sab_example_agent params
+        "context_cutoff",  # Optional agent params
+    ]
+    for key in passthrough_keys:
         if key in entry:
             args[key] = entry[key]
 
@@ -305,8 +744,10 @@ def run_hal_eval(
     entry: Dict[str, Any],
     prefix: str,
     docker: bool = False,
-    task_ids: Optional[List[str]] = None,
     max_tasks: Optional[int] = None,
+    parallel_tasks: int = 1,
+    dataset_path: Optional[Path] = None,
+    all_tasks_mode: bool = False,
 ) -> Tuple[bool, str, Optional[Path]]:
     """
     Run HAL evaluation for a specific configuration.
@@ -317,8 +758,10 @@ def run_hal_eval(
         entry: Model entry dict from config
         prefix: Output prefix for traces
         docker: Whether to use Docker isolation
-        task_ids: Specific task IDs to run (None = all)
         max_tasks: Maximum number of tasks to run
+        parallel_tasks: Number of tasks to run concurrently (HAL's --max_concurrent)
+        dataset_path: Path to modified dataset file with fixes applied
+        all_tasks_mode: Whether running in --all-tasks mode (full benchmark vs fixes-only)
 
     Returns:
         (success, message, trace_path)
@@ -338,7 +781,7 @@ def run_hal_eval(
         "--agent_function", agent_function,
         "--agent_dir", str(agent_path),
         "--run_id", run_id,
-        "--max_concurrent", "1",
+        "--max_concurrent", str(parallel_tasks),  # HAL's concurrent task execution
     ]
 
     if docker:
@@ -347,12 +790,11 @@ def run_hal_eval(
     if max_tasks:
         cmd.extend(["--max_tasks", str(max_tasks)])
 
-    # Add task IDs if specified
-    if task_ids:
-        # Create a temporary task filter file
-        filter_file = TMP_DIR / f"task_filter_{run_id}.json"
-        filter_file.write_text(json.dumps(task_ids))
-        cmd.extend(["--task_ids", str(filter_file)])
+    # NOTE: HAL doesn't support --task_ids flag.
+    # Task filtering is handled via the modified dataset (dataset_path).
+    # - all_tasks_mode=True: dataset_path contains ALL tasks with fixes applied
+    # - all_tasks_mode=False: dataset_path contains ONLY tasks with fixes
+    # If dataset_path is None, HAL runs all tasks from the default dataset.
 
     # Add agent args
     for key, value in agent_args.items():
@@ -371,12 +813,42 @@ def run_hal_eval(
     env["HAL_PRICING_MODEL_NAME"] = config_key
     env["HAL_WEAVE_PROJECT"] = f"{prefix.rstrip('_')}_{benchmark}"
 
+    # If dataset_path provided, set the appropriate environment variable
+    if dataset_path:
+        # Look up benchmark name without _hard suffix for env var lookup
+        benchmark_base = benchmark.replace("_hard", "").replace("_backend_programming", "")
+        env_var = BENCHMARK_DATASET_ENV_VAR.get(benchmark, BENCHMARK_DATASET_ENV_VAR.get(benchmark_base))
+        if env_var:
+            env[env_var] = str(dataset_path)
+            # Verify the file exists and count tasks
+            if dataset_path.exists():
+                try:
+                    import json as _json
+                    with open(dataset_path) as _f:
+                        _data = _json.load(_f)
+                    log(f"Custom dataset: {env_var}={dataset_path} ({len(_data)} tasks)", "hal")
+                except Exception as _e:
+                    log(f"Custom dataset: {env_var}={dataset_path} (could not count: {_e})", "hal")
+            else:
+                log(f"WARNING: Custom dataset path does not exist: {dataset_path}", "hal")
+        else:
+            log(f"WARNING: No dataset env var known for {benchmark}", "hal")
+    else:
+        log(f"WARNING: No dataset_path provided - HAL will use default dataset", "hal")
+
+    # Ensure Azure/Weave integration
+    if os.environ.get('USE_DIRECT_AZURE', '').lower() == 'true':
+        env["USE_DIRECT_AZURE"] = "true"
+
     log(f"Running: {config_key}", "hal")
     log(f"Agent: {agent_path.name}", "hal")
     log(f"Model: {agent_args.get('model_name')}", "hal")
     log(f"Benchmark: {benchmark}", "hal")
-    if task_ids:
-        log(f"Tasks: {len(task_ids)} tasks with fixes", "hal")
+    log(f"Parallel tasks: {parallel_tasks}", "hal")
+    if all_tasks_mode:
+        log(f"Mode: ALL TASKS (fixes applied where available)", "hal")
+    else:
+        log(f"Mode: FIXES ONLY (filtered dataset)", "hal")
     log(f"Run ID: {run_id}", "hal")
 
     # Run with retry
@@ -385,8 +857,20 @@ def run_hal_eval(
         max_retries=3, base_timeout=7200,  # 2 hours base timeout
     )
 
+    # Extract and show dataset loading info from HAL output
+    if result and result.stdout:
+        for line in result.stdout.split('\n'):
+            if '[SciCode]' in line or 'Loading SciCode' in line or 'SCICODE_DATASET_PATH' in line:
+                log(f"HAL: {line.strip()}", "debug")
+
     if not success:
         log(f"Failed: {error_msg}", "hal")
+        if result:
+            # Print last 1000 chars of both stderr and stdout for debugging
+            if result.stderr:
+                log(f"Stderr (last 1000 chars):\n{result.stderr[-1000:]}", "hal")
+            if result.stdout:
+                log(f"Stdout (last 1000 chars):\n{result.stdout[-1000:]}", "hal")
         return False, error_msg, None
 
     # Find output trace
@@ -461,12 +945,23 @@ def main():
         help="Run with Docker isolation."
     )
     parser.add_argument(
-        "--parallel", type=int, default=1,
-        help="Number of parallel runs (default: 1)."
+        "--parallel-models", type=int, default=1,
+        help="Number of model configurations to run concurrently (default: 1)."
+    )
+    parser.add_argument(
+        "--parallel-tasks", type=int, default=1,
+        help="Number of tasks to run concurrently within each HAL evaluation (default: 1). "
+             "Uses HAL's --max_concurrent flag."
     )
     parser.add_argument(
         "--max-tasks", type=int,
         help="Maximum tasks per config (for testing)."
+    )
+    parser.add_argument(
+        "--all-tasks", action="store_true",
+        help="Run ALL tasks in benchmark, not just those with fixes. "
+             "Fixes are automatically applied to tasks that have them. "
+             "Tasks without fixes run normally."
     )
 
     # Modes
@@ -481,6 +976,10 @@ def main():
     parser.add_argument(
         "--list-fixes", action="store_true",
         help="List task IDs with fixes for each benchmark."
+    )
+    parser.add_argument(
+        "--validate", action="store_true",
+        help="Validate configurations against model quirks and exit."
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -515,7 +1014,7 @@ def main():
     elif args.benchmark:
         benchmarks_to_run = [args.benchmark]
     else:
-        if not args.list_configs and not args.list_fixes:
+        if not args.list_configs and not args.list_fixes and not args.validate:
             log("ERROR: Specify --benchmark or --all-benchmarks", "main")
             sys.exit(1)
         benchmarks_to_run = []
@@ -541,6 +1040,45 @@ def main():
         print(f"\n{'='*70}\n")
         return
 
+    # Validate mode
+    if args.validate:
+        if not benchmarks_to_run:
+            benchmarks_to_run = get_benchmarks_with_fixes()
+
+        print(f"\n{'='*70}")
+        print("Configuration Validation (Model Quirks)")
+        print(f"{'='*70}")
+
+        all_warnings = []
+        for benchmark in benchmarks_to_run:
+            try:
+                config = load_benchmark_config(benchmark)
+            except FileNotFoundError:
+                print(f"\n[ERROR] {benchmark}: config file not found")
+                continue
+
+            entries = get_model_entries(config)
+            print(f"\n{benchmark}:")
+
+            for key, entry in entries.items():
+                warnings = validate_model_config(key, entry)
+                model_id = entry.get('model_id', '?')
+                quirks = get_model_quirks(model_id)
+
+                status = "OK" if not warnings else "WARN"
+                print(f"  [{status}] {key}")
+                print(f"       model: {model_id}")
+                print(f"       quirks: temp={quirks['supports_temperature']}, stop={quirks['supports_stop']}, reasoning={quirks['supports_reasoning_effort']}")
+
+                for w in warnings:
+                    print(w)
+                    all_warnings.append(w)
+
+        print(f"\n{'='*70}")
+        print(f"Total warnings: {len(all_warnings)}")
+        print(f"{'='*70}\n")
+        return
+
     # Process each benchmark
     all_results: List[Tuple[str, str, bool, str, Optional[Path]]] = []
 
@@ -553,13 +1091,91 @@ def main():
         hal_benchmark = BENCHMARK_HAL_NAME_MAP.get(benchmark, benchmark)
 
         # Get task IDs with fixes
-        task_ids = get_task_ids_with_fixes(benchmark)
-        if not task_ids:
+        task_ids_with_fixes = get_task_ids_with_fixes(benchmark)
+
+        # For --all-tasks mode, we need at least some fixes OR explicit benchmark request
+        if not args.all_tasks and not task_ids_with_fixes:
             log(f"WARNING: No fixes found for {benchmark}, skipping", "main")
             continue
 
         log(f"Benchmark: {benchmark} (HAL: {hal_benchmark})", "main")
-        log(f"Tasks with fixes: {len(task_ids)}", "main")
+        log(f"Tasks with fixes: {len(task_ids_with_fixes)}", "main")
+
+        # Handle dataset creation for both modes
+        # NOTE: HAL doesn't support --task_ids, so we create filtered datasets instead
+        dataset = None
+        fixes = {}
+        modified_dataset_path = None
+
+        if args.all_tasks:
+            log(f"MODE: --all-tasks (run ENTIRE benchmark with fixes applied)", "main")
+
+            # Load full dataset
+            dataset = load_benchmark_dataset(benchmark)
+            if not dataset:
+                log(f"ERROR: Could not load dataset for {benchmark}", "main")
+                continue
+
+            log(f"Loaded {len(dataset)} total tasks from dataset", "main")
+
+            # Load all fixes
+            fixes = load_all_fixes(benchmark)
+
+            # Create modified dataset with fixes applied (ALL tasks)
+            modified_dataset, changes, with_fixes, without_fixes = create_modified_dataset(
+                dataset, fixes, benchmark, verbose=False
+            )
+
+            log(f"Modified dataset: {with_fixes} tasks with fixes, {without_fixes} tasks without fixes", "main")
+
+        else:
+            # Non-all-tasks mode: Create dataset with ONLY tasks that have fixes
+            log(f"MODE: fixes-only (run only tasks with fixes)", "main")
+
+            # Load full dataset
+            dataset = load_benchmark_dataset(benchmark)
+            if not dataset:
+                log(f"ERROR: Could not load dataset for {benchmark}", "main")
+                continue
+
+            # Get task ID field for filtering
+            id_field = BENCHMARK_TASK_ID_FIELD.get(benchmark, "id")
+
+            # Load all fixes
+            fixes = load_all_fixes(benchmark)
+
+            # Create dataset with ONLY tasks that have fixes
+            filtered_dataset = []
+            for task in dataset:
+                task_id = str(task.get(id_field, ""))
+                if task_id in fixes:
+                    # Apply fix and add to filtered dataset
+                    modified_task, changes = apply_fix_to_task(task, fixes[task_id], benchmark)
+                    filtered_dataset.append(modified_task)
+                    if changes:
+                        log(f"Applied {len(changes)} fix(es) to task {task_id}", "fix")
+
+            modified_dataset = filtered_dataset
+            log(f"Filtered dataset: {len(modified_dataset)} tasks with fixes (from {len(dataset)} total)", "main")
+
+        # Save modified dataset to temp file
+        # Different benchmarks use different formats:
+        # - ColBench: JSONL (one JSON object per line)
+        # - Others: JSON array
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+
+        if benchmark in ("colbench", "colbench_backend_programming"):
+            # ColBench uses JSONL format
+            modified_dataset_path = TMP_DIR / f"{benchmark}_modified_{timestamp}.jsonl"
+            with open(modified_dataset_path, "w") as f:
+                for task in modified_dataset:
+                    f.write(json.dumps(task, default=str) + "\n")
+            log(f"Saved modified dataset (JSONL format) to: {modified_dataset_path}", "main")
+        else:
+            # Other benchmarks use JSON array format
+            modified_dataset_path = TMP_DIR / f"{benchmark}_modified_{timestamp}.json"
+            modified_dataset_path.write_text(json.dumps(modified_dataset, indent=2, default=str))
+            log(f"Saved modified dataset (JSON format) to: {modified_dataset_path}", "main")
 
         # Load configuration
         try:
@@ -569,7 +1185,6 @@ def main():
             continue
 
         entries = get_model_entries(config)
-        meta = config.get("_meta", {})
 
         log(f"Found {len(entries)} configurations", "main")
 
@@ -591,9 +1206,11 @@ def main():
                 for key, entry in configs:
                     model_id = entry.get("model_id", "?")
                     effort = entry.get("reasoning_effort", "")
-                    effort_str = f" [{effort}]" if effort else ""
+                    effort_str = f" [reasoning={effort}]" if effort else ""
+                    temp = entry.get("temperature", "")
+                    temp_str = f" [temp={temp}]" if temp else ""
                     print(f"  {key}")
-                    print(f"    model: {model_id}{effort_str}")
+                    print(f"    model: {model_id}{effort_str}{temp_str}")
 
             print(f"\n{'='*70}")
             continue
@@ -627,7 +1244,7 @@ def main():
             pattern = args.model_filter.lower()
             selected = {
                 k: v for k, v in selected.items()
-                if pattern in v.get("model_id", "").lower() or pattern in v.get("short_name", "").lower()
+                if pattern in v.get("model_id", "").lower() or pattern in k.lower()
             }
             log(f"Filtered to {len(selected)} configs matching '{args.model_filter}'", "main")
 
@@ -645,30 +1262,63 @@ def main():
             print(f"\n{'='*70}")
             print(f"DRY RUN - {benchmark} (HAL: {hal_benchmark})")
             print(f"{'='*70}")
-            print(f"\nTasks with fixes ({len(task_ids)}):")
-            for tid in task_ids[:10]:
-                print(f"  - {tid}")
-            if len(task_ids) > 10:
-                print(f"  ... and {len(task_ids) - 10} more")
+
+            if args.all_tasks:
+                print(f"\nMODE: --all-tasks (run ENTIRE benchmark)")
+                if dataset:
+                    print(f"Total tasks in dataset: {len(dataset)}")
+                print(f"Tasks with fixes: {len(task_ids_with_fixes)}")
+                print(f"Tasks without fixes (run normally): {len(dataset) - len(task_ids_with_fixes) if dataset else '?'}")
+            else:
+                print(f"\nMODE: fixes-only (run only tasks with fixes)")
+                print(f"Tasks with fixes ({len(task_ids_with_fixes)}):")
+                for tid in task_ids_with_fixes[:10]:
+                    print(f"  - {tid}")
+                if len(task_ids_with_fixes) > 10:
+                    print(f"  ... and {len(task_ids_with_fixes) - 10} more")
 
             print(f"\nConfigurations ({len(selected)}):")
             for key, entry in selected.items():
                 agent_path, agent_func = get_agent_info(entry)
                 agent_args = build_agent_args(entry)
+                model_id = entry.get('model_id', '?')
+                quirks = get_model_quirks(model_id)
                 print(f"\n  {key}:")
                 print(f"    Agent: {agent_path.name}")
                 print(f"    Model: {agent_args.get('model_name')}")
                 if "reasoning_effort" in agent_args:
                     print(f"    Reasoning: {agent_args['reasoning_effort']}")
+                if "temperature" in agent_args:
+                    print(f"    Temperature: {agent_args['temperature']}")
+                print(f"    Quirks: temp={quirks['supports_temperature']}, stop={quirks['supports_stop']}")
 
             print(f"\n{'='*70}")
+            print(f"Parallel models: {args.parallel_models}")
+            print(f"Parallel tasks (per model): {args.parallel_tasks}")
+            print(f"Docker: {args.docker}")
+            print(f"All tasks mode: {args.all_tasks}")
+            print(f"{'='*70}")
+
+            # Clean up temp dataset if created for dry run
+            if modified_dataset_path and modified_dataset_path.exists():
+                modified_dataset_path.unlink()
+
             continue
 
         # Run evaluations
         log(f"Running {len(selected)} configurations with prefix '{prefix}'", "main")
+        log(f"Parallel models: {args.parallel_models}, Parallel tasks: {args.parallel_tasks}", "main")
+        if args.all_tasks:
+            log(f"Mode: ALL TASKS (fixes auto-applied where available)", "main")
+        else:
+            log(f"Mode: FIXES ONLY ({len(task_ids_with_fixes)} tasks)", "main")
 
         results: List[Tuple[str, bool, str, Optional[Path]]] = []
         lock = threading.Lock()
+
+        # Capture these for the closure
+        _dataset_path = modified_dataset_path
+        _all_tasks_mode = args.all_tasks
 
         def run_job(item: Tuple[str, Dict[str, Any]]) -> Tuple[str, bool, str, Optional[Path]]:
             key, entry = item
@@ -678,30 +1328,41 @@ def main():
                 entry=entry,
                 prefix=prefix,
                 docker=args.docker,
-                task_ids=task_ids,  # Run ALL tasks with fixes
                 max_tasks=args.max_tasks,
+                parallel_tasks=args.parallel_tasks,
+                dataset_path=_dataset_path,  # Modified dataset with fixes applied
+                all_tasks_mode=_all_tasks_mode,
             )
             return key, success, msg, trace
 
         jobs = list(selected.items())
 
-        if args.parallel > 1:
-            with ThreadPoolExecutor(max_workers=args.parallel) as executor:
-                futures = {executor.submit(run_job, job): job for job in jobs}
-                for future in as_completed(futures):
-                    result = future.result()
-                    with lock:
-                        results.append(result)
-                        key, success, msg, _ = result
-                        status = "SUCCESS" if success else "FAILED"
-                        log(f"[{len(results)}/{len(jobs)}] {status}: {key}", "main")
-        else:
-            for i, job in enumerate(jobs):
-                result = run_job(job)
-                results.append(result)
-                key, success, msg, _ = result
-                status = "SUCCESS" if success else "FAILED"
-                log(f"[{i+1}/{len(jobs)}] {status}: {key}", "main")
+        try:
+            if args.parallel_models > 1:
+                with ThreadPoolExecutor(max_workers=args.parallel_models) as executor:
+                    futures = {executor.submit(run_job, job): job for job in jobs}
+                    for future in as_completed(futures):
+                        result = future.result()
+                        with lock:
+                            results.append(result)
+                            key, success, msg, _ = result
+                            status = "SUCCESS" if success else "FAILED"
+                            log(f"[{len(results)}/{len(jobs)}] {status}: {key}", "main")
+            else:
+                for i, job in enumerate(jobs):
+                    result = run_job(job)
+                    results.append(result)
+                    key, success, msg, _ = result
+                    status = "SUCCESS" if success else "FAILED"
+                    log(f"[{i+1}/{len(jobs)}] {status}: {key}", "main")
+        finally:
+            # Clean up temp dataset file after all jobs complete
+            if modified_dataset_path and modified_dataset_path.exists():
+                try:
+                    modified_dataset_path.unlink()
+                    log(f"Cleaned up temp dataset: {modified_dataset_path.name}", "main")
+                except Exception as e:
+                    log(f"Warning: Failed to clean up temp dataset: {e}", "main")
 
         # Collect results
         for r in results:
