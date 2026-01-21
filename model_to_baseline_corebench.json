@@ -1,116 +1,66 @@
 {
-  "_meta": {
-    "benchmark": "corebench",
-    "description": "CoreBench benchmark model and agent configurations",
-    "variants": ["corebench_easy", "corebench_medium", "corebench_hard"]
-  },
-  "gpt-4.1_hal_generalist": {
-    "model_id": "openai/gpt-4.1_2025-04-14",
-    "short_name": "gpt-4.1",
-    "agent_dir": "hal-harness/agents/hal_generalist_agent",
-    "agent_function": "main.run",
-    "max_steps": 5
-  },
-  "gpt-4.1_core_agent": {
-    "model_id": "openai/gpt-4.1_2025-04-14",
-    "short_name": "gpt-4.1-core",
-    "agent_dir": "hal-harness/agents/core_agent",
-    "agent_function": "main.run",
-    "max_steps": 5
-  },
-  "gpt-4o_hal_generalist": {
-    "model_id": "openai/gpt-4o_2024-11-20",
-    "short_name": "gpt-4o",
-    "agent_dir": "hal-harness/agents/hal_generalist_agent",
-    "agent_function": "main.run",
-    "max_steps": 5
-  },
-  "gpt-4o_core_agent": {
-    "model_id": "openai/gpt-4o_2024-11-20",
-    "short_name": "gpt-4o-core",
-    "agent_dir": "hal-harness/agents/core_agent",
-    "agent_function": "main.run",
-    "max_steps": 5
-  },
-  "gpt-5-medium_hal_generalist": {
+  "gpt-5_generalist": {
     "model_id": "openai/gpt-5_2025-08-07",
-    "short_name": "gpt-5-medium",
+    "short_name": "gpt-5",
     "agent_dir": "hal-harness/agents/hal_generalist_agent",
     "agent_function": "main.run",
-    "reasoning_effort": "medium",
     "max_steps": 5
   },
-  "gpt-5-medium_core_agent": {
+  "o3_generalist": {
+    "model_id": "openai/o3_2025-04-16",
+    "short_name": "o3",
+    "agent_dir": "hal-harness/agents/hal_generalist_agent",
+    "agent_function": "main.run",
+    "max_steps": 5
+  },
+  "o3-mini_generalist": {
+    "model_id": "openai/o3-mini_2025-01-31",
+    "short_name": "o3-mini-high",
+    "agent_dir": "hal-harness/agents/hal_generalist_agent",
+    "agent_function": "main.run",
+    "max_steps": 5
+  },
+  "o4-mini_generalist": {
+    "model_id": "openai/o4-mini_2025-04-16",
+    "agent_dir": "hal-harness/agents/hal_generalist_agent",
+    "agent_function": "main.run",
+    "max_steps": 5
+  },
+  "gpt_4_1_generalist": {
+    "model_id": "openai/gpt-4.1_2025-04-14",
+    "agent_dir": "hal-harness/agents/hal_generalist_agent",
+    "agent_function": "main.run",
+    "max_steps": 5
+  },
+  "gpt-5_core_agent": {
     "model_id": "openai/gpt-5_2025-08-07",
-    "short_name": "gpt-5-medium-core",
-    "agent_dir": "hal-harness/agents/core_agent",
-    "agent_function": "main.run",
-    "reasoning_effort": "medium",
-    "max_steps": 5
-  },
-  "o3-medium_hal_generalist": {
-    "model_id": "openai/o3_2025-04-16",
-    "short_name": "o3-medium",
-    "agent_dir": "hal-harness/agents/hal_generalist_agent",
-    "agent_function": "main.run",
-    "reasoning_effort": "medium",
-    "max_steps": 5
-  },
-  "o3-low_hal_generalist": {
-    "model_id": "openai/o3_2025-04-16",
-    "short_name": "o3-low",
-    "agent_dir": "hal-harness/agents/hal_generalist_agent",
-    "agent_function": "main.run",
-    "reasoning_effort": "low",
-    "max_steps": 5
-  },
-  "o4-mini-high_hal_generalist": {
-    "model_id": "openai/o4-mini_2025-04-16",
-    "short_name": "o4-mini-high",
-    "agent_dir": "hal-harness/agents/hal_generalist_agent",
-    "agent_function": "main.run",
-    "reasoning_effort": "high",
-    "max_steps": 5
-  },
-  "o4-mini-low_hal_generalist": {
-    "model_id": "openai/o4-mini_2025-04-16",
-    "short_name": "o4-mini-low",
-    "agent_dir": "hal-harness/agents/hal_generalist_agent",
-    "agent_function": "main.run",
-    "reasoning_effort": "low",
-    "max_steps": 5
-  },
-  "gpt-oss-120b_hal_generalist": {
-    "model_id": "openai/gpt-oss-120b_1",
-    "short_name": "gpt-oss-120b",
-    "agent_dir": "hal-harness/agents/hal_generalist_agent",
-    "agent_function": "main.run",
-    "max_steps": 5
-  },
-  "deepseek-r1_hal_generalist": {
-    "model_id": "DeepSeek-R1_1",
-    "short_name": "deepseek-r1",
-    "agent_dir": "hal-harness/agents/hal_generalist_agent",
-    "agent_function": "main.run",
-    "max_steps": 5
-  },
-  "deepseek-r1_core_agent": {
-    "model_id": "DeepSeek-R1_1",
-    "short_name": "deepseek-r1-core",
+    "short_name": "gpt-5",
     "agent_dir": "hal-harness/agents/core_agent",
     "agent_function": "main.run",
     "max_steps": 5
   },
-  "deepseek-v3_hal_generalist": {
-    "model_id": "deepseek-ai/DeepSeek-V3-0324",
-    "short_name": "deepseek-v3",
-    "agent_dir": "hal-harness/agents/hal_generalist_agent",
+  "o3_core_agent": {
+    "model_id": "openai/o3_2025-04-16",
+    "short_name": "o3",
+    "agent_dir": "hal-harness/agents/core_agent",
     "agent_function": "main.run",
     "max_steps": 5
   },
-  "deepseek-v3_core_agent": {
-    "model_id": "deepseek-ai/DeepSeek-V3-0324",
-    "short_name": "deepseek-v3-core",
+  "o3-mini_core_agent": {
+    "model_id": "openai/o3-mini_2025-01-31",
+    "short_name": "o3-mini-high",
+    "agent_dir": "hal-harness/agents/core_agent",
+    "agent_function": "main.run",
+    "max_steps": 5
+  },
+  "o4-mini_core_agent": {
+    "model_id": "openai/o4-mini_2025-04-16",
+    "agent_dir": "hal-harness/agents/core_agent",
+    "agent_function": "main.run",
+    "max_steps": 5
+  },
+  "gpt_4_1_core_agent": {
+    "model_id": "openai/gpt-4.1_2025-04-14",
     "agent_dir": "hal-harness/agents/core_agent",
     "agent_function": "main.run",
     "max_steps": 5
