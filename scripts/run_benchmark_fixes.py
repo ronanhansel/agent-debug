@@ -2,20 +2,26 @@
 """
 Unified Benchmark Fix Runner
 
-This script runs HAL evaluations for any benchmark using the unified
-model_to_baseline_*.json configuration format with per-model agent_dir.
+This script runs HAL evaluations for benchmarks that have fixes available.
+It automatically detects which tasks have fixes and runs them ALL.
 
 Usage:
-    # List available configurations
+    # List available configurations for a benchmark
     python scripts/run_benchmark_fixes.py --benchmark scicode --list-configs
 
-    # Run a specific configuration
+    # List all benchmarks with fixes
+    python scripts/run_benchmark_fixes.py --list-benchmarks
+
+    # Run ALL models on ALL benchmarks that have fixes
+    python scripts/run_benchmark_fixes.py --all-benchmarks --all-configs --prefix iter1_ --docker
+
+    # Run a specific configuration on a specific benchmark
     python scripts/run_benchmark_fixes.py --benchmark scicode \
         --config gpt-5_scicode_tool_calling \
         --prefix test_ \
         --docker
 
-    # Run all configurations for a benchmark
+    # Run all configurations for a single benchmark
     python scripts/run_benchmark_fixes.py --benchmark scicode \
         --all-configs \
         --prefix iter1_ \
@@ -24,23 +30,15 @@ Usage:
     # Filter by agent
     python scripts/run_benchmark_fixes.py --benchmark scicode \
         --agent scicode_tool_calling_agent \
-        --prefix test_ \
-        --docker
+        --prefix test_
 
     # Filter by model pattern
     python scripts/run_benchmark_fixes.py --benchmark scicode \
         --model-filter gpt-5 \
         --prefix test_
 
-    # Run specific task IDs
-    python scripts/run_benchmark_fixes.py --benchmark scicode \
-        --config gpt-5_scicode_tool_calling \
-        --task-id 11 --task-id 12 \
-        --prefix fix_
-
     # Dry run
-    python scripts/run_benchmark_fixes.py --benchmark scicode \
-        --all-configs --dry-run
+    python scripts/run_benchmark_fixes.py --all-benchmarks --all-configs --dry-run
 """
 
 from __future__ import annotations
@@ -84,11 +82,104 @@ TMP_DIR.mkdir(exist_ok=True)
 # Add shared module to path
 sys.path.insert(0, str(HAL_HARNESS / "agents"))
 
+# =============================================================================
+# Benchmark to HAL benchmark name mapping
+# =============================================================================
+# Maps fixes directory names to HAL benchmark names
+BENCHMARK_HAL_NAME_MAP = {
+    "scicode": "scicode",
+    "scienceagentbench": "scienceagentbench",
+    "corebench": "corebench_hard",
+    "corebench_hard": "corebench_hard",
+    "usaco": "usaco",
+    # ColBench: ONLY backend is supported, frontend uses CLIP which is different
+    "colbench": "colbench_backend_programming",
+    "colbench_backend_programming": "colbench_backend_programming",
+}
+
+# ColBench warning - frontend is NOT supported
+COLBENCH_WARNING = """
+================================================================================
+WARNING: ColBench only supports colbench_backend_programming tasks!
+
+The frontend tasks (colbench_frontend_design) use CLIP similarity evaluation
+which requires different handling and is NOT supported by this script.
+
+Running: colbench_backend_programming
+================================================================================
+"""
+
 
 def log(msg: str, prefix: str = "main") -> None:
     """Log with timestamp."""
     ts = datetime.now().strftime("%H:%M:%S")
     print(f"[{ts}] [{prefix}] {msg}", flush=True)
+
+
+# =============================================================================
+# Benchmark and Fix Detection
+# =============================================================================
+
+def get_benchmarks_with_fixes() -> List[str]:
+    """
+    Get list of benchmarks that have fixes available.
+
+    Returns benchmark names (keys for model_to_baseline_*.json files).
+    """
+    benchmarks = set()
+
+    if not FIXES_DIR.exists():
+        return []
+
+    for subdir in FIXES_DIR.iterdir():
+        if subdir.is_dir() and not subdir.name.startswith("."):
+            # Check if there are actual task fixes inside
+            task_dirs = [d for d in subdir.iterdir() if d.is_dir() and not d.name.startswith(".")]
+            if task_dirs:
+                # Map directory name to config file name
+                dir_name = subdir.name
+
+                # Map to config file names
+                if dir_name in ("colbench", "colbench_backend_programming"):
+                    benchmarks.add("colbench")
+                elif dir_name == "corebench_hard":
+                    benchmarks.add("corebench")
+                else:
+                    benchmarks.add(dir_name)
+
+    return sorted(benchmarks)
+
+
+def get_task_ids_with_fixes(benchmark: str) -> List[str]:
+    """
+    Get list of task IDs that have fixes for a benchmark.
+
+    Args:
+        benchmark: Benchmark name (config file key)
+
+    Returns:
+        List of task IDs with fixes
+    """
+    task_ids = []
+
+    # Map benchmark config name to fixes directory name(s)
+    if benchmark == "colbench":
+        fix_dirs = [FIXES_DIR / "colbench", FIXES_DIR / "colbench_backend_programming"]
+    elif benchmark == "corebench":
+        fix_dirs = [FIXES_DIR / "corebench_hard"]
+    else:
+        fix_dirs = [FIXES_DIR / benchmark]
+
+    for fix_dir in fix_dirs:
+        if fix_dir.exists():
+            for task_dir in fix_dir.iterdir():
+                if task_dir.is_dir() and not task_dir.name.startswith("."):
+                    # Check if there's at least one fix file inside
+                    fix_files = [f for f in task_dir.iterdir() if f.suffix == ".json" and f.name != "status.json"]
+                    if fix_files or (task_dir / "README.md").exists():
+                        task_ids.append(task_dir.name)
+
+    return sorted(set(task_ids), key=lambda x: (int(x) if x.isdigit() else float('inf'), x))
 
 
 # =============================================================================
@@ -221,7 +312,7 @@ def run_hal_eval(
     Run HAL evaluation for a specific configuration.
 
     Args:
-        benchmark: Benchmark name (e.g., "scicode")
+        benchmark: HAL benchmark name (e.g., "scicode", "colbench_backend_programming")
         config_key: Configuration key (e.g., "gpt-5_scicode_tool_calling")
         entry: Model entry dict from config
         prefix: Output prefix for traces
@@ -234,17 +325,16 @@ def run_hal_eval(
     """
     agent_path, agent_function = get_agent_info(entry)
     agent_args = build_agent_args(entry)
-    short_name = entry.get("short_name", "model")
 
-    # Build run_id
+    # Build run_id from config_key (e.g., "o4-mini_core_agent")
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    run_id = f"{prefix}{short_name}_{benchmark}_{timestamp}"
+    run_id = f"{prefix}{config_key}_{timestamp}"
 
     # Build command
     cmd = [
         sys.executable, "-m", "hal.cli",
         "--benchmark", benchmark,
-        "--agent_name", f"{prefix}{short_name}",
+        "--agent_name", f"{prefix}{config_key}",
         "--agent_function", agent_function,
         "--agent_dir", str(agent_path),
         "--run_id", run_id,
@@ -256,6 +346,13 @@ def run_hal_eval(
 
     if max_tasks:
         cmd.extend(["--max_tasks", str(max_tasks)])
+
+    # Add task IDs if specified
+    if task_ids:
+        # Create a temporary task filter file
+        filter_file = TMP_DIR / f"task_filter_{run_id}.json"
+        filter_file.write_text(json.dumps(task_ids))
+        cmd.extend(["--task_ids", str(filter_file)])
 
     # Add agent args
     for key, value in agent_args.items():
@@ -277,6 +374,9 @@ def run_hal_eval(
     log(f"Running: {config_key}", "hal")
     log(f"Agent: {agent_path.name}", "hal")
     log(f"Model: {agent_args.get('model_name')}", "hal")
+    log(f"Benchmark: {benchmark}", "hal")
+    if task_ids:
+        log(f"Tasks: {len(task_ids)} tasks with fixes", "hal")
     log(f"Run ID: {run_id}", "hal")
 
     # Run with retry
@@ -318,13 +418,17 @@ def run_hal_eval(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Unified benchmark fix runner using model_to_baseline configs."
+        description="Unified benchmark fix runner - runs ALL tasks with fixes."
     )
 
-    # Required
+    # Benchmark selection
     parser.add_argument(
-        "--benchmark", "-b", required=True,
+        "--benchmark", "-b",
         help="Benchmark name (scicode, scienceagentbench, corebench, colbench, usaco)."
+    )
+    parser.add_argument(
+        "--all-benchmarks", action="store_true",
+        help="Run ALL benchmarks that have fixes available."
     )
 
     # Configuration selection
@@ -364,15 +468,19 @@ def main():
         "--max-tasks", type=int,
         help="Maximum tasks per config (for testing)."
     )
-    parser.add_argument(
-        "--task-id", dest="task_ids", action="append",
-        help="Specific task ID(s) to run. Can be repeated."
-    )
 
     # Modes
     parser.add_argument(
         "--list-configs", action="store_true",
         help="List available configurations and exit."
+    )
+    parser.add_argument(
+        "--list-benchmarks", action="store_true",
+        help="List benchmarks with fixes and exit."
+    )
+    parser.add_argument(
+        "--list-fixes", action="store_true",
+        help="List task IDs with fixes for each benchmark."
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -381,175 +489,248 @@ def main():
 
     args = parser.parse_args()
 
-    # Load configuration
-    try:
-        config = load_benchmark_config(args.benchmark)
-    except FileNotFoundError as e:
-        log(f"ERROR: {e}", "main")
-        sys.exit(1)
-
-    entries = get_model_entries(config)
-    meta = config.get("_meta", {})
-
-    log(f"Benchmark: {args.benchmark}", "main")
-    log(f"Description: {meta.get('description', 'N/A')}", "main")
-    log(f"Found {len(entries)} configurations", "main")
-
-    # List mode
-    if args.list_configs:
+    # List benchmarks mode
+    if args.list_benchmarks:
+        benchmarks = get_benchmarks_with_fixes()
         print(f"\n{'='*70}")
-        print(f"Available configurations for {args.benchmark}")
+        print("Benchmarks with fixes available:")
         print(f"{'='*70}\n")
-
-        # Group by agent
-        by_agent: Dict[str, List[Tuple[str, Dict]]] = {}
-        for key, entry in entries.items():
-            agent_dir = entry.get("agent_dir", "unknown")
-            agent_name = Path(agent_dir).name
-            by_agent.setdefault(agent_name, []).append((key, entry))
-
-        for agent_name, configs in sorted(by_agent.items()):
-            print(f"\n{agent_name}:")
-            for key, entry in configs:
-                model_id = entry.get("model_id", "?")
-                short_name = entry.get("short_name", "?")
-                effort = entry.get("reasoning_effort", "")
-                effort_str = f" [{effort}]" if effort else ""
-                print(f"  {key}")
-                print(f"    model: {model_id}{effort_str}")
-                print(f"    short_name: {short_name}")
-
-        print(f"\n{'='*70}")
-        return
-
-    # Determine which configs to run
-    selected: Dict[str, Dict[str, Any]] = {}
-
-    if args.configs:
-        for key in args.configs:
-            if key in entries:
-                selected[key] = entries[key]
+        for b in benchmarks:
+            task_count = len(get_task_ids_with_fixes(b))
+            hal_name = BENCHMARK_HAL_NAME_MAP.get(b, b)
+            if b == "colbench":
+                print(f"  {b}: {task_count} tasks (runs as {hal_name} - BACKEND ONLY)")
             else:
-                log(f"WARNING: Config '{key}' not found", "main")
-
-    elif args.all_configs:
-        selected = entries.copy()
-
-    else:
-        log("ERROR: Specify --config, --all-configs, --agent, or --model-filter", "main")
-        sys.exit(1)
-
-    # Apply filters
-    if args.agent:
-        selected = {
-            k: v for k, v in selected.items()
-            if args.agent in v.get("agent_dir", "")
-        }
-        log(f"Filtered to {len(selected)} configs with agent '{args.agent}'", "main")
-
-    if args.model_filter:
-        pattern = args.model_filter.lower()
-        selected = {
-            k: v for k, v in selected.items()
-            if pattern in v.get("model_id", "").lower() or pattern in v.get("short_name", "").lower()
-        }
-        log(f"Filtered to {len(selected)} configs matching '{args.model_filter}'", "main")
-
-    if not selected:
-        log("No configurations selected", "main")
-        sys.exit(1)
-
-    # Ensure prefix ends with underscore
-    prefix = args.prefix
-    if not prefix.endswith("_"):
-        prefix = prefix + "_"
-
-    # Dry run
-    if args.dry_run:
-        print(f"\n{'='*70}")
-        print("DRY RUN - Would execute:")
-        print(f"{'='*70}\n")
-
-        for key, entry in selected.items():
-            agent_path, agent_func = get_agent_info(entry)
-            agent_args = build_agent_args(entry)
-            print(f"\n{key}:")
-            print(f"  Agent: {agent_path.name}")
-            print(f"  Function: {agent_func}")
-            print(f"  Model: {agent_args.get('model_name')}")
-            if "reasoning_effort" in agent_args:
-                print(f"  Reasoning: {agent_args['reasoning_effort']}")
-
-        print(f"\n{'='*70}")
-        print(f"Total: {len(selected)} configurations")
-        print(f"Prefix: {prefix}")
-        print(f"Docker: {args.docker}")
-        print(f"Parallel: {args.parallel}")
-        print(f"{'='*70}\n")
+                print(f"  {b}: {task_count} tasks")
+        print(f"\n{'='*70}\n")
         return
 
-    # Run evaluations
-    log(f"Running {len(selected)} configurations with prefix '{prefix}'", "main")
-
-    results: List[Tuple[str, bool, str, Optional[Path]]] = []
-    lock = threading.Lock()
-
-    def run_job(item: Tuple[str, Dict[str, Any]]) -> Tuple[str, bool, str, Optional[Path]]:
-        key, entry = item
-        success, msg, trace = run_hal_eval(
-            benchmark=args.benchmark,
-            config_key=key,
-            entry=entry,
-            prefix=prefix,
-            docker=args.docker,
-            task_ids=args.task_ids,
-            max_tasks=args.max_tasks,
-        )
-        return key, success, msg, trace
-
-    jobs = list(selected.items())
-
-    if args.parallel > 1:
-        with ThreadPoolExecutor(max_workers=args.parallel) as executor:
-            futures = {executor.submit(run_job, job): job for job in jobs}
-            for future in as_completed(futures):
-                result = future.result()
-                with lock:
-                    results.append(result)
-                    key, success, msg, _ = result
-                    status = "SUCCESS" if success else "FAILED"
-                    log(f"[{len(results)}/{len(jobs)}] {status}: {key}", "main")
+    # Determine which benchmarks to run
+    if args.all_benchmarks:
+        benchmarks_to_run = get_benchmarks_with_fixes()
+        if not benchmarks_to_run:
+            log("ERROR: No benchmarks with fixes found", "main")
+            sys.exit(1)
+        log(f"Running ALL benchmarks with fixes: {', '.join(benchmarks_to_run)}", "main")
+    elif args.benchmark:
+        benchmarks_to_run = [args.benchmark]
     else:
-        for i, job in enumerate(jobs):
-            result = run_job(job)
-            results.append(result)
-            key, success, msg, _ = result
-            status = "SUCCESS" if success else "FAILED"
-            log(f"[{i+1}/{len(jobs)}] {status}: {key}", "main")
+        if not args.list_configs and not args.list_fixes:
+            log("ERROR: Specify --benchmark or --all-benchmarks", "main")
+            sys.exit(1)
+        benchmarks_to_run = []
 
-    # Summary
-    succeeded = [r for r in results if r[1]]
-    failed = [r for r in results if not r[1]]
+    # List fixes mode
+    if args.list_fixes:
+        if not benchmarks_to_run:
+            benchmarks_to_run = get_benchmarks_with_fixes()
 
-    print(f"\n{'='*70}")
-    print("SUMMARY")
-    print(f"{'='*70}")
-    print(f"Total: {len(results)}")
-    print(f"Succeeded: {len(succeeded)}")
-    print(f"Failed: {len(failed)}")
+        print(f"\n{'='*70}")
+        print("Tasks with fixes:")
+        print(f"{'='*70}")
 
-    if succeeded:
-        print("\nSuccessful runs:")
-        for key, _, _, trace in succeeded:
-            trace_name = trace.name if trace else "no trace"
-            print(f"  - {key}: {trace_name}")
+        for benchmark in benchmarks_to_run:
+            task_ids = get_task_ids_with_fixes(benchmark)
+            hal_name = BENCHMARK_HAL_NAME_MAP.get(benchmark, benchmark)
+            print(f"\n{benchmark} ({len(task_ids)} tasks) -> HAL: {hal_name}")
+            if benchmark == "colbench":
+                print("  WARNING: Only colbench_backend_programming is supported!")
+            for tid in task_ids:
+                print(f"    - {tid}")
 
-    if failed:
-        print("\nFailed runs:")
-        for key, _, msg, _ in failed:
-            print(f"  - {key}: {msg}")
+        print(f"\n{'='*70}\n")
+        return
 
-    print(f"{'='*70}\n")
+    # Process each benchmark
+    all_results: List[Tuple[str, str, bool, str, Optional[Path]]] = []
+
+    for benchmark in benchmarks_to_run:
+        # Show ColBench warning
+        if benchmark == "colbench":
+            print(COLBENCH_WARNING)
+
+        # Get HAL benchmark name
+        hal_benchmark = BENCHMARK_HAL_NAME_MAP.get(benchmark, benchmark)
+
+        # Get task IDs with fixes
+        task_ids = get_task_ids_with_fixes(benchmark)
+        if not task_ids:
+            log(f"WARNING: No fixes found for {benchmark}, skipping", "main")
+            continue
+
+        log(f"Benchmark: {benchmark} (HAL: {hal_benchmark})", "main")
+        log(f"Tasks with fixes: {len(task_ids)}", "main")
+
+        # Load configuration
+        try:
+            config = load_benchmark_config(benchmark)
+        except FileNotFoundError as e:
+            log(f"ERROR: {e}", "main")
+            continue
+
+        entries = get_model_entries(config)
+        meta = config.get("_meta", {})
+
+        log(f"Found {len(entries)} configurations", "main")
+
+        # List configs mode
+        if args.list_configs:
+            print(f"\n{'='*70}")
+            print(f"Available configurations for {benchmark}")
+            print(f"{'='*70}\n")
+
+            # Group by agent
+            by_agent: Dict[str, List[Tuple[str, Dict]]] = {}
+            for key, entry in entries.items():
+                agent_dir = entry.get("agent_dir", "unknown")
+                agent_name = Path(agent_dir).name
+                by_agent.setdefault(agent_name, []).append((key, entry))
+
+            for agent_name, configs in sorted(by_agent.items()):
+                print(f"\n{agent_name}:")
+                for key, entry in configs:
+                    model_id = entry.get("model_id", "?")
+                    effort = entry.get("reasoning_effort", "")
+                    effort_str = f" [{effort}]" if effort else ""
+                    print(f"  {key}")
+                    print(f"    model: {model_id}{effort_str}")
+
+            print(f"\n{'='*70}")
+            continue
+
+        # Determine which configs to run
+        selected: Dict[str, Dict[str, Any]] = {}
+
+        if args.configs:
+            for key in args.configs:
+                if key in entries:
+                    selected[key] = entries[key]
+                else:
+                    log(f"WARNING: Config '{key}' not found", "main")
+
+        elif args.all_configs:
+            selected = entries.copy()
+
+        else:
+            log("ERROR: Specify --config or --all-configs", "main")
+            continue
+
+        # Apply filters
+        if args.agent:
+            selected = {
+                k: v for k, v in selected.items()
+                if args.agent in v.get("agent_dir", "")
+            }
+            log(f"Filtered to {len(selected)} configs with agent '{args.agent}'", "main")
+
+        if args.model_filter:
+            pattern = args.model_filter.lower()
+            selected = {
+                k: v for k, v in selected.items()
+                if pattern in v.get("model_id", "").lower() or pattern in v.get("short_name", "").lower()
+            }
+            log(f"Filtered to {len(selected)} configs matching '{args.model_filter}'", "main")
+
+        if not selected:
+            log(f"No configurations selected for {benchmark}", "main")
+            continue
+
+        # Ensure prefix ends with underscore
+        prefix = args.prefix
+        if not prefix.endswith("_"):
+            prefix = prefix + "_"
+
+        # Dry run
+        if args.dry_run:
+            print(f"\n{'='*70}")
+            print(f"DRY RUN - {benchmark} (HAL: {hal_benchmark})")
+            print(f"{'='*70}")
+            print(f"\nTasks with fixes ({len(task_ids)}):")
+            for tid in task_ids[:10]:
+                print(f"  - {tid}")
+            if len(task_ids) > 10:
+                print(f"  ... and {len(task_ids) - 10} more")
+
+            print(f"\nConfigurations ({len(selected)}):")
+            for key, entry in selected.items():
+                agent_path, agent_func = get_agent_info(entry)
+                agent_args = build_agent_args(entry)
+                print(f"\n  {key}:")
+                print(f"    Agent: {agent_path.name}")
+                print(f"    Model: {agent_args.get('model_name')}")
+                if "reasoning_effort" in agent_args:
+                    print(f"    Reasoning: {agent_args['reasoning_effort']}")
+
+            print(f"\n{'='*70}")
+            continue
+
+        # Run evaluations
+        log(f"Running {len(selected)} configurations with prefix '{prefix}'", "main")
+
+        results: List[Tuple[str, bool, str, Optional[Path]]] = []
+        lock = threading.Lock()
+
+        def run_job(item: Tuple[str, Dict[str, Any]]) -> Tuple[str, bool, str, Optional[Path]]:
+            key, entry = item
+            success, msg, trace = run_hal_eval(
+                benchmark=hal_benchmark,
+                config_key=key,
+                entry=entry,
+                prefix=prefix,
+                docker=args.docker,
+                task_ids=task_ids,  # Run ALL tasks with fixes
+                max_tasks=args.max_tasks,
+            )
+            return key, success, msg, trace
+
+        jobs = list(selected.items())
+
+        if args.parallel > 1:
+            with ThreadPoolExecutor(max_workers=args.parallel) as executor:
+                futures = {executor.submit(run_job, job): job for job in jobs}
+                for future in as_completed(futures):
+                    result = future.result()
+                    with lock:
+                        results.append(result)
+                        key, success, msg, _ = result
+                        status = "SUCCESS" if success else "FAILED"
+                        log(f"[{len(results)}/{len(jobs)}] {status}: {key}", "main")
+        else:
+            for i, job in enumerate(jobs):
+                result = run_job(job)
+                results.append(result)
+                key, success, msg, _ = result
+                status = "SUCCESS" if success else "FAILED"
+                log(f"[{i+1}/{len(jobs)}] {status}: {key}", "main")
+
+        # Collect results
+        for r in results:
+            all_results.append((benchmark, r[0], r[1], r[2], r[3]))
+
+    # Final Summary
+    if all_results:
+        succeeded = [r for r in all_results if r[2]]
+        failed = [r for r in all_results if not r[2]]
+
+        print(f"\n{'='*70}")
+        print("FINAL SUMMARY")
+        print(f"{'='*70}")
+        print(f"Total: {len(all_results)}")
+        print(f"Succeeded: {len(succeeded)}")
+        print(f"Failed: {len(failed)}")
+
+        if succeeded:
+            print("\nSuccessful runs:")
+            for benchmark, key, _, _, trace in succeeded:
+                trace_name = trace.name if trace else "no trace"
+                print(f"  - [{benchmark}] {key}: {trace_name}")
+
+        if failed:
+            print("\nFailed runs:")
+            for benchmark, key, _, msg, _ in failed:
+                print(f"  - [{benchmark}] {key}: {msg}")
+
+        print(f"{'='*70}\n")
 
 
 if __name__ == "__main__":
