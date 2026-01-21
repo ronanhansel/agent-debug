@@ -34,16 +34,16 @@ python scripts/eval_rubric.py \
     --trace-file traces/scicode_honey_openai_o3_2025.json \
     --trace-file traces/scicode_honey_openai_o4-mini_2025-04-16_high.json \
     --trace-file traces/scicode_honey_openai_o4-mini_2025-04-16_low.json \
-    --trace-file traces/scicode_lady_openai_gpt-4_1.json \
-    --trace-file traces/scicode_lady_openai_o3_2025.json \
-    --trace-file traces/scicode_lady_openai_o4-mini_2025-04-16_high.json \
-    --trace-file traces/scicode_lady_openai_o4-mini_2025-04-16_low.json \
-    --trace-file traces/scicode_lady_openai_gpt-5_2025.json \
-    --trace-file traces/scicode_lady_openai_gpt-5-mini_2025.json \
-    --trace-file traces/scicode_lady_openai_gpt-4o_2024.json \
-    --trace-file traces/scicode_lady_openai_o3-mini_2025.json \
-    --trace-file traces/scicode_lady_DeepSeek-R1.json \
-    --trace-file traces/scicode_lady_deepseek-ai_DeepSeek-V3.json \
+    --trace-file traces/scicode_sea_openai_gpt-4_1.json \
+    --trace-file traces/scicode_sea_openai_o3_2025.json \
+    --trace-file traces/scicode_sea_openai_o4-mini_2025-04-16_high.json \
+    --trace-file traces/scicode_sea_openai_o4-mini_2025-04-16_low.json \
+    --trace-file traces/scicode_sea_openai_gpt-5_2025.json \
+    --trace-file traces/scicode_sea_openai_gpt-5-mini_2025.json \
+    --trace-file traces/scicode_sea_openai_gpt-4o_2024.json \
+    --trace-file traces/scicode_sea_openai_o3-mini_2025.json \
+    --trace-file traces/scicode_sea_DeepSeek-R1.json \
+    --trace-file traces/scicode_sea_deepseek-ai_DeepSeek-V3.json \
     --rubric rubric_templates/scicode.txt \
     --rubric-model openai:gpt-5.2 \
     --failed-only -y \

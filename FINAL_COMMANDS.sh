@@ -46,40 +46,40 @@ python scripts/extract_weave_traces.py \
     --merge-input traces/scicode_honey_openai_o4-mini_high_MERGED_UPLOAD.json \
     --merge-input traces/scicode_honey_openai_o4-mini_low_MERGED_UPLOAD.json
 
-# SCICODE_LADY (10 models)
-python scripts/merge_traces.py --input 'traces/scicode_lady__scicode_lady_openai_gpt-4_1_2025-04-14_*_UPLOAD.json' --output traces/scicode_lady_openai_gpt-4_1_MERGED_UPLOAD.json --force && \
-python scripts/merge_traces.py --input 'traces/scicode_lady__scicode_lady_openai_o3_2025-04-16_medium_*_UPLOAD.json' --output traces/scicode_lady_openai_o3_medium_MERGED_UPLOAD.json --force && \
-python scripts/merge_traces.py --input 'traces/scicode_lady__scicode_lady_openai_o4-mini_2025-04-16_high_*_UPLOAD.json' --output traces/scicode_lady_openai_o4-mini_high_MERGED_UPLOAD.json --force && \
-python scripts/merge_traces.py --input 'traces/scicode_lady__scicode_lady_openai_o4-mini_2025-04-16_low_*_UPLOAD.json' --output traces/scicode_lady_openai_o4-mini_low_MERGED_UPLOAD.json --force && \
-python scripts/merge_traces.py --input 'traces/scicode_lady__scicode_lady_openai_gpt-5_2025-08-07_*_UPLOAD.json' --output traces/scicode_lady_openai_gpt-5_MERGED_UPLOAD.json --force && \
-python scripts/merge_traces.py --input 'traces/scicode_lady__scicode_lady_openai_gpt-5-mini_2025-08-07_*_UPLOAD.json' --output traces/scicode_lady_openai_gpt-5-mini_MERGED_UPLOAD.json --force && \
-python scripts/merge_traces.py --input 'traces/scicode_lady__scicode_lady_openai_gpt-4o_2024-11-20_*_UPLOAD.json' --output traces/scicode_lady_openai_gpt-4o_MERGED_UPLOAD.json --force && \
-python scripts/merge_traces.py --input 'traces/scicode_lady__scicode_lady_openai_o3-mini_2025-01-31_high_*_UPLOAD.json' --output traces/scicode_lady_openai_o3-mini_high_MERGED_UPLOAD.json --force && \
-python scripts/merge_traces.py --input 'traces/scicode_lady__scicode_lady_DeepSeek-R1_1_*_UPLOAD.json' --output traces/scicode_lady_DeepSeek-R1_MERGED_UPLOAD.json --force && \
-python scripts/merge_traces.py --input 'traces/scicode_lady__scicode_lady_deepseek-ai_DeepSeek-V3-0324_*_UPLOAD.json' --output traces/scicode_lady_deepseek-v3_MERGED_UPLOAD.json --force
+# scicode_sea (10 models)
+python scripts/merge_traces.py --input 'traces/scicode_sea__scicode_sea_openai_gpt-4_1_2025-04-14_*_UPLOAD.json' --output traces/scicode_sea_openai_gpt-4_1_MERGED_UPLOAD.json --force && \
+python scripts/merge_traces.py --input 'traces/scicode_sea__scicode_sea_openai_o3_2025-04-16_medium_*_UPLOAD.json' --output traces/scicode_sea_openai_o3_medium_MERGED_UPLOAD.json --force && \
+python scripts/merge_traces.py --input 'traces/scicode_sea__scicode_sea_openai_o4-mini_2025-04-16_high_*_UPLOAD.json' --output traces/scicode_sea_openai_o4-mini_high_MERGED_UPLOAD.json --force && \
+python scripts/merge_traces.py --input 'traces/scicode_sea__scicode_sea_openai_o4-mini_2025-04-16_low_*_UPLOAD.json' --output traces/scicode_sea_openai_o4-mini_low_MERGED_UPLOAD.json --force && \
+python scripts/merge_traces.py --input 'traces/scicode_sea__scicode_sea_openai_gpt-5_2025-08-07_*_UPLOAD.json' --output traces/scicode_sea_openai_gpt-5_MERGED_UPLOAD.json --force && \
+python scripts/merge_traces.py --input 'traces/scicode_sea__scicode_sea_openai_gpt-5-mini_2025-08-07_*_UPLOAD.json' --output traces/scicode_sea_openai_gpt-5-mini_MERGED_UPLOAD.json --force && \
+python scripts/merge_traces.py --input 'traces/scicode_sea__scicode_sea_openai_gpt-4o_2024-11-20_*_UPLOAD.json' --output traces/scicode_sea_openai_gpt-4o_MERGED_UPLOAD.json --force && \
+python scripts/merge_traces.py --input 'traces/scicode_sea__scicode_sea_openai_o3-mini_2025-01-31_high_*_UPLOAD.json' --output traces/scicode_sea_openai_o3-mini_high_MERGED_UPLOAD.json --force && \
+python scripts/merge_traces.py --input 'traces/scicode_sea__scicode_sea_DeepSeek-R1_1_*_UPLOAD.json' --output traces/scicode_sea_DeepSeek-R1_MERGED_UPLOAD.json --force && \
+python scripts/merge_traces.py --input 'traces/scicode_sea__scicode_sea_deepseek-ai_DeepSeek-V3-0324_*_UPLOAD.json' --output traces/scicode_sea_deepseek-v3_MERGED_UPLOAD.json --force
 
 python scripts/extract_weave_traces.py \
-    --project ronanhansel-hanoi-university-of-science-and-technology/scicode_lady_scicode \
-    --prefix scicode_lady_openai_gpt-4_1 \
-    --prefix scicode_lady_openai_o3_2025 \
-    --prefix scicode_lady_openai_o4-mini_2025-04-16_high \
-    --prefix scicode_lady_openai_o4-mini_2025-04-16_low \
-    --prefix scicode_lady_openai_gpt-5_2025 \
-    --prefix scicode_lady_openai_gpt-5-mini_2025 \
-    --prefix scicode_lady_openai_gpt-4o_2024 \
-    --prefix scicode_lady_openai_o3-mini_2025 \
-    --prefix scicode_lady_DeepSeek-R1 \
-    --prefix scicode_lady_deepseek-ai_DeepSeek-V3 \
-    --merge-input traces/scicode_lady_openai_gpt-4_1_MERGED_UPLOAD.json \
-    --merge-input traces/scicode_lady_openai_o3_medium_MERGED_UPLOAD.json \
-    --merge-input traces/scicode_lady_openai_o4-mini_high_MERGED_UPLOAD.json \
-    --merge-input traces/scicode_lady_openai_o4-mini_low_MERGED_UPLOAD.json \
-    --merge-input traces/scicode_lady_openai_gpt-5_MERGED_UPLOAD.json \
-    --merge-input traces/scicode_lady_openai_gpt-5-mini_MERGED_UPLOAD.json \
-    --merge-input traces/scicode_lady_openai_gpt-4o_MERGED_UPLOAD.json \
-    --merge-input traces/scicode_lady_openai_o3-mini_high_MERGED_UPLOAD.json \
-    --merge-input traces/scicode_lady_DeepSeek-R1_MERGED_UPLOAD.json \
-    --merge-input traces/scicode_lady_deepseek-v3_MERGED_UPLOAD.json
+    --project ronanhansel-hanoi-university-of-science-and-technology/scicode_sea_scicode \
+    --prefix scicode_sea_openai_gpt-4_1 \
+    --prefix scicode_sea_openai_o3_2025 \
+    --prefix scicode_sea_openai_o4-mini_2025-04-16_high \
+    --prefix scicode_sea_openai_o4-mini_2025-04-16_low \
+    --prefix scicode_sea_openai_gpt-5_2025 \
+    --prefix scicode_sea_openai_gpt-5-mini_2025 \
+    --prefix scicode_sea_openai_gpt-4o_2024 \
+    --prefix scicode_sea_openai_o3-mini_2025 \
+    --prefix scicode_sea_DeepSeek-R1 \
+    --prefix scicode_sea_deepseek-ai_DeepSeek-V3 \
+    --merge-input traces/scicode_sea_openai_gpt-4_1_MERGED_UPLOAD.json \
+    --merge-input traces/scicode_sea_openai_o3_medium_MERGED_UPLOAD.json \
+    --merge-input traces/scicode_sea_openai_o4-mini_high_MERGED_UPLOAD.json \
+    --merge-input traces/scicode_sea_openai_o4-mini_low_MERGED_UPLOAD.json \
+    --merge-input traces/scicode_sea_openai_gpt-5_MERGED_UPLOAD.json \
+    --merge-input traces/scicode_sea_openai_gpt-5-mini_MERGED_UPLOAD.json \
+    --merge-input traces/scicode_sea_openai_gpt-4o_MERGED_UPLOAD.json \
+    --merge-input traces/scicode_sea_openai_o3-mini_high_MERGED_UPLOAD.json \
+    --merge-input traces/scicode_sea_DeepSeek-R1_MERGED_UPLOAD.json \
+    --merge-input traces/scicode_sea_deepseek-v3_MERGED_UPLOAD.json
 
 echo "✓ SciCode completed"
 fi
@@ -303,7 +303,7 @@ from pathlib import Path
 
 traces = []
 # Only check FINAL output files (not intermediate _MERGED_UPLOAD.json or individual __*.json files)
-for pattern in ["scicode_honey_*.json", "scicode_lady_*.json", "prop_*.json", "iter1_*.json",
+for pattern in ["scicode_honey_*.json", "scicode_sea_*.json", "prop_*.json", "iter1_*.json",
                 "sab_mate_*.json", "sab_cow_*.json", "sab_husky_*.json", "col_ivy_*.json", "col_zuck_*.json"]:
     for f in glob.glob(f"traces/{pattern}"):
         # Skip intermediate files - only check final outputs

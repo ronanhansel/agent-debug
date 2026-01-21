@@ -30,7 +30,7 @@ echo ""
 if [ "$BENCHMARK" = "all" ] || [ "$BENCHMARK" = "scicode" ]; then
 echo "=== SciCode ==="
 python scripts/judge.py \
-    --pattern "scicode_lady_*" \
+    --pattern "scicode_sea_*" \
     --pattern "scicode_honey_*" \
     --rubric-dir rubrics_output/scicode \
     --output judge_output/scicode_verdict.csv \
