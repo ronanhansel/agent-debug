@@ -298,7 +298,10 @@ def merge_local_traces(
 
         # Also extract from raw_eval_results if available
         raw_eval = data.get("raw_eval_results", {})
-        eval_results = raw_eval.get("eval_result", {})
+        if isinstance(raw_eval, dict):
+            eval_results = raw_eval.get("eval_result", {})
+        else:
+            eval_results = {}
         for task_id, eval_data in eval_results.items():
             tasks_with_eval_results.add(str(task_id))
             if isinstance(eval_data, dict):
@@ -350,6 +353,8 @@ def merge_local_traces(
             bucket["output_tokens"] += usage_stats.get("output_tokens", 0)
 
         capsule_eval = data.get("raw_eval_results") or {}
+        if not isinstance(capsule_eval, dict):
+            capsule_eval = {}
         for task_id, stats in capsule_eval.items():
             raw_eval_results[task_id] = stats
             if isinstance(stats, dict):

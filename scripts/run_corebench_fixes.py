@@ -1607,6 +1607,10 @@ def main() -> None:
 
             # Merge each model group separately
             merged_traces: List[Path] = []
+            # Build prefix part for merged run_id (same pattern as run_one_capsule)
+            prefix_value = str(args.prefix or "").strip()
+            prefix_part = f"{_slugify(prefix_value, '')}_" if prefix_value else ""
+
             for model_key, traces in sorted(traces_by_model.items()):
                 traces = sorted(traces, key=lambda p: p.name)
                 merged_trace = merge_trace_files(
@@ -1614,7 +1618,7 @@ def main() -> None:
                     benchmark=args.benchmark,
                     agent_dir=agent_dir,
                     output_path=None,  # Auto-generate per model
-                    merged_run_id=f"{args.benchmark}_{model_key}_FIXED" if model_key != "unknown" else None,
+                    merged_run_id=f"{prefix_part}{args.benchmark}_{model_key}_FIXED" if model_key != "unknown" else None,
                 )
                 merged_traces.append(merged_trace)
                 print(f"[merge] Saved merged trace for {model_key} -> {merged_trace}")
