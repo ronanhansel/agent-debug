@@ -563,7 +563,7 @@ python scripts/claude_fixer_scicode.py \
 
 # Apply fixes
 python scripts/run_scicode_fixes.py --list-fixes
-python scripts/run_scicode_fixes.py --all-models --prefix scicode_lolipop --docker --parallel 1
+python scripts/run_scicode_fixes.py --all-models --prefix scicode_mud --docker --parallel 120
 ```
 
 ### CoreBench
