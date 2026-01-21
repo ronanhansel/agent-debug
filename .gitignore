@@ -10,4 +10,7 @@ fixable_output/
 log/
 results/
 .DS_Store
-.tmp/logs/
+.tmp/
+logs/
+tmp_*/
+new_traces/
