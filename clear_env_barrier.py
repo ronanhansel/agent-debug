@@ -111,33 +111,110 @@ def load_trace(trace_path: str) -> Dict[str, Any]:
         return json.load(f)
 
 
-def get_all_replaced_cells(traces_dir: Path) -> List[Tuple[str, str]]:
+def normalize_model_name_with_config(trace_model_part: str, trace_data: dict = None) -> str:
+    """
+    Convert trace file model name to CSV row model name suffix.
+    Uses trace_data config to get reasoning_effort when needed.
+    """
+    # Get reasoning_effort from trace config if available
+    reasoning_effort = None
+    if trace_data:
+        reasoning_effort = trace_data.get('config', {}).get('agent_args', {}).get('reasoning_effort')
+
+    model_mappings = {
+        'openai_gpt-4_1': 'gpt_4_1_20250414',
+        'openai_gpt-4o_2024': 'gpt_4o_20241120',
+        'openai_gpt-4o': 'gpt_4o_20241120',
+        'openai_gpt-5_2025': 'gpt_5_20250807',
+        'openai_gpt-5_medium': 'gpt_5_20250807_medium',
+        'openai_gpt-5-mini_2025': 'gpt_5_mini_20250807',
+        'openai_gpt-5-mini': 'gpt_5_mini_20250807',
+        'openai_o3_2025': 'o3_20250416',
+        'openai_o3_medium': 'o3_20250416_medium',
+        'openai_o3_low': 'o3_20250416_low',
+        'openai_o3-mini_2025': 'o3_mini_20250131_high',
+        'openai_o3-mini_high': 'o3_mini_20250131_high',
+        'openai_o3_2025-04-16_low': 'o3_20250416_low',
+        'openai_o3_2025-04-16_medium': 'o3_20250416_medium',
+        'openai_o4-mini_2025-04-16_high': 'o4_mini_20250416_high',
+        'openai_o4-mini_2025-04-16_low': 'o4_mini_20250416_low',
+        'openai_o4-mini_high': 'o4_mini_20250416_high',
+        'openai_o4-mini_low': 'o4_mini_20250416_low',
+        'openai_gpt-oss-120b': 'oss_120b',
+        'DeepSeek-R1': 'deepseek_r1',
+        'deepseek-ai_DeepSeek-V3': 'deepseek_v3',
+    }
+
+    # Special handling for models that need reasoning_effort suffix from config
+    if reasoning_effort and trace_model_part in model_mappings:
+        if trace_model_part == 'openai_gpt-5_2025' and reasoning_effort == 'medium':
+            return 'gpt_5_20250807_medium'
+        if trace_model_part == 'openai_o3_2025' and reasoning_effort == 'medium':
+            return 'o3_20250416_medium'
+
+    if trace_model_part in model_mappings:
+        return model_mappings[trace_model_part]
+
+    return trace_model_part.replace('-', '_').replace('.', '_').lower()
+
+
+def get_csv_row_id_with_config(trace_filename: str, trace_data: dict = None) -> str:
+    """Convert trace filename to CSV row ID, using trace_data for reasoning_effort."""
+    prefix, model_part, _ = extract_trace_info(trace_filename)
+
+    if prefix not in TRACE_PREFIX_TO_AGENT:
+        return None
+
+    agent_name, _ = TRACE_PREFIX_TO_AGENT[prefix]
+    model_suffix = normalize_model_name_with_config(model_part, trace_data)
+
+    return f"{agent_name}:{model_suffix}"
+
+
+def get_all_replaced_cells(traces_dir: Path, df_index: set) -> List[Tuple[str, str]]:
     """
     Get list of all (row_id, column) pairs that were replaced in the new trace run.
 
     Returns list of (row_id, column) tuples for cells that have trace data.
+    Uses fallback logic to map suffixed models to base models when needed.
     """
     replaced_cells = []
+    fallback_notes = []
 
     trace_files = sorted([f.name for f in traces_dir.glob('*.json')])
 
     for trace_file in trace_files:
         trace_path = traces_dir / trace_file
 
-        # Get CSV row ID
-        row_id = get_csv_row_id(trace_file)
+        # Load trace data FIRST (needed for reasoning_effort)
+        try:
+            trace_data = load_trace(str(trace_path))
+        except Exception as e:
+            continue
+
+        # Get CSV row ID with config
+        row_id = get_csv_row_id_with_config(trace_file, trace_data)
         if row_id is None:
             continue
+
+        # Check if row exists, try fallback if not
+        if row_id not in df_index:
+            fallback_row_id = None
+            for suffix in ['_high', '_low', '_medium']:
+                if row_id.endswith(suffix):
+                    base_row_id = row_id[:-len(suffix)]
+                    if base_row_id in df_index:
+                        fallback_row_id = base_row_id
+                        fallback_notes.append(f"  NOTE: Falling back from '{row_id}' to '{fallback_row_id}'")
+                        break
+            if fallback_row_id:
+                row_id = fallback_row_id
+            else:
+                continue
 
         # Get column prefix
         col_prefix = get_column_prefix(trace_file)
         if col_prefix is None:
-            continue
-
-        # Load trace data
-        try:
-            trace_data = load_trace(str(trace_path))
-        except Exception as e:
             continue
 
         # Get all tasks from trace
@@ -151,6 +228,12 @@ def get_all_replaced_cells(traces_dir: Path) -> List[Tuple[str, str]]:
         for task_id in all_tasks:
             col_name = task_id_to_column(task_id, col_prefix)
             replaced_cells.append((row_id, col_name))
+
+    # Print fallback notes
+    if fallback_notes:
+        print("\nFallback mappings applied:")
+        for note in fallback_notes:
+            print(note)
 
     return replaced_cells
 
@@ -168,9 +251,9 @@ def main():
     print(f"Rows (models): {len(df)}")
     print(f"Columns (questions): {len(df.columns)}")
 
-    # Get all replaced cells from traces
+    # Get all replaced cells from traces (pass df.index for fallback logic)
     print(f"\nAnalyzing traces in {traces_dir}...")
-    replaced_cells = get_all_replaced_cells(traces_dir)
+    replaced_cells = get_all_replaced_cells(traces_dir, set(df.index))
     print(f"Found {len(replaced_cells)} cells that were replaced in new trace run")
 
     # Track changes

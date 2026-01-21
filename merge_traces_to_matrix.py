@@ -46,9 +46,11 @@ TRACE_PREFIX_TO_AGENT = {
 # CONFIGURATION: Mapping from trace model names to CSV model suffixes
 # ============================================================
 
-def normalize_model_name(trace_model_part: str) -> str:
+def normalize_model_name(trace_model_part: str, trace_filename: str = None, trace_data: dict = None) -> str:
     """
     Convert trace file model name to CSV row model name suffix.
+
+    Uses trace_data config to get reasoning_effort when needed for proper mapping.
 
     Examples:
     - openai_gpt-4_1 → gpt_4_1_20250414
@@ -70,6 +72,11 @@ def normalize_model_name(trace_model_part: str) -> str:
     - deepseek-ai_DeepSeek-V3 → deepseek_v3
     """
     model = trace_model_part
+
+    # Get reasoning_effort from trace config if available
+    reasoning_effort = None
+    if trace_data:
+        reasoning_effort = trace_data.get('config', {}).get('agent_args', {}).get('reasoning_effort')
 
     # Handle specific patterns
     model_mappings = {
@@ -109,6 +116,16 @@ def normalize_model_name(trace_model_part: str) -> str:
         'deepseek-ai_DeepSeek-V3': 'deepseek_v3',
     }
 
+    # Special handling for models that need reasoning_effort suffix from config
+    # These are trace files where filename doesn't include the effort but CSV does
+    if reasoning_effort and model in model_mappings:
+        base_model = model_mappings[model]
+        # Check if this model needs effort suffix added
+        if model == 'openai_gpt-5_2025' and reasoning_effort == 'medium':
+            return 'gpt_5_20250807_medium'
+        if model == 'openai_o3_2025' and reasoning_effort == 'medium':
+            return 'o3_20250416_medium'
+
     if model in model_mappings:
         return model_mappings[model]
 
@@ -135,11 +152,13 @@ def extract_trace_info(trace_filename: str) -> Tuple[str, str, str]:
     return '', name, ''
 
 
-def get_csv_row_id(trace_filename: str) -> str:
+def get_csv_row_id(trace_filename: str, trace_data: dict = None) -> str:
     """
     Convert trace filename to CSV row ID.
 
     Example: scicode_honey_openai_gpt-4_1.json → scicode_tool_calling_agent:gpt_4_1_20250414
+
+    If trace_data is provided, uses config to get reasoning_effort for proper model name mapping.
     """
     prefix, model_part, _ = extract_trace_info(trace_filename)
 
@@ -148,7 +167,7 @@ def get_csv_row_id(trace_filename: str) -> str:
         return None
 
     agent_name, _ = TRACE_PREFIX_TO_AGENT[prefix]
-    model_suffix = normalize_model_name(model_part)
+    model_suffix = normalize_model_name(model_part, trace_filename, trace_data)
 
     return f"{agent_name}:{model_suffix}"
 
@@ -233,28 +252,41 @@ def main():
     for trace_file in trace_files:
         trace_path = traces_dir / trace_file
 
-        # Get CSV row ID
-        row_id = get_csv_row_id(trace_file)
+        # Load trace data FIRST (needed for reasoning_effort in model name mapping)
+        try:
+            trace_data = load_trace(str(trace_path))
+        except Exception as e:
+            failed_mappings.append((trace_file, f"Failed to load: {e}"))
+            continue
+
+        # Get CSV row ID (pass trace_data for reasoning_effort)
+        row_id = get_csv_row_id(trace_file, trace_data)
         if row_id is None:
             failed_mappings.append((trace_file, "Could not determine row ID"))
             continue
 
         # Check if row exists in CSV
         if row_id not in df.index:
-            failed_mappings.append((trace_file, f"Row '{row_id}' not found in CSV"))
-            continue
+            # Try fallback: remove reasoning effort suffix (_high, _low, _medium) and try base model
+            fallback_row_id = None
+            for suffix in ['_high', '_low', '_medium']:
+                if row_id.endswith(suffix):
+                    base_row_id = row_id[:-len(suffix)]
+                    if base_row_id in df.index:
+                        fallback_row_id = base_row_id
+                        print(f"  NOTE: Falling back from '{row_id}' to '{fallback_row_id}' (base model without suffix)")
+                        break
+
+            if fallback_row_id:
+                row_id = fallback_row_id
+            else:
+                failed_mappings.append((trace_file, f"Row '{row_id}' not found in CSV"))
+                continue
 
         # Get column prefix
         col_prefix = get_column_prefix(trace_file)
         if col_prefix is None:
             failed_mappings.append((trace_file, "Could not determine column prefix"))
-            continue
-
-        # Load trace data
-        try:
-            trace_data = load_trace(str(trace_path))
-        except Exception as e:
-            failed_mappings.append((trace_file, f"Failed to load: {e}"))
             continue
 
         # Get all tasks from trace
