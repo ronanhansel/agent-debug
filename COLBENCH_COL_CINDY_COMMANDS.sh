@@ -1,7 +1,7 @@
 #!/bin/bash
 # ColBench Grading Commands for col_cindy run
 
-PREFIX=col_cindy
+PREFIX=col_zuck
 export WANDB_API_KEY="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"
 
 echo "=========================================="
@@ -65,8 +65,11 @@ echo "STEP 4: Aggregating verdicts"
 echo "=========================================="
 
 python scripts/judge.py \
+    --pattern ${PREFIX}* \
     --rubric-dir rubrics_output/colbench \
-    --output "judge_output/${PREFIX}_verdict.csv"
+    --model openai:gpt-5.2 \
+    --parallel 1000 \
+    -y
 
 echo ""
 echo "=========================================="

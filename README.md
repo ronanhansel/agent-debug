@@ -488,7 +488,7 @@ python scripts/eval_rubric.py \
     --trace-file traces/<benchmark>_*.json \
     --rubric rubric_templates/<benchmark>.txt \
     --rubric-model openai:gpt-5.2 \
-    --failed-only -y
+    --failed-only -y --max-batch-messages 1000
 
 # 2. Judge aggregation (combine evaluations)
 python scripts/judge.py \
@@ -563,7 +563,7 @@ python scripts/claude_fixer_scicode.py \
 
 # Apply fixes
 python scripts/run_scicode_fixes.py --list-fixes
-python scripts/run_scicode_fixes.py --all-models --prefix fixed_ --docker
+python scripts/run_scicode_fixes.py --all-models --prefix scicode_lolipop --docker --parallel 1
 ```
 
 ### CoreBench
@@ -583,7 +583,7 @@ python scripts/claude_fixer_corebench.py \
 
 # Apply fixes (capsules auto-extracted, safe for high parallelism)
 python scripts/run_corebench_fixes.py --list-fixes
-python scripts/run_corebench_fixes.py --all-models --prefix fixed_ --docker --skip-rubrics
+python scripts/run_corebench_fixes.py --all-models --prefix qq1 --docker --skip-rubrics --max-parallel-capsules 100
 ```
 
 ### ScienceAgentBench
@@ -597,7 +597,7 @@ python scripts/claude_fixer_scienceagentbench.py \
 
 # Apply fixes
 python scripts/run_scienceagentbench_fixes.py --list-fixes
-python scripts/run_scienceagentbench_fixes.py --all-models --prefix fixed_ --docker
+python scripts/run_scienceagentbench_fixes.py --all-models --prefix sab_night --docker --parallel 100
 ```
 
 ### ColBench
@@ -611,7 +611,7 @@ python scripts/claude_fixer_colbench.py \
 
 # Apply fixes
 python scripts/run_colbench_fixes.py --list-fixes
-python scripts/run_colbench_fixes.py --all-models --prefix fixed_ --docker --parallel 3
+python scripts/run_colbench_fixes.py --all-models --prefix col_bob --docker --parallel 100
 ```
 
 ---

@@ -461,65 +461,81 @@ python scripts/judge.py \
     -y
 ```
 
-Step 4: Create Fixes (Manual)
+Step 4: Create Fixes
 
-For each task with Grade=1 (benchmark defect), create a fix package:
-
-mkdir -p fixes/usaco/<task_id>
-
-# Create fix files (see fixes/usaco/README.md for formats)
-
-# - instruction_override.json
-
-# - evaluation_override.json
-
-# - input_override.json
-
-# - test_case_override.json
+```bash
+python scripts/claude_fixer_scienceagentbench.py \
+    --rubric-dir rubrics_output/scienceagentbench \
+    --judge-csv judge_output/scienceagentbench_verdict.csv \
+    $(printf -- '--trace-file %s ' traces/scienceagentbench_*) \
+    --ife-only \
+    --tasks-per-batch 5 \
+    --parallel 5
+```
 
 Step 5: Verify and Apply Fixes
 
-# List available fixes
+```bash
+python scripts/run_scienceagentbench_fixes.py \
+    --prefix sab_cow \
+    --parallel 80 \
+    --docker
+```
 
-python scripts/run_usaco_fixes.py --list-fixes
+## After initial run, you can merge the resulting traces with this and start from there
 
-# Verify fixes are applied correctly
+```bash
+python scripts/merge_traces.py --input 'traces/sab_husky__sab_husky_openai_gpt-4_1_2025-04-14_*_UPLOAD.json' --output traces/sab_husky_openai_gpt-4_1_MERGED_UPLOAD.json --force && \
+python scripts/merge_traces.py --input 'traces/sab_husky__sab_husky_openai_o3_2025-04-16_medium_*_UPLOAD.json' --output traces/sab_husky_openai_o3_medium_MERGED_UPLOAD.json --force && \
+python scripts/merge_traces.py --input 'traces/sab_husky__sab_husky_openai_o4-mini_2025-04-16_high_*_UPLOAD.json' --output traces/sab_husky_openai_o4-mini_high_MERGED_UPLOAD.json --force && \
+python scripts/merge_traces.py --input 'traces/sab_husky__sab_husky_openai_o4-mini_2025-04-16_low_*_UPLOAD.json' --output traces/sab_husky_openai_o4-mini_low_MERGED_UPLOAD.json --force
+```
 
-python scripts/run_usaco_fixes.py --verify-fixes
+## Weave Extraction
 
-# Dry run to see what would happen
+```bash
+python scripts/extract_weave_traces.py \
+    --project ronanhansel-hanoi-university-of-science-and-technology/sab_husky_scienceagentbench \
+    --prefix sab_husky_openai_gpt-4_1 \
+    --prefix sab_husky_openai_o3_2025 \
+    --prefix sab_husky_openai_o4-mini_2025-04-16_high \
+    --prefix sab_husky_openai_o4-mini_2025-04-16_low \
+    --merge-input traces/sab_husky_openai_gpt-4_1_MERGED_UPLOAD.json \
+    --merge-input traces/sab_husky_openai_o3_medium_MERGED_UPLOAD.json \
+    --merge-input traces/sab_husky_openai_o4-mini_high_MERGED_UPLOAD.json \
+    --merge-input traces/sab_husky_openai_o4-mini_low_MERGED_UPLOAD.json
+```
 
-python scripts/run*usaco_fixes.py \
- --prefix usaco_lime* \
- --model openai/gpt-4.1-2025-04-14 \
- --dry-run
+```bash
+python scripts/eval_rubric.py \
+    --trace-file traces/sab_husky_openai_gpt-4_1.json \
+    --trace-file traces/sab_husky_openai_o3_2025.json \
+    --trace-file traces/sab_husky_openai_o4-mini_2025-04-16_high.json \
+    --trace-file traces/sab_husky_openai_o4-mini_2025-04-16_low.json \
+    --rubric rubric_templates/scienceagentbench.txt \
+    --rubric-model openai:gpt-5.2 \
+    --max-batch-messages 1000 \
+    --sleep 0s \
+    --retries 10 \
+    --sort-by-messages \
+    -y
+```
 
-# Actually run fixes
-
-python scripts/run*usaco_fixes.py \
- --prefix usaco_lime* \
- --parallel 20 \
- --docker
-
-Step 6: Merge Traces (Optional)
-
-python scripts/run*usaco_fixes.py \
- --prefix usaco_lime* \
- --merge-traces
-
-Step 7: Re-evaluate After Fixes
-
-python scripts/eval*rubric.py \
- --trace-file traces/usaco_lime*\*\_UPLOAD.json \
- --rubric rubric_templates/usaco.txt \
- --rubric-model openai:gpt-5.2 \
- -y
-
+```bash
 python scripts/judge.py \
- --pattern "usaco*lime*\*" \
- --rubric-dir rubrics_output/usaco \
- --model openai:gpt-5.2 \
- -y
+    --pattern sab_husky_* \
+    --rubric-dir rubrics_output/scienceagentbench \
+    --model openai:gpt-5.2 \
+    --parallel 100 \
+    -y
+```
+
+```bash
+python scripts/run_scienceagentbench_fixes.py \
+      --task-id 52 --task-id 95 --task-id 64 --task-id 12 \
+      --task-id 102 --task-id 74 --task-id 97 \
+      --prefix sab_husky --docker --parallel 80
+```
 
 ## Key Files
 
@@ -585,3 +601,149 @@ python scripts/reevaluate_scicode.py --prefix scicode_honey
 # Re-evaluate specific tasks only
 python scripts/reevaluate_scicode.py --prefix scicode_honey --task-id 12 --task-id 35
 ```
+
+Delete ALL cached docker images
+
+```bash
+docker images --format "{{.Repository}}:{{.Tag}}" | grep "hal-agent-runner:agent-env" | xargs -r docker rmi -f
+
+# 2. Also delete by the specific image IDs we saw
+docker rmi -f 39e3e1f3edba 9e00df765a20 2>/dev/null || true
+
+# 3. Clear Docker build cache
+docker builder prune -f
+
+# 4. Verify the images are gone
+docker images | grep hal-agent-runner
+```
+
+COLBENCH
+
+```bash
+python scripts/eval_rubric.py \
+    $(printf -- '--trace-file %s ' traces/colbench_*_binary_UPLOAD.json) \
+    --rubric rubric_templates/colbench.txt \
+    --rubric-model openai:gpt-5.2 \
+    --max-batch-messages 15000 \
+    --retries 10 \
+    --sort-by-messages \
+    --failed-only -y
+```
+
+```bash
+python scripts/judge.py \
+    --pattern colbench_backend* \
+    --rubric-dir rubrics_output/colbench \
+    --model openai:gpt-5.2 \
+    --parallel 1000 \
+    -y
+```
+
+Step 4: Create Fixes
+
+```bash
+python scripts/claude_fixer_colbench.py \
+    --rubric-dir rubrics_output/colbench \
+    --judge-csv judge_output/colbench_backend_verdict.csv \
+    $(printf -- '--trace-file %s ' traces/colbench_*) \
+    --ife-only \
+    --tasks-per-batch 10 \
+    --parallel 5
+```
+
+Step 5: Verify and Apply Fixes
+
+```bash
+python scripts/run_colbench_fixes.py \
+    --prefix col_zuck\
+    --benchmark colbench_backend_programming \
+    --parallel 80 \
+    --docker
+```
+
+# Stop and remove all containers
+
+docker stop $(docker ps -aq) 2>/dev/null
+docker rm $(docker ps -aq) 2>/dev/null
+
+# Clean up networks
+
+docker network prune -f
+
+# If still not working, restart Docker
+
+sudo systemctl restart docker
+
+```bash
+python scripts/merge_traces.py --input 'traces/col_tommy__col_tommy_gpt-4_1-2025-04-14_*_UPLOAD.json' --output traces/col_tommy_openai_gpt-4_1_MERGED_UPLOAD.json --force && \
+python scripts/merge_traces.py --input 'traces/col_tommy__col_tommy_o3-2025-04-16_low_*_UPLOAD.json' --output traces/col_tommy_openai_o3_low_MERGED_UPLOAD.json --force && \
+python scripts/merge_traces.py --input 'traces/col_tommy__col_tommy_o4-mini-2025-04-16_high_*_UPLOAD.json' --output traces/col_tommy_openai_o4-mini_high_MERGED_UPLOAD.json --force
+```
+
+```bash
+python scripts/extract_weave_traces.py \
+    --project ronanhansel-hanoi-university-of-science-and-technology/col_tommy_colbench_backend_programming \
+    --prefix col_tommy_openai_gpt-4_1 \
+    --prefix col_tommy_openai_o3 \
+    --prefix col_tommy_openai_o4-mini \
+    --merge-input traces/col_tommy_openai_gpt-4_1_MERGED_UPLOAD.json \
+    --merge-input traces/col_tommy_openai_o3_low_MERGED_UPLOAD.json \
+    --merge-input traces/col_tommy_openai_o4-mini_high_MERGED_UPLOAD.json
+```
+
+```bash
+python scripts/eval_rubric.py \
+    --trace-file traces/col_tommy_openai_gpt-4_1_WITH_DIALOGUES.json \
+    --trace-file traces/col_tommy_openai_o3_low_WITH_DIALOGUES.json \
+    --trace-file traces/col_tommy_openai_o4-mini_high_WITH_DIALOGUES.json \
+    --rubric rubric_templates/colbench.txt \
+    --rubric-model openai:gpt-5.2 \
+    --failed-only -y
+```
+
+```bash
+python scripts/judge.py \
+    --pattern col_cindy* \
+    --rubric-dir rubrics_output/colbench \
+    --model openai:gpt-5.2 \
+    --parallel 1000 \
+    -y
+```
+
+
+
+# CoreBench
+
+```bash
+python scripts/eval_rubric.py \
+    --trace-file traces/prop_corebench_hard_*_MERGED_UPLOAD.json \
+                traces/iter1_corebench_hard_*_MERGED_UPLOAD.json \
+    --rubric rubric_templates/corebench.txt \
+    --rubric-model openai:gpt-5.2 \
+    --failed-only -y --max-batch-messages 1000
+```
+
+# SciCode
+python scripts/eval_rubric.py \
+    --trace-file traces/scicode_lady_*_MERGED_UPLOAD.json \
+                traces/scicode_honey_*_MERGED_UPLOAD.json \
+    --rubric rubric_templates/scicode.txt \
+    --rubric-model openai:gpt-5.2 \
+    --failed-only -y --max-batch-messages 1000
+
+# ScienceAgentBench
+python scripts/eval_rubric.py \
+    --trace-file traces/sab_mate_*_MERGED_UPLOAD.json \
+                traces/sab_cow_*_MERGED_UPLOAD.json \
+                traces/sab_husky_*_MERGED_UPLOAD.json \
+    --rubric rubric_templates/scienceagentbench.txt \
+    --rubric-model openai:gpt-5.2 \
+    --failed-only -y --max-batch-messages 1000
+
+# ColBench
+python scripts/eval_rubric.py \
+    --trace-file traces/col_ivy_*_MERGED_UPLOAD.json \
+                traces/col_zuck_*_MERGED_UPLOAD.json \
+    --rubric rubric_templates/colbench.txt \
+    --rubric-model openai:gpt-5.2 \
+    --failed-only -y --max-batch-messages 1000
