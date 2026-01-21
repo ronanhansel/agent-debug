@@ -4,13 +4,13 @@ Automated Item Fixing Pipeline for benchmark evaluation. The core innovation is 
 
 ## Supported Benchmarks
 
-| Benchmark | Fixer Script | Runner Script | Model Config | Fixes |
-|-----------|--------------|---------------|--------------|-------|
-| **SciCode** | `claude_fixer_scicode.py` | `run_scicode_fixes.py` | `model_to_baseline_scicode.json` | 61 |
-| **CoreBench** | `claude_fixer_corebench.py` | `run_corebench_fixes.py` | `model_to_baseline_corebench.json` | 13 |
-| **ScienceAgentBench** | `claude_fixer_scienceagentbench.py` | `run_scienceagentbench_fixes.py` | `model_to_baseline_scienceagentbench.json` | 26 |
-| **ColBench** | `claude_fixer_colbench.py` | `run_colbench_fixes.py` | `model_to_baseline_colbench.json` | 81 |
-| **USACO** | (manual) | `run_usaco_fixes.py` | `model_to_baseline_usaco.json` | 2 |
+| Benchmark             | Fixer Script                        | Runner Script                    | Model Config                               | Fixes |
+| --------------------- | ----------------------------------- | -------------------------------- | ------------------------------------------ | ----- |
+| **SciCode**           | `claude_fixer_scicode.py`           | `run_scicode_fixes.py`           | `model_to_baseline_scicode.json`           | 61    |
+| **CoreBench**         | `claude_fixer_corebench.py`         | `run_corebench_fixes.py`         | `model_to_baseline_corebench.json`         | 13    |
+| **ScienceAgentBench** | `claude_fixer_scienceagentbench.py` | `run_scienceagentbench_fixes.py` | `model_to_baseline_scienceagentbench.json` | 26    |
+| **ColBench**          | `claude_fixer_colbench.py`          | `run_colbench_fixes.py`          | `model_to_baseline_colbench.json`          | 81    |
+| **USACO**             | (manual)                            | `run_usaco_fixes.py`             | `model_to_baseline_usaco.json`             | 2     |
 
 ---
 
@@ -57,6 +57,7 @@ ColBench uses a **different process** - dialogue history comes from `results/` d
 ### Available Flags
 
 All scripts support running specific benchmarks:
+
 ```bash
 ./FINAL_COMMANDS.sh [all|scicode|corebench|sab|colbench]
 ./RUBRIC_COMMANDS.sh [all|scicode|corebench|sab|colbench]
@@ -66,13 +67,16 @@ All scripts support running specific benchmarks:
 ### Output Files
 
 **After FINAL_COMMANDS.sh**:
+
 - SciCode/CoreBench/SAB: `traces/{prefix}_openai_{model}.json` (with Weave logs)
 - ColBench: `traces/{prefix}_openai_{model}_WITH_DIALOGUES.json`
 
 **After RUBRIC_COMMANDS.sh**:
+
 - `rubrics_output/{benchmark}/*.csv` (per-model rubric grades)
 
 **After JUDGE_COMMANDS.sh**:
+
 - `judge_output/{benchmark}_verdict.csv` (aggregated final verdicts)
 
 ---
@@ -510,19 +514,19 @@ python scripts/run_<benchmark>_fixes.py --all-models --prefix iter1_ --docker
 
 All fix runner scripts follow a consistent interface:
 
-| Option | Description |
-|--------|-------------|
-| `--list-fixes` | List available fix directories and exit |
-| `--dry-run` | Preview what would be done without running |
-| `--verify-fixes` | Verify fixes are applied correctly without running HAL |
-| `--all-models` | Run all models from config for each task with fixes |
-| `--model MODEL` | Force a specific model for all tasks |
+| Option              | Description                                              |
+| ------------------- | -------------------------------------------------------- |
+| `--list-fixes`      | List available fix directories and exit                  |
+| `--dry-run`         | Preview what would be done without running               |
+| `--verify-fixes`    | Verify fixes are applied correctly without running HAL   |
+| `--all-models`      | Run all models from config for each task with fixes      |
+| `--model MODEL`     | Force a specific model for all tasks                     |
 | `--rubric-csv PATH` | Use rubric CSV to determine which model failed each task |
-| `--task-id ID` | Only run specific task(s), can be repeated |
-| `--prefix PREFIX` | Prefix for run IDs and output files |
-| `--docker` | Run HAL evaluation with Docker |
-| `--parallel N` | Number of parallel HAL evaluations |
-| `--skip-rubrics` | Skip rubric evaluation after running |
+| `--task-id ID`      | Only run specific task(s), can be repeated               |
+| `--prefix PREFIX`   | Prefix for run IDs and output files                      |
+| `--docker`          | Run HAL evaluation with Docker                           |
+| `--parallel N`      | Number of parallel HAL evaluations                       |
+| `--skip-rubrics`    | Skip rubric evaluation after running                     |
 
 ### Examples
 
@@ -692,6 +696,7 @@ docker run --rm hal-agent-runner:latest bash -lc \
 ## Troubleshooting
 
 **Quick Issue Finder**:
+
 - [Evaluations hang after Weave initialization](#evaluations-hanging-after-weave-initialization) - No output after "Logged in as Weights & Biases user"
 - [Azure "No usable temporary directory"](#azure-authentication-no-usable-temporary-directory-found) - FileNotFoundError with /tmp
 - [Docker containers missing /tmp](#docker-containers-missing-tmp-directory) - Errors inside containers about temp directories
@@ -758,6 +763,7 @@ pip install -e ./hal-harness
 ### Evaluations Hanging After Weave Initialization
 
 **Symptoms**: Verbose logs show Weave initialization succeeding, then the process hangs with no further output:
+
 ```
 → Initializing logging with W&B Weave...
 Logged in as Weights & Biases user: <username>
@@ -766,6 +772,7 @@ View Weave data at https://wandb.ai/...
 ```
 
 **Root Cause**: API connection issues - either:
+
 1. No LiteLLM proxy running when `.env` is configured for proxy mode
 2. Azure authentication failing when using direct Azure mode
 3. Wrong environment configuration loaded
@@ -841,6 +848,7 @@ az login
 ### Azure Authentication: "No usable temporary directory found"
 
 **Symptoms**:
+
 ```
 AzureCliCredential.get_token_info failed:
 FileNotFoundError: [Errno 2] No usable temporary directory found in ['/tmp', '/var/tmp', '/usr/tmp', '/usr/bin']
@@ -893,11 +901,13 @@ docker run --tmpfs /tmp:size=1G,mode=1777 <image> <command>
 ### Expired MSAL Token Cache
 
 **Symptoms**: Using Azure direct mode but authentication fails with:
+
 ```
 ✗ Token acquisition failed: None
 ```
 
 **Diagnosis**:
+
 ```bash
 # Check MSAL cache exists
 ls -la ~/.azure/msal_token_cache.json
@@ -930,6 +940,7 @@ EOF
 ```
 
 **Solution**:
+
 ```bash
 # IMPORTANT: Ensure TMPDIR is set (required for az CLI)
 # If not already set, follow Step 8.1 to set up TMPDIR
@@ -1029,6 +1040,7 @@ python scripts/run_corebench_fixes.py \
 ```
 
 **Debug checklist if still failing**:
+
 ```bash
 # ✓ Check 1: TMPDIR is set
 echo $TMPDIR  # Should print your TMPDIR path (e.g., /tmp or ~/tmp)
@@ -1082,11 +1094,13 @@ python scripts/run_<benchmark>_fixes.py \
 ```
 
 **Recommended Parallelism Limits**:
+
 - **Local machine**: `--max-parallel-capsules 3-5`
 - **Azure VM (Standard_D4s_v3)**: `--max-parallel-capsules 5-10`
 - **High-memory server**: `--max-parallel-capsules 10-20`
 
 **Monitor Resource Usage**:
+
 ```bash
 # Check CPU and memory usage
 htop
@@ -1110,4 +1124,58 @@ docker system df
 - Adjust overly strict numerical tolerances
 - Do NOT give hints about solutions
 - Do NOT simplify the problem
-- Do NOT pre-compute partial results
+- Do NOT pre-compute partial results 3. Unified Fix Runner (scripts/run_benchmark_fixes.py)
+
+Single script works across all benchmarks:
+
+```bash
+# List configurations
+python scripts/run_benchmark_fixes.py -b scicode --list-configs
+# Run specific config
+python scripts/run*benchmark_fixes.py -b scicode -c gpt-5_scicode_tool_calling -p test* --docker
+# Run all configs with an agent
+python scripts/run*benchmark_fixes.py -b scicode --agent scicode_tool_calling_agent -p test*
+# Filter by model
+python scripts/run*benchmark_fixes.py -b scicode --model-filter deepseek -p test*
+# Run all
+python scripts/run*benchmark_fixes.py -b scicode --all-configs -p iter1* --docker 4. Updated Agents
+```
+
+- colbench_example_agent - Now imports from shared module
+- scicode_tool_calling_agent - Now uses shared module for Azure
+
+How to Add New Agent Combinations
+
+Just edit the JSON file:
+"gpt-5*my_new_agent": {
+"model_id": "openai/gpt-5_2025-08-07",
+"short_name": "gpt-5-new",
+"agent_dir": "hal-harness/agents/my_new_agent",
+"agent_function": "main.run",
+"max_steps": 5
+}
+ython scripts/run_benchmark_fixes.py -b scicode --model-filter deepseek -p test*
+
+```bash
+# Run all
+python scripts/run*benchmark_fixes.py -b scicode --all-configs -p iter1* --docker
+```
+
+1. Updated Agents
+
+- colbench_example_agent - Now imports from shared module
+- scicode_tool_calling_agent - Now uses shared module for Azure
+
+How to Add New Agent Combinations
+
+Just edit the JSON file:
+
+```json
+"gpt-5_my_new_agent": {
+"model_id": "openai/gpt-5_2025-08-07",
+"short_name": "gpt-5-new",
+"agent_dir": "hal-harness/agents/my_new_agent",
+"agent_function": "main.run",
+"max_steps": 5
+}
+```
