@@ -1,41 +1,93 @@
 {
-  "openai/gpt-4.1-2025-04-14": {
+  "_meta": {
+    "benchmark": "usaco",
+    "description": "USACO benchmark model and agent configurations"
+  },
+  "gpt-4.1_USACO": {
     "model_id": "openai/gpt-4.1_2025-04-14",
-    "short_name": "gpt-4.1-04-14",
-    "baseline_trace": ""
+    "short_name": "gpt-4.1",
+    "agent_dir": "hal-harness/agents/USACO",
+    "agent_function": "main.run"
   },
-  "openai/o3-2025-04-16": {
-    "model_id": "openai/o3_2025-04-16",
-    "short_name": "o3-04-16",
-    "reasoning_effort": "medium"
+  "gpt-4.1_usaco_example": {
+    "model_id": "openai/gpt-4.1_2025-04-14",
+    "short_name": "gpt-4.1-ex",
+    "agent_dir": "hal-harness/agents/usaco_example_agent",
+    "agent_function": "main.run"
   },
-  "openai/o4-mini-2025-04-16-high": {
-    "model_id": "openai/o4-mini_2025-04-16",
-    "short_name": "o4-mini-high",
-    "reasoning_effort": "high"
-  },
-  "openai/o4-mini-2025-04-16-low": {
-    "model_id": "openai/o4-mini_2025-04-16",
-    "short_name": "o4-mini-low",
-    "reasoning_effort": "low"
-  },
-  "openai/gpt-4o-2024-11-20": {
+  "gpt-4o_USACO": {
     "model_id": "openai/gpt-4o-2024-11-20",
     "short_name": "gpt-4o",
+    "agent_dir": "hal-harness/agents/USACO",
+    "agent_function": "main.run",
     "temperature": 0.7
   },
-  "anthropic/claude-sonnet-4-5-20250929": {
-    "model_id": "anthropic/claude-sonnet-4-5-20250929",
-    "short_name": "claude-sonnet-4.5"
+  "gpt-4o_usaco_example": {
+    "model_id": "openai/gpt-4o-2024-11-20",
+    "short_name": "gpt-4o-ex",
+    "agent_dir": "hal-harness/agents/usaco_example_agent",
+    "agent_function": "main.run",
+    "temperature": 0.7
   },
-  "anthropic/claude-sonnet-4-5-20250929-high": {
-    "model_id": "anthropic/claude-sonnet-4-5-20250929",
-    "short_name": "claude-sonnet-4.5-high",
+  "gpt-5-medium_USACO": {
+    "model_id": "openai/gpt-5_2025-08-07",
+    "short_name": "gpt-5-medium",
+    "agent_dir": "hal-harness/agents/USACO",
+    "agent_function": "main.run",
+    "reasoning_effort": "medium"
+  },
+  "gpt-5-medium_usaco_example": {
+    "model_id": "openai/gpt-5_2025-08-07",
+    "short_name": "gpt-5-medium-ex",
+    "agent_dir": "hal-harness/agents/usaco_example_agent",
+    "agent_function": "main.run",
+    "reasoning_effort": "medium"
+  },
+  "o3-medium_USACO": {
+    "model_id": "openai/o3_2025-04-16",
+    "short_name": "o3-medium",
+    "agent_dir": "hal-harness/agents/USACO",
+    "agent_function": "main.run",
+    "reasoning_effort": "medium"
+  },
+  "o4-mini-high_USACO": {
+    "model_id": "openai/o4-mini_2025-04-16",
+    "short_name": "o4-mini-high",
+    "agent_dir": "hal-harness/agents/USACO",
+    "agent_function": "main.run",
     "reasoning_effort": "high"
   },
-  "deepseek/DeepSeek-V3": {
+  "o4-mini-low_USACO": {
+    "model_id": "openai/o4-mini_2025-04-16",
+    "short_name": "o4-mini-low",
+    "agent_dir": "hal-harness/agents/USACO",
+    "agent_function": "main.run",
+    "reasoning_effort": "low"
+  },
+  "claude-sonnet-4.5_USACO": {
+    "model_id": "anthropic/claude-sonnet-4-5-20250929",
+    "short_name": "claude-sonnet-4.5",
+    "agent_dir": "hal-harness/agents/USACO",
+    "agent_function": "main.run"
+  },
+  "claude-sonnet-4.5-high_USACO": {
+    "model_id": "anthropic/claude-sonnet-4-5-20250929",
+    "short_name": "claude-sonnet-4.5-high",
+    "agent_dir": "hal-harness/agents/USACO",
+    "agent_function": "main.run",
+    "reasoning_effort": "high"
+  },
+  "deepseek-v3_USACO": {
     "model_id": "deepseek/DeepSeek-V3",
     "short_name": "deepseek-v3",
+    "agent_dir": "hal-harness/agents/USACO",
+    "agent_function": "main.run",
     "temperature": 0.7
+  },
+  "deepseek-r1_USACO": {
+    "model_id": "DeepSeek-R1_1",
+    "short_name": "deepseek-r1",
+    "agent_dir": "hal-harness/agents/USACO",
+    "agent_function": "main.run"
   }
 }
