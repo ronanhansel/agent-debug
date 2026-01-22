@@ -123,10 +123,20 @@ if os.environ.get('USE_DIRECT_AZURE', '').lower() == 'true':
 REPO_ROOT = Path(__file__).resolve().parents[1]
 HAL_HARNESS = REPO_ROOT / "hal-harness"
 FIXES_DIR = REPO_ROOT / "fixes"
-TRACES_DIR = REPO_ROOT / "traces"
-RESULTS_DIR = REPO_ROOT / "results"
-TMP_DIR = REPO_ROOT / ".tmp"
-TMP_DIR.mkdir(exist_ok=True)
+
+def _resolve_data_dir(env_key: str, default_path: Path) -> Path:
+    raw = os.environ.get(env_key)
+    if not raw:
+        return default_path
+    path = Path(raw)
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return path
+
+TRACES_DIR = _resolve_data_dir("HAL_TRACES_DIR", REPO_ROOT / "traces")
+RESULTS_DIR = _resolve_data_dir("HAL_RESULTS_DIR", REPO_ROOT / "results")
+TMP_DIR = _resolve_data_dir("HAL_TMP_DIR", REPO_ROOT / ".tmp")
+TMP_DIR.mkdir(parents=True, exist_ok=True)
 
 # Add shared module to path
 sys.path.insert(0, str(HAL_HARNESS / "agents"))

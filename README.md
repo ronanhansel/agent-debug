@@ -186,6 +186,14 @@ docker run --rm hal-agent-runner:latest bash -lc \
 cd ..
 ```
 
+```bash
+# Delete the cached prepared image to force rebuild
+docker images --format "{{.Repository}}:{{.Tag}}" | grep agent-env | xargs -r docker rmi -f
+
+# Clear Docker build cache
+docker builder prune -f
+```
+
 ### Step 7: Configure Environment Variables
 
 ```bash
@@ -1178,4 +1186,33 @@ Just edit the JSON file:
 "agent_function": "main.run",
 "max_steps": 5
 }
+```
+
+```bash
+# Run ALL tasks with fixes applied where available
+python scripts/run_benchmark_fixes.py --benchmark scicode --all-configs \
+    --all-tasks --prefix scicode_sun1_ --docker --parallel-models 10 --parallel-tasks 5
+python scripts/run_benchmark_fixes.py --benchmark scienceagentbench --all-configs \
+    --all-tasks --prefix sab_sun1_ --docker --parallel-models 10 --parallel-tasks 5
+python scripts/run_benchmark_fixes.py --benchmark corebench --all-configs \
+    --all-tasks --prefix corebench_sun1_ --docker --parallel-models 10 --parallel-tasks 5
+python scripts/run_benchmark_fixes.py --benchmark colbench --all-configs \
+    --all-tasks --prefix colbench_sun1_ --docker --parallel-models 10 --parallel-tasks 5
+
+./run_benchmark_with_data.sh python scripts/run_benchmark_fixes.py --benchmark scicode --all-configs \
+    --all-tasks --prefix scicode_moon1_ --docker --parallel-models 10 --parallel-tasks 25
+./run_benchmark_with_data.sh python scripts/run_benchmark_fixes.py --benchmark scienceagentbench --all-configs \
+    --all-tasks --prefix sab_moon1_ --docker --parallel-models 10 --parallel-tasks 25
+./run_benchmark_with_data.sh python scripts/run_benchmark_fixes.py --benchmark corebench --all-configs \
+    --all-tasks --prefix corebench_moon1_ --docker --parallel-models 10 --parallel-tasks 25
+./run_benchmark_with_data.sh python scripts/run_benchmark_fixes.py --benchmark colbench --all-configs \
+    --all-tasks --prefix colbench_moon1_ --docker --parallel-models 10 --parallel-tasks 25
+
+# Run ALL benchmarks, ALL tasks
+python scripts/run_benchmark_fixes.py --all-benchmarks --all-configs \
+    --all-tasks --prefix star1_ --docker --parallel-models 10 --parallel-tasks 5
+
+# Original behavior (only tasks with fixes)
+python scripts/run_benchmark_fixes.py --benchmark scicode \
+    --all-configs --prefix test_ --docker
 ```
