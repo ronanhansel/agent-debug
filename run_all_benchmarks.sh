@@ -221,12 +221,15 @@ monitor_progress() {
         done
 
         # Show Docker status with more detail
-        agent_containers=$(docker ps --format "{{.Names}}" 2>/dev/null | grep -c "agentrun" || echo "0")
-        build_containers=$(docker ps --format "{{.ID}}" 2>/dev/null | wc -l)
-        build_containers=$((build_containers - agent_containers))
-        [ $build_containers -lt 0 ] && build_containers=0
+        agent_containers=$(docker ps --format "{{.Names}}" 2>/dev/null | grep -c "agentrun" || true)
+        agent_containers=${agent_containers:-0}
+        total_containers=$(docker ps -q 2>/dev/null | wc -l | tr -d ' ')
+        total_containers=${total_containers:-0}
+        build_containers=$((total_containers - agent_containers))
+        [ "$build_containers" -lt 0 ] 2>/dev/null && build_containers=0
 
-        images_built=$(docker images 2>/dev/null | grep -c "agent-env" || echo "0")
+        images_built=$(docker images 2>/dev/null | grep -c "agent-env" || true)
+        images_built=${images_built:-0}
 
         echo -e "${CYAN}  Docker: ${agent_containers} agent containers, ${build_containers} build containers, ${images_built} images cached${NC}"
 
