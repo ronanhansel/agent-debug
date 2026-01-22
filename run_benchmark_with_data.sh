@@ -152,8 +152,8 @@ FROM ${BASE_IMAGE}
 RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
     conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 
-# Create agent environment
-RUN conda create -y -n agent_env python=3.11 && \
+# Create agent environment (using mamba for speed)
+RUN mamba create -y -n agent_env python=3.11 && \
     conda run -n agent_env python -m pip install -U pip
 
 # Copy and install requirements

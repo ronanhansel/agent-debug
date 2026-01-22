@@ -54,34 +54,79 @@ case "$MODE" in
         ;;
 esac
 
-# Colorize function
-colorize() {
-    while IFS= read -r line; do
-        # Extract benchmark name from path if present
-        if echo "$line" | grep -qE "==> .* <==" ; then
-            echo -e "${WHITE}$line${NC}"
-        elif echo "$line" | grep -qiE "error|exception|failed|traceback"; then
-            echo -e "${RED}$line${NC}"
-        elif echo "$line" | grep -qiE "401|403|429|500|502|503|504|timeout|unauthorized"; then
-            echo -e "${MAGENTA}$line${NC}"
-        elif echo "$line" | grep -qiE "success|completed|finished"; then
-            echo -e "${GREEN}$line${NC}"
-        elif echo "$line" | grep -qiE "warning|warn"; then
-            echo -e "${YELLOW}$line${NC}"
-        elif echo "$line" | grep -qiE "starting|running|task"; then
-            echo -e "${BLUE}$line${NC}"
-        elif echo "$line" | grep -qiE "\[scicode\]"; then
-            echo -e "${CYAN}$line${NC}"
-        elif echo "$line" | grep -qiE "\[corebench\]"; then
-            echo -e "${GREEN}$line${NC}"
-        elif echo "$line" | grep -qiE "\[colbench\]"; then
-            echo -e "${YELLOW}$line${NC}"
-        elif echo "$line" | grep -qiE "\[scienceagentbench\]|\[sab\]"; then
-            echo -e "${MAGENTA}$line${NC}"
-        else
-            echo "$line"
-        fi
-    done
+# Format and colorize function
+# Converts tail -f headers to "time + run_id" format
+format_and_colorize() {
+    awk -v red="$RED" -v green="$GREEN" -v yellow="$YELLOW" -v blue="$BLUE" \
+        -v cyan="$CYAN" -v magenta="$MAGENTA" -v white="$WHITE" -v nc="$NC" '
+    BEGIN {
+        current_run_id = ""
+    }
+    # Match tail -f file headers: ==> /path/to/benchmark/run_id/file.log <==
+    /^==> .* <==/ {
+        # Extract benchmark and run_id from path
+        path = $2
+        n = split(path, parts, "/")
+        if (n >= 3) {
+            # benchmark is parts[n-2], run_id is parts[n-1]
+            current_benchmark = parts[n-2]
+            current_run_id = parts[n-1]
+        } else if (n >= 2) {
+            current_benchmark = ""
+            current_run_id = parts[n-1]
+        } else {
+            current_benchmark = ""
+            current_run_id = path
+        }
+        # Silent switch - no separator line needed since each line has the prefix
+        next
+    }
+    # Skip empty lines
+    /^$/ { next }
+    # Format regular lines with timestamp and run_id
+    {
+        timestamp = strftime("%H:%M:%S")
+        # Format: benchmark/short_run_id (keep benchmark, truncate middle of run_id)
+        if (current_benchmark != "") {
+            # Extract key parts from run_id: model prefix and timestamp suffix
+            run = current_run_id
+            # Keep first 10 chars and last 15 chars of run_id if too long
+            if (length(run) > 30) {
+                run = substr(run, 1, 10) ".." substr(run, length(run)-14)
+            }
+            display_id = current_benchmark "/" run
+        } else {
+            display_id = current_run_id
+        }
+        prefix = sprintf("[%s %s] ", timestamp, display_id)
+
+        line = $0
+        # Strip redundant log prefix: "YYYY-MM-DD HH:MM:SS,mmm - agent_eval.verbose - DEBUG - "
+        gsub(/^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]+ - [a-zA-Z_.]+ - (DEBUG|INFO|WARNING|ERROR) - /, "", line)
+        # Colorize based on content
+        if (tolower(line) ~ /error|exception|failed|traceback/) {
+            printf "%s%s%s%s\n", red, prefix, line, nc
+        } else if (tolower(line) ~ /401|403|429|500|502|503|504|timeout|unauthorized/) {
+            printf "%s%s%s%s\n", magenta, prefix, line, nc
+        } else if (tolower(line) ~ /success|completed|finished/) {
+            printf "%s%s%s%s\n", green, prefix, line, nc
+        } else if (tolower(line) ~ /warning|warn/) {
+            printf "%s%s%s%s\n", yellow, prefix, line, nc
+        } else if (tolower(line) ~ /starting|running|task/) {
+            printf "%s%s%s%s\n", blue, prefix, line, nc
+        } else if (tolower(line) ~ /\[scicode\]/) {
+            printf "%s%s%s%s\n", cyan, prefix, line, nc
+        } else if (tolower(line) ~ /\[corebench\]/) {
+            printf "%s%s%s%s\n", green, prefix, line, nc
+        } else if (tolower(line) ~ /\[colbench\]/) {
+            printf "%s%s%s%s\n", yellow, prefix, line, nc
+        } else if (tolower(line) ~ /\[scienceagentbench\]|\[sab\]/) {
+            printf "%s%s%s%s\n", magenta, prefix, line, nc
+        } else {
+            printf "%s%s\n", prefix, line
+        }
+    }
+    '
 }
 
 # Collect all log files
@@ -127,9 +172,10 @@ watch_logs() {
         echo -e "${CYAN}Watching $LOG_COUNT log files...${NC}"
 
         if [ -n "$FILTER" ]; then
-            tail -f $LOG_FILES 2>/dev/null | grep -iE --line-buffered "$FILTER" | colorize
+            # Include file headers (==> ... <==) in filter so we can track which file each line is from
+            tail -f $LOG_FILES 2>/dev/null | grep -iE --line-buffered "^==> .* <==|$FILTER" | format_and_colorize
         else
-            tail -f $LOG_FILES 2>/dev/null | colorize
+            tail -f $LOG_FILES 2>/dev/null | format_and_colorize
         fi
 
         # If tail exits, wait and retry
