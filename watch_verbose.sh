@@ -9,6 +9,9 @@
 #   ./watch_verbose.sh "" error     # Watch all, filter for errors
 #
 
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 BENCHMARK_FILTER="${1:-}"
 TEXT_FILTER="${2:-}"
 
@@ -21,7 +24,7 @@ CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 NC='\033[0m'
 
-RESULTS_DIR="/Data/home/v-qizhengli/workspace/agent-debug/results"
+RESULTS_DIR="$SCRIPT_DIR/results"
 
 echo -e "${CYAN}============================================================${NC}"
 echo -e "${CYAN}           VERBOSE LOG WATCHER${NC}"

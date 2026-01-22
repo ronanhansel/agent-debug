@@ -6,9 +6,12 @@
 # Example: ./monitor_benchmarks.sh logs/benchmark_run_20260122_120000
 #
 
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Find the most recent log directory if not specified
 if [ -z "$1" ]; then
-    LOG_DIR=$(ls -td /Data/home/v-qizhengli/workspace/agent-debug/logs/benchmark_run_* 2>/dev/null | head -1)
+    LOG_DIR=$(ls -td "$SCRIPT_DIR/logs/benchmark_run_"* 2>/dev/null | head -1)
     if [ -z "$LOG_DIR" ]; then
         echo "No benchmark runs found. Start a run with ./run_all_benchmarks.sh first."
         exit 1

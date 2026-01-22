@@ -10,6 +10,9 @@
 #   api      - Only show API calls/responses
 #
 
+# Get script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 MODE="${1:-all}"
 
 # Colors
@@ -22,8 +25,8 @@ MAGENTA='\033[0;35m'
 WHITE='\033[1;37m'
 NC='\033[0m'
 
-RESULTS_DIR="/Data/home/v-qizhengli/workspace/agent-debug/results"
-LOGS_DIR="/Data/home/v-qizhengli/workspace/agent-debug/logs"
+RESULTS_DIR="$SCRIPT_DIR/results"
+LOGS_DIR="$SCRIPT_DIR/logs"
 
 echo -e "${CYAN}============================================================${NC}"
 echo -e "${CYAN}           COMPREHENSIVE LOG WATCHER${NC}"

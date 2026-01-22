@@ -9,11 +9,15 @@
 
 set -o pipefail
 
+# Get script directory (works on different machines)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
 # Configuration
 PREFIX="${1:-moon1_}"
 PARALLEL="${2:-10}"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOG_DIR="/Data/home/v-qizhengli/workspace/agent-debug/logs/benchmark_run_${TIMESTAMP}"
+LOG_DIR="$SCRIPT_DIR/logs/benchmark_run_${TIMESTAMP}"
 PARALLEL_MODELS=$PARALLEL
 PARALLEL_TASKS=$PARALLEL
 
@@ -31,9 +35,83 @@ BENCHMARKS=("scicode" "scienceagentbench" "corebench" "colbench")
 # Create log directory
 mkdir -p "$LOG_DIR"
 
+# =============================================================================
+# PRE-BUILD FUNCTIONS
+# =============================================================================
+
+# Pre-build SAB base image to avoid race conditions
+prebuild_sab_base() {
+    local image_name="sab.base.x86_64:latest"
+    if docker images -q "$image_name" 2>/dev/null | grep -q .; then
+        echo -e "${GREEN}[prebuild] SAB base image already exists${NC}"
+        return 0
+    fi
+
+    echo -e "${YELLOW}[prebuild] Building SAB base image (this may take a few minutes)...${NC}"
+
+    # Build using the dockerfiles.py template
+    python3 -c "
+import docker
+import sys
+sys.path.insert(0, '$SCRIPT_DIR/hal-harness/hal/benchmarks/scienceagentbench/ScienceAgentBench_modified/evaluation/harness')
+from dockerfiles import get_dockerfile_base
+from pathlib import Path
+import tempfile
+
+client = docker.from_env()
+dockerfile = get_dockerfile_base('linux/x86_64')
+
+with tempfile.TemporaryDirectory() as tmpdir:
+    dockerfile_path = Path(tmpdir) / 'Dockerfile'
+    dockerfile_path.write_text(dockerfile)
+
+    print('Building sab.base.x86_64:latest...')
+    image, logs = client.images.build(
+        path=tmpdir,
+        tag='sab.base.x86_64:latest',
+        platform='linux/x86_64',
+        rm=True
+    )
+    print(f'Built: {image.tags}')
+" 2>&1
+
+    if docker images -q "$image_name" 2>/dev/null | grep -q .; then
+        echo -e "${GREEN}[prebuild] SAB base image built successfully${NC}"
+        return 0
+    else
+        echo -e "${RED}[prebuild] WARNING: Failed to build SAB base image${NC}"
+        return 1
+    fi
+}
+
+# Pre-build agent environments for all benchmarks
+prebuild_agent_envs() {
+    echo -e "${CYAN}[prebuild] Pre-building agent Docker environments...${NC}"
+
+    # Run the existing prebuild script
+    if [ -f "$SCRIPT_DIR/prebuild_agent_envs.sh" ]; then
+        bash "$SCRIPT_DIR/prebuild_agent_envs.sh"
+    else
+        echo -e "${YELLOW}[prebuild] prebuild_agent_envs.sh not found, skipping${NC}"
+    fi
+
+    echo -e "${GREEN}[prebuild] Agent environment prebuild complete${NC}"
+}
+
+# =============================================================================
+# MAIN SCRIPT
+# =============================================================================
+
+# Pre-build base images before starting benchmarks
+echo -e "${CYAN}[$(date +%H:%M:%S)] Pre-building Docker images...${NC}"
+prebuild_sab_base
+prebuild_agent_envs
+echo ""
+
 echo -e "${CYAN}============================================================${NC}"
 echo -e "${CYAN}       COMPREHENSIVE BENCHMARK RUNNER${NC}"
 echo -e "${CYAN}============================================================${NC}"
+echo -e "${BLUE}Script Dir:${NC} $SCRIPT_DIR"
 echo -e "${BLUE}Timestamp:${NC} $TIMESTAMP"
 echo -e "${BLUE}Prefix:${NC} $PREFIX"
 echo -e "${BLUE}Log Directory:${NC} $LOG_DIR"
@@ -90,7 +168,7 @@ run_benchmark() {
 
     # Run benchmark and capture output
     (
-        cd /Data/home/v-qizhengli/workspace/agent-debug
+        cd "$SCRIPT_DIR"
         ./run_benchmark_with_data.sh python scripts/run_benchmark_fixes.py \
             --benchmark "$benchmark" \
             --all-configs \
