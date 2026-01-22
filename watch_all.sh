@@ -23,6 +23,7 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 WHITE='\033[1;37m'
+BOLD_GREEN='\033[1;32m'
 NC='\033[0m'
 
 RESULTS_DIR="$SCRIPT_DIR/results"
@@ -58,7 +59,7 @@ esac
 # Converts tail -f headers to "time + run_id" format
 format_and_colorize() {
     awk -v red="$RED" -v green="$GREEN" -v yellow="$YELLOW" -v blue="$BLUE" \
-        -v cyan="$CYAN" -v magenta="$MAGENTA" -v white="$WHITE" -v nc="$NC" '
+        -v cyan="$CYAN" -v magenta="$MAGENTA" -v white="$WHITE" -v bold_green="$BOLD_GREEN" -v nc="$NC" '
     BEGIN {
         current_run_id = ""
     }
@@ -103,8 +104,15 @@ format_and_colorize() {
         line = $0
         # Strip redundant log prefix: "YYYY-MM-DD HH:MM:SS,mmm - agent_eval.verbose - DEBUG - "
         gsub(/^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]+ - [a-zA-Z_.]+ - (DEBUG|INFO|WARNING|ERROR) - /, "", line)
+
         # Colorize based on content
-        if (tolower(line) ~ /error|exception|failed|traceback/) {
+        # PRIORITY 1: HAL evaluation results - BOLD GREEN spotlight
+        if (line ~ /Results:.*\{/ || line ~ /"accuracy"/ || line ~ /"score"/ || \
+            line ~ /Evaluation completed/ || line ~ /successful_tasks/ || line ~ /failed_tasks/) {
+            printf "%s%s%s%s\n", bold_green, prefix, line, nc
+        }
+        # PRIORITY 2: Errors
+        else if (tolower(line) ~ /error|exception|failed|traceback/) {
             printf "%s%s%s%s\n", red, prefix, line, nc
         } else if (tolower(line) ~ /401|403|429|500|502|503|504|timeout|unauthorized/) {
             printf "%s%s%s%s\n", magenta, prefix, line, nc
