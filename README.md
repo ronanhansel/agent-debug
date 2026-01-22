@@ -1200,13 +1200,13 @@ python scripts/run_benchmark_fixes.py --benchmark colbench --all-configs \
     --all-tasks --prefix colbench_sun1_ --docker --parallel-models 10 --parallel-tasks 5
 
 ./run_benchmark_with_data.sh python scripts/run_benchmark_fixes.py --benchmark scicode --all-configs \
-    --all-tasks --prefix scicode_moon1_ --docker --parallel-models 10 --parallel-tasks 25
+    --all-tasks --prefix scicode_moon1_ --docker --parallel-models 10 --parallel-tasks 10
 ./run_benchmark_with_data.sh python scripts/run_benchmark_fixes.py --benchmark scienceagentbench --all-configs \
-    --all-tasks --prefix sab_moon1_ --docker --parallel-models 10 --parallel-tasks 25
+    --all-tasks --prefix sab_moon1_ --docker --parallel-models 10 --parallel-tasks 10
 ./run_benchmark_with_data.sh python scripts/run_benchmark_fixes.py --benchmark corebench --all-configs \
-    --all-tasks --prefix corebench_moon1_ --docker --parallel-models 10 --parallel-tasks 25
+    --all-tasks --prefix corebench_moon1_ --docker --parallel-models 10 --parallel-tasks 10
 ./run_benchmark_with_data.sh python scripts/run_benchmark_fixes.py --benchmark colbench --all-configs \
-    --all-tasks --prefix colbench_moon1_ --docker --parallel-models 10 --parallel-tasks 25
+    --all-tasks --prefix colbench_moon1_ --docker --parallel-models 10 --parallel-tasks 10
 
 # Run ALL benchmarks, ALL tasks
 python scripts/run_benchmark_fixes.py --all-benchmarks --all-configs \

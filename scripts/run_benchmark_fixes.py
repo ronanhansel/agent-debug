@@ -1000,10 +1000,16 @@ def run_hal_eval(
             # Verify the file exists and count tasks
             if dataset_path.exists():
                 try:
-                    import json as _json
-                    with open(dataset_path) as _f:
-                        _data = _json.load(_f)
-                    log(f"Custom dataset: {env_var}={dataset_path} ({len(_data)} tasks)", "hal")
+                    suffix = dataset_path.suffix.lower()
+                    if suffix == ".jsonl":
+                        with open(dataset_path, "r", encoding="utf-8") as _f:
+                            count = sum(1 for line in _f if line.strip())
+                        log(f"Custom dataset: {env_var}={dataset_path} ({count} tasks)", "hal")
+                    else:
+                        import json as _json
+                        with open(dataset_path, "r", encoding="utf-8") as _f:
+                            _data = _json.load(_f)
+                        log(f"Custom dataset: {env_var}={dataset_path} ({len(_data)} tasks)", "hal")
                 except Exception as _e:
                     log(f"Custom dataset: {env_var}={dataset_path} (could not count: {_e})", "hal")
             else:
