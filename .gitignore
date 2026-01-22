@@ -1,4 +1,5 @@
 .env*
+.config/
 __pycache__/
 traces/
 lunette/
@@ -12,5 +13,6 @@ results/
 .DS_Store
 .tmp/
 logs/
+monitor_logs/
 tmp_*/
 new_traces/

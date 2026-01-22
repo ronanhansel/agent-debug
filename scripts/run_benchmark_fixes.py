@@ -964,6 +964,9 @@ def run_hal_eval(
     if docker:
         cmd.append("--docker")
 
+    # Always continue on errors so we don't lose progress
+    cmd.append("--ignore_errors")
+
     if max_tasks:
         cmd.extend(["--max_tasks", str(max_tasks)])
 
