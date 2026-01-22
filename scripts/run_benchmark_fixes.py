@@ -41,6 +41,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import random
@@ -48,7 +49,9 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import time
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -141,6 +144,170 @@ try:
 except ImportError:
     MODEL_UTILS_AVAILABLE = False
     print("[WARNING] shared.model_utils not available - model quirks may not be applied")
+
+# =============================================================================
+# CoreBench Preparation (decrypt + download capsules)
+# =============================================================================
+COREBENCH_DIR = HAL_HARNESS / "hal" / "benchmarks" / "corebench"
+COREBENCH_CAPSULES_DIR = COREBENCH_DIR / "capsules"
+COREBENCH_JSON = COREBENCH_DIR / "core_test.json"
+COREBENCH_JSON_GPG = COREBENCH_DIR / "core_test.json.gpg"
+COREBENCH_CAPSULE_URL = "https://corebench.cs.princeton.edu/capsules"
+
+
+def decrypt_corebench_dataset() -> bool:
+    """
+    Decrypt core_test.json.gpg if core_test.json doesn't exist.
+    Prompts user for passphrase with hint.
+
+    Returns:
+        True if file exists or was decrypted successfully, False otherwise.
+    """
+    if COREBENCH_JSON.exists():
+        return True
+
+    if not COREBENCH_JSON_GPG.exists():
+        print(f"[corebench] ERROR: Neither {COREBENCH_JSON} nor {COREBENCH_JSON_GPG} found")
+        return False
+
+    print(f"[corebench] core_test.json not found, need to decrypt from .gpg file")
+    print(f"[corebench] Hint: The passphrase is 'reproducibility'")
+
+    passphrase = getpass.getpass("[corebench] Enter passphrase: ")
+
+    try:
+        result = subprocess.run(
+            [
+                "gpg", "--batch", "--yes", "--passphrase-fd", "0",
+                "--output", str(COREBENCH_JSON),
+                "--decrypt", str(COREBENCH_JSON_GPG)
+            ],
+            input=passphrase.encode(),
+            capture_output=True,
+            timeout=30
+        )
+
+        if result.returncode != 0:
+            print(f"[corebench] ERROR: Decryption failed: {result.stderr.decode()}")
+            return False
+
+        print(f"[corebench] Successfully decrypted core_test.json")
+        return True
+
+    except subprocess.TimeoutExpired:
+        print(f"[corebench] ERROR: Decryption timed out")
+        return False
+    except FileNotFoundError:
+        print(f"[corebench] ERROR: gpg command not found. Install gnupg.")
+        return False
+    except Exception as e:
+        print(f"[corebench] ERROR: Decryption failed: {e}")
+        return False
+
+
+def download_corebench_capsule(capsule_id: str, max_retries: int = 3) -> str:
+    """Download and extract a single CoreBench capsule."""
+    capsule_dir = COREBENCH_CAPSULES_DIR / capsule_id
+
+    if capsule_dir.exists():
+        return f"{capsule_id}: already exists"
+
+    tar_path = COREBENCH_CAPSULES_DIR / f"{capsule_id}.tar.gz"
+    url = f"{COREBENCH_CAPSULE_URL}/{capsule_id}.tar.gz"
+
+    for attempt in range(max_retries):
+        try:
+            urllib.request.urlretrieve(url, str(tar_path))
+
+            with tarfile.open(tar_path, "r:gz") as tar:
+                tar.extractall(path=str(COREBENCH_CAPSULES_DIR))
+
+            tar_path.unlink()
+            return f"{capsule_id}: downloaded"
+
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+            else:
+                if tar_path.exists():
+                    tar_path.unlink()
+                return f"{capsule_id}: FAILED - {e}"
+
+    return f"{capsule_id}: FAILED after {max_retries} attempts"
+
+
+def download_all_corebench_capsules() -> bool:
+    """
+    Download all CoreBench capsules in parallel.
+
+    Returns:
+        True if all capsules downloaded successfully, False otherwise.
+    """
+    if not COREBENCH_JSON.exists():
+        print(f"[corebench] ERROR: core_test.json not found, cannot determine capsules")
+        return False
+
+    with open(COREBENCH_JSON, 'r') as f:
+        dataset = json.load(f)
+
+    capsule_ids = list(set(task["capsule_id"] for task in dataset))
+
+    # Check how many already exist
+    existing = sum(1 for cid in capsule_ids if (COREBENCH_CAPSULES_DIR / cid).exists())
+
+    if existing == len(capsule_ids):
+        print(f"[corebench] All {len(capsule_ids)} capsules already downloaded")
+        return True
+
+    print(f"[corebench] Downloading capsules: {existing}/{len(capsule_ids)} already exist")
+
+    COREBENCH_CAPSULES_DIR.mkdir(parents=True, exist_ok=True)
+
+    completed = 0
+    failed = []
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = {executor.submit(download_corebench_capsule, cid): cid for cid in capsule_ids}
+
+        for future in as_completed(futures):
+            result = future.result()
+            completed += 1
+            capsule_id = futures[future]
+
+            if "FAILED" in result:
+                failed.append(capsule_id)
+                print(f"[corebench] [{completed}/{len(capsule_ids)}] {result}")
+            elif "downloaded" in result:
+                print(f"[corebench] [{completed}/{len(capsule_ids)}] {result}")
+
+    if failed:
+        print(f"[corebench] WARNING: {len(failed)} capsules failed to download: {failed}")
+        return False
+
+    print(f"[corebench] All {len(capsule_ids)} capsules ready")
+    return True
+
+
+def prepare_corebench() -> bool:
+    """
+    Prepare CoreBench for running: decrypt dataset and download all capsules.
+
+    Returns:
+        True if preparation successful, False otherwise.
+    """
+    print(f"[corebench] Preparing CoreBench environment...")
+
+    # Step 1: Decrypt dataset if needed
+    if not decrypt_corebench_dataset():
+        return False
+
+    # Step 2: Download all capsules
+    if not download_all_corebench_capsules():
+        return False
+
+    print(f"[corebench] CoreBench preparation complete")
+    return True
+
 
 # =============================================================================
 # Benchmark to HAL benchmark name mapping
@@ -1086,6 +1253,12 @@ def main():
         # Show ColBench warning
         if benchmark == "colbench":
             print(COLBENCH_WARNING)
+
+        # Prepare CoreBench: decrypt dataset + download capsules
+        if benchmark in ("corebench", "corebench_hard") and args.all_tasks:
+            if not prepare_corebench():
+                log(f"ERROR: CoreBench preparation failed, skipping", "main")
+                continue
 
         # Get HAL benchmark name
         hal_benchmark = BENCHMARK_HAL_NAME_MAP.get(benchmark, benchmark)
