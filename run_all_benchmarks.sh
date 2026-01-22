@@ -21,6 +21,9 @@ LOG_DIR="$SCRIPT_DIR/logs/benchmark_run_${TIMESTAMP}"
 PARALLEL_MODELS=$PARALLEL
 PARALLEL_TASKS=$PARALLEL
 
+# Use host networking to avoid docker0 bridge limits (allows 1000+ containers)
+export HAL_DOCKER_NETWORK_MODE=host
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -122,7 +125,7 @@ filter_log() {
         # Always show these patterns
         if echo "$line" | grep -qiE "error|exception|failed|traceback|401|unauthorized"; then
             echo -e "${RED}[$benchmark] $line${NC}"
-        elif echo "$line" | grep -qiE "success|completed|finished"; then
+        elif echo "$line" | grep -qiE "success|completed|finished|\[DONE\]"; then
             echo -e "${GREEN}[$benchmark] $line${NC}"
         elif echo "$line" | grep -qiE "starting|started|running|task.*[0-9]+/[0-9]+|\[hal\]|\[main\]"; then
             echo -e "${color}[$benchmark] $line${NC}"
@@ -130,6 +133,11 @@ filter_log() {
             echo -e "${YELLOW}[$benchmark] $line${NC}"
         elif echo "$line" | grep -qiE "trace saved|upload"; then
             echo -e "${GREEN}[$benchmark] $line${NC}"
+        # Show build progress
+        elif echo "$line" | grep -qiE "\[BUILD\]|\[OK\]|Building.*image|mamba create|conda create|Installing|Collecting|Downloading|agent-env"; then
+            echo -e "${YELLOW}[$benchmark] $line${NC}"
+        elif echo "$line" | grep -qiE "Pre-building|Step [0-9]+/[0-9]+"; then
+            echo -e "${CYAN}[$benchmark] $line${NC}"
         fi
         # Other lines are written to log but not displayed
     done
@@ -198,8 +206,8 @@ monitor_progress() {
             elif [ -f "$pid_file" ]; then
                 pid=$(cat "$pid_file")
                 if ps -p $pid > /dev/null 2>&1; then
-                    # Get last few relevant lines from log
-                    last_activity=$(grep -iE "task|success|error|\[hal\]|\[main\]" "$LOG_DIR/${benchmark}.log" 2>/dev/null | tail -1)
+                    # Get last few relevant lines from log (expanded patterns)
+                    last_activity=$(grep -iE "task|success|error|fail|\[hal\]|\[main\]|\[BUILD\]|\[OK\]|\[DONE\]|Building|Installing|mamba|conda|pip install|Collecting|Downloading" "$LOG_DIR/${benchmark}.log" 2>/dev/null | tail -1)
                     echo -e "${BLUE}  $benchmark: RUNNING (PID: $pid)${NC}"
                     [ -n "$last_activity" ] && echo -e "    Last: $last_activity"
                     all_done=false
@@ -212,9 +220,21 @@ monitor_progress() {
             fi
         done
 
-        # Show Docker container count
-        container_count=$(docker ps --format "{{.Names}}" 2>/dev/null | grep -c "agentrun" || echo "0")
-        echo -e "${CYAN}  Active containers: $container_count${NC}"
+        # Show Docker status with more detail
+        agent_containers=$(docker ps --format "{{.Names}}" 2>/dev/null | grep -c "agentrun" || echo "0")
+        build_containers=$(docker ps --format "{{.ID}}" 2>/dev/null | wc -l)
+        build_containers=$((build_containers - agent_containers))
+        [ $build_containers -lt 0 ] && build_containers=0
+
+        images_built=$(docker images 2>/dev/null | grep -c "agent-env" || echo "0")
+
+        echo -e "${CYAN}  Docker: ${agent_containers} agent containers, ${build_containers} build containers, ${images_built} images cached${NC}"
+
+        # Show current build activity if any
+        if [ "$build_containers" -gt 0 ]; then
+            build_activity=$(docker ps --format "{{.Command}}" 2>/dev/null | grep -oE "(mamba|conda|pip) [a-z]+" | head -3 | tr '\n' ', ' | sed 's/, $//')
+            [ -n "$build_activity" ] && echo -e "${YELLOW}    Building: $build_activity${NC}"
+        fi
 
         if $all_done; then
             echo -e "${GREEN}[$(date +%H:%M:%S)] All benchmarks completed!${NC}"

@@ -119,7 +119,7 @@ build_agent_env() {
     # Calculate hash (same logic as docker_runner.py)
     local base_image_id=$(docker images -q hal-agent-runner:latest 2>/dev/null | head -1)
     local req_content=$(cat "$req_file")
-    local recipe="template=6\npython=3.11\nweave=0.51.41\nwandb=0.17.9\n"
+    local recipe="template=7\npython=3.11\nweave=0.51.41\nwandb=0.17.9\n"
     local hash_input="${req_content}\n${base_image_id}\n${recipe}"
     local hash=$(echo -e "$hash_input" | sha256sum | cut -c1-16)
     local tag="hal-agent-runner:agent-env-${hash}"
@@ -141,8 +141,8 @@ FROM ${BASE_IMAGE}
 RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main 2>/dev/null || true && \
     conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r 2>/dev/null || true
 
-# Create agent environment with Python 3.11
-RUN conda create -y -n agent_env python=3.11 && \
+# Create agent environment with Python 3.11 (using mamba for speed)
+RUN mamba create -y -n agent_env python=3.11 && \
     conda run -n agent_env python -m pip install -U pip
 
 # Install agent requirements
