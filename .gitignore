@@ -16,3 +16,4 @@ logs/
 monitor_logs/
 tmp_*/
 new_traces/
+.hal_data/

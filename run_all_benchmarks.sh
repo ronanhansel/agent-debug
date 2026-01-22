@@ -36,76 +36,55 @@ BENCHMARKS=("scicode" "scienceagentbench" "corebench" "colbench")
 mkdir -p "$LOG_DIR"
 
 # =============================================================================
-# PRE-BUILD FUNCTIONS
+# PRE-BUILD FUNCTION
 # =============================================================================
 
-# Pre-build SAB base image to avoid race conditions
-prebuild_sab_base() {
-    local image_name="sab.base.x86_64:latest"
-    if docker images -q "$image_name" 2>/dev/null | grep -q .; then
-        echo -e "${GREEN}[prebuild] SAB base image already exists${NC}"
+# Comprehensive prebuild using the dedicated script
+run_comprehensive_prebuild() {
+    echo -e "${CYAN}================================================================${NC}"
+    echo -e "${CYAN}[$(date +%H:%M:%S)] PHASE 1: PRE-BUILDING ALL DOCKER IMAGES${NC}"
+    echo -e "${CYAN}================================================================${NC}"
+    echo ""
+    echo -e "${YELLOW}This ensures 800+ parallel processes don't race to build images.${NC}"
+    echo ""
+
+    # Use the comprehensive prebuild script
+    if [ -f "$SCRIPT_DIR/prebuild_all_images.sh" ]; then
+        if bash "$SCRIPT_DIR/prebuild_all_images.sh"; then
+            echo -e "${GREEN}[prebuild] All Docker images ready!${NC}"
+            return 0
+        else
+            echo -e "${RED}[prebuild] CRITICAL: Prebuild failed!${NC}"
+            echo -e "${RED}Cannot proceed with benchmarks - image builds may race and fail.${NC}"
+            echo ""
+            echo -e "${YELLOW}Options:${NC}"
+            echo "  1. Fix the errors above and re-run"
+            echo "  2. Run ./prebuild_all_images.sh --force to rebuild all images"
+            echo "  3. Check network connectivity and Docker daemon status"
+            return 1
+        fi
+    else
+        echo -e "${YELLOW}[prebuild] prebuild_all_images.sh not found, using legacy method...${NC}"
+        # Legacy fallback
+        if [ -f "$SCRIPT_DIR/prebuild_agent_envs.sh" ]; then
+            bash "$SCRIPT_DIR/prebuild_agent_envs.sh"
+        fi
         return 0
     fi
-
-    echo -e "${YELLOW}[prebuild] Building SAB base image (this may take a few minutes)...${NC}"
-
-    # Build using the dockerfiles.py template
-    python3 -c "
-import docker
-import sys
-sys.path.insert(0, '$SCRIPT_DIR/hal-harness/hal/benchmarks/scienceagentbench/ScienceAgentBench_modified/evaluation/harness')
-from dockerfiles import get_dockerfile_base
-from pathlib import Path
-import tempfile
-
-client = docker.from_env()
-dockerfile = get_dockerfile_base('linux/x86_64')
-
-with tempfile.TemporaryDirectory() as tmpdir:
-    dockerfile_path = Path(tmpdir) / 'Dockerfile'
-    dockerfile_path.write_text(dockerfile)
-
-    print('Building sab.base.x86_64:latest...')
-    image, logs = client.images.build(
-        path=tmpdir,
-        tag='sab.base.x86_64:latest',
-        platform='linux/x86_64',
-        rm=True
-    )
-    print(f'Built: {image.tags}')
-" 2>&1
-
-    if docker images -q "$image_name" 2>/dev/null | grep -q .; then
-        echo -e "${GREEN}[prebuild] SAB base image built successfully${NC}"
-        return 0
-    else
-        echo -e "${RED}[prebuild] WARNING: Failed to build SAB base image${NC}"
-        return 1
-    fi
-}
-
-# Pre-build agent environments for all benchmarks
-prebuild_agent_envs() {
-    echo -e "${CYAN}[prebuild] Pre-building agent Docker environments...${NC}"
-
-    # Run the existing prebuild script
-    if [ -f "$SCRIPT_DIR/prebuild_agent_envs.sh" ]; then
-        bash "$SCRIPT_DIR/prebuild_agent_envs.sh"
-    else
-        echo -e "${YELLOW}[prebuild] prebuild_agent_envs.sh not found, skipping${NC}"
-    fi
-
-    echo -e "${GREEN}[prebuild] Agent environment prebuild complete${NC}"
 }
 
 # =============================================================================
 # MAIN SCRIPT
 # =============================================================================
 
-# Pre-build base images before starting benchmarks
-echo -e "${CYAN}[$(date +%H:%M:%S)] Pre-building Docker images...${NC}"
-prebuild_sab_base
-prebuild_agent_envs
+# Pre-build ALL images before starting benchmarks (CRITICAL for parallel execution)
+if ! run_comprehensive_prebuild; then
+    echo ""
+    echo -e "${RED}================================================================${NC}"
+    echo -e "${RED}  ABORTING: Cannot start benchmarks without pre-built images${NC}"
+    echo -e "${RED}================================================================${NC}"
+    exit 1
+fi
 echo ""
 
 echo -e "${CYAN}============================================================${NC}"

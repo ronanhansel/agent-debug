@@ -7,13 +7,54 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${HAL_REPO_ROOT:-$SCRIPT_DIR}"
 WORKDIR="${HAL_WORKDIR:-$REPO_ROOT}"
 HAL_HARNESS="$REPO_ROOT/hal-harness"
-DEFAULT_DATA_ROOT="/Data/home/${USER}"
-if [ ! -d "$DEFAULT_DATA_ROOT" ]; then
-    DEFAULT_DATA_ROOT="/Data"
-fi
-DATA_ROOT="${HAL_DATA_ROOT:-$DEFAULT_DATA_ROOT}"
+
+# =============================================================================
+# Dynamic storage detection - works on any machine
+# =============================================================================
+# Priority order:
+# 1. HAL_DATA_ROOT environment variable (explicit override)
+# 2. /Data/home/${USER} if exists and writable
+# 3. /Data if exists and writable
+# 4. Repository's .hal_data directory (always works, uses repo storage)
+
+detect_data_root() {
+    # Check if explicitly set
+    if [ -n "${HAL_DATA_ROOT:-}" ]; then
+        echo "$HAL_DATA_ROOT"
+        return
+    fi
+
+    # Try /Data/home/${USER}
+    local data_home="/Data/home/${USER}"
+    if [ -d "$data_home" ] && [ -w "$data_home" ]; then
+        echo "$data_home"
+        return
+    fi
+
+    # Try /Data
+    if [ -d "/Data" ] && [ -w "/Data" ]; then
+        echo "/Data"
+        return
+    fi
+
+    # Fall back to repository-local storage
+    local local_data="$REPO_ROOT/.hal_data"
+    mkdir -p "$local_data" 2>/dev/null || true
+    echo "$local_data"
+}
+
+DATA_ROOT="$(detect_data_root)"
 DATA_NAMESPACE="${HAL_DATA_NAMESPACE:-$USER}"
-DATA_RUN_ROOT="${HAL_DATA_RUN_ROOT:-$DATA_ROOT/hal_runs/$DATA_NAMESPACE/$(basename "$REPO_ROOT")}"
+
+# If using repo-local storage, simplify the path structure
+if [[ "$DATA_ROOT" == "$REPO_ROOT/.hal_data" ]]; then
+    DATA_RUN_ROOT="${HAL_DATA_RUN_ROOT:-$DATA_ROOT}"
+else
+    DATA_RUN_ROOT="${HAL_DATA_RUN_ROOT:-$DATA_ROOT/hal_runs/$DATA_NAMESPACE/$(basename "$REPO_ROOT")}"
+fi
+
+echo "[Storage] Using data root: $DATA_ROOT"
+echo "[Storage] Run root: $DATA_RUN_ROOT"
 
 # Set working directory
 cd "$WORKDIR"
@@ -207,14 +248,14 @@ echo "=========================================="
 echo "Root partition:"
 df -h / | tail -1
 echo ""
-echo "/Data partition:"
-df -h /Data | tail -1
+echo "Data storage partition ($DATA_ROOT):"
+df -h "$DATA_ROOT" 2>/dev/null | tail -1 || echo "(using same as root)"
 echo ""
 echo "Temp directory: $TMPDIR"
-echo "Available for temp files: $(df -h $TMPDIR | tail -1 | awk '{print $4}')"
+echo "Available for temp files: $(df -h "$TMPDIR" 2>/dev/null | tail -1 | awk '{print $4}' || echo 'N/A')"
 echo ""
 echo "Docker usage:"
-docker system df --format "table {{.Type}}\t{{.Size}}\t{{.Reclaimable}}"
+docker system df --format "table {{.Type}}\t{{.Size}}\t{{.Reclaimable}}" 2>/dev/null || echo "(docker not available)"
 echo "=========================================="
 echo ""
 
