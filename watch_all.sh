@@ -8,7 +8,7 @@
 #   logs      - Real-time log tailing (verbose output)
 #   errors    - Only show errors from logs
 #   api       - Only show API calls/responses from logs
-#   agents    - Per-agent progress tracker (completed/evaluated)
+#   agents    - Aggregate progress per benchmark (use --per-agent for details)
 #
 
 # Get script directory
@@ -309,14 +309,6 @@ format_and_colorize() {
             printf "%s%s%s%s\n", yellow, prefix, line, nc
         } else if (tolower(line) ~ /starting|running|task/) {
             printf "%s%s%s%s\n", blue, prefix, line, nc
-        } else if (tolower(line) ~ /\[scicode\]/) {
-            printf "%s%s%s%s\n", cyan, prefix, line, nc
-        } else if (tolower(line) ~ /\[corebench\]/) {
-            printf "%s%s%s%s\n", green, prefix, line, nc
-        } else if (tolower(line) ~ /\[colbench\]/) {
-            printf "%s%s%s%s\n", yellow, prefix, line, nc
-        } else if (tolower(line) ~ /\[scienceagentbench\]|\[sab\]/) {
-            printf "%s%s%s%s\n", magenta, prefix, line, nc
         } else {
             printf "%s%s\n", prefix, line
         }

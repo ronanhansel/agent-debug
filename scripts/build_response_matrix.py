@@ -46,6 +46,8 @@ AUTH_ERROR_SNIPPETS = (
     "error code: 401",
 )
 
+SCICODE_CACHED_IMAGE = "scicode-eval:latest"
+
 
 def _push_env(key: str, value: Optional[str]) -> Optional[str]:
     old = os.environ.get(key)
@@ -73,6 +75,19 @@ def _extract_python_code(history_payload: Dict[str, object]) -> Optional[str]:
     if not match:
         return None
     return match.group(1).strip()
+
+
+def docker_image_exists(image_name: str) -> bool:
+    try:
+        import docker
+    except ImportError:
+        return False
+    try:
+        client = docker.from_env()
+        client.images.get(image_name)
+        return True
+    except Exception:
+        return False
 
 
 def detect_run_root(script_dir: Path) -> Path:
@@ -205,11 +220,22 @@ def reeval_scicode(dataset_path: Path, ok_tasks: Dict[str, object]) -> Dict[str,
     from hal.benchmarks.scicode import SciCodeBenchmark
 
     env_old = _push_env("SCICODE_DATASET_PATH", str(dataset_path))
+    image_old = os.environ.get("SCICODE_EVAL_IMAGE")
+    skip_old = os.environ.get("SCICODE_EVAL_SKIP_INSTALL")
+    used_cached = False
+    if not image_old and docker_image_exists(SCICODE_CACHED_IMAGE):
+        os.environ["SCICODE_EVAL_IMAGE"] = SCICODE_CACHED_IMAGE
+        if skip_old is None:
+            os.environ["SCICODE_EVAL_SKIP_INSTALL"] = "1"
+        used_cached = True
     try:
         bench = SciCodeBenchmark(agent_dir=".", config={}, benchmark_name="scicode")
         eval_results = bench.evaluate_output(ok_tasks, run_id="reeval_scicode")
     finally:
         _push_env("SCICODE_DATASET_PATH", env_old)
+        if used_cached:
+            _push_env("SCICODE_EVAL_IMAGE", image_old)
+            _push_env("SCICODE_EVAL_SKIP_INSTALL", skip_old)
 
     details = eval_results.get("details", {})
     results: Dict[str, int] = {}
@@ -308,8 +334,8 @@ def reeval_scienceagentbench(dataset_path: Path, ok_tasks: Dict[str, object]) ->
             split="validation",
             instance_ids=instance_ids,
             max_workers=max(1, (os.cpu_count() or 2) // 2),
-            force_rebuild=True,
-            cache_level="none",
+            force_rebuild=False,
+            cache_level="instance",
             clean=False,
             open_file_limit=4096,
             run_id=f"reeval_{os.getpid()}",
