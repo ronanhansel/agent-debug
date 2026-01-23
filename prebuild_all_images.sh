@@ -96,82 +96,25 @@ echo ""
 
 # =============================================================================
 # STEP 2: Build agent-env images (per-agent environments)
+# Uses prebuild_agent_envs.py which reads constants directly from HAL's docker_runner.py
+# This ensures hash calculations ALWAYS match HAL - no manual synchronization needed!
 # =============================================================================
-echo -e "${CYAN}[Step 2/4] Building agent-env images${NC}"
+echo -e "${CYAN}[Step 2/4] Building agent-env images (via prebuild_agent_envs.py)${NC}"
 
-AGENTS=(
-    "hal_generalist_agent"       # Used by: scienceagentbench, corebench, scicode, colbench
-    "scicode_tool_calling_agent" # Used by: scicode
-    "sab_example_agent"          # Used by: scienceagentbench
-    "core_agent"                 # Used by: corebench
-    "colbench_example_agent"     # Used by: colbench
-)
-
-build_agent_env() {
-    local agent_dir="$1"
-    local req_file="$HAL_HARNESS/agents/$agent_dir/requirements.txt"
-
-    if [ ! -f "$req_file" ]; then
-        echo -e "${YELLOW}  [SKIP] $agent_dir - no requirements.txt${NC}"
-        return 0
-    fi
-
-    # Calculate hash (same logic as docker_runner.py)
-    local base_image_id=$(docker images -q hal-agent-runner:latest 2>/dev/null | head -1)
-    local req_content=$(cat "$req_file")
-    local recipe="template=7\npython=3.11\nweave=0.51.41\nwandb=0.17.9\n"
-    local hash_input="${req_content}\n${base_image_id}\n${recipe}"
-    local hash=$(echo -e "$hash_input" | sha256sum | cut -c1-16)
-    local tag="hal-agent-runner:agent-env-${hash}"
-
-    if [[ "$FORCE_REBUILD" == "false" ]] && docker images -q "$tag" 2>/dev/null | grep -q .; then
-        echo -e "${GREEN}  [OK] $agent_dir -> $tag${NC}"
-        return 0
-    fi
-
-    echo -e "${YELLOW}  [BUILD] $agent_dir -> $tag${NC}"
-
-    # Create temp Dockerfile
-    local tmp_dockerfile=$(mktemp)
-    cat > "$tmp_dockerfile" << 'DOCKERFILE'
-ARG BASE_IMAGE=hal-agent-runner:latest
-FROM ${BASE_IMAGE}
-
-# Accept conda TOS to avoid interactive prompts
-RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main 2>/dev/null || true && \
-    conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r 2>/dev/null || true
-
-# Create agent environment with Python 3.11 (using mamba for speed)
-RUN mamba create -y -n agent_env python=3.11 && \
-    conda run -n agent_env python -m pip install -U pip
-
-# Install agent requirements
-COPY requirements.txt /tmp/requirements.txt
-RUN conda run -n agent_env pip install --no-cache-dir -r /tmp/requirements.txt && \
-    conda run -n agent_env pip install --no-cache-dir weave==0.51.41 'gql<4' wandb==0.17.9
-
-WORKDIR /workspace
-DOCKERFILE
-
-    local build_context="$HAL_HARNESS/agents/$agent_dir"
-
-    if docker build -t "$tag" -f "$tmp_dockerfile" "$build_context" 2>&1 | tail -30; then
-        echo -e "${GREEN}  [DONE] $agent_dir${NC}"
-        rm -f "$tmp_dockerfile"
+build_agent_envs() {
+    # Call Python script which reads constants directly from HAL's docker_runner.py
+    # This ensures hash calculations always match - no hardcoded values here!
+    if python3 "$SCRIPT_DIR/prebuild_agent_envs.py"; then
         return 0
     else
-        echo -e "${RED}  [FAIL] $agent_dir${NC}"
-        rm -f "$tmp_dockerfile"
         return 1
     fi
 }
 
-for agent in "${AGENTS[@]}"; do
-    if ! retry 2 5 "build_agent_env '$agent'"; then
-        echo -e "${RED}  [ERROR] Failed to build $agent after retries${NC}"
-        ((FAILURES++))
-    fi
-done
+if ! retry 2 10 build_agent_envs; then
+    echo -e "${RED}  [ERROR] Failed to build agent-env images after retries${NC}"
+    ((FAILURES++))
+fi
 echo ""
 
 # =============================================================================

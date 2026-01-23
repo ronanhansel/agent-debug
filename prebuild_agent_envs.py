@@ -1,45 +1,63 @@
 #!/usr/bin/env python3
-"""Pre-build all agent-env Docker images using HAL's actual hash calculation."""
+"""
+Pre-build all agent-env Docker images using HAL's actual hash calculation.
+
+This script parses constants DIRECTLY from HAL's docker_runner.py to ensure
+hash calculations always match. No manual synchronization or HAL imports needed.
+"""
 
 import sys
+import os
+import re
 import hashlib
-import json
 from pathlib import Path
-
-# Add hal-harness to path
-HAL_HARNESS = Path(__file__).parent / "hal-harness"
-sys.path.insert(0, str(HAL_HARNESS))
 
 import docker
 
-# Constants from HAL's docker_runner.py
-DOCKER_IMAGE_NAME = "hal-agent-runner:latest"
-AGENT_ENV_TEMPLATE_VERSION = 2
-AGENT_ENV_PYTHON_VERSION = "3.11"
+# Path to HAL harness
+HAL_HARNESS = Path(__file__).parent / "hal-harness"
+DOCKER_RUNNER_PY = HAL_HARNESS / "hal" / "utils" / "docker_runner.py"
 
-# All agents used by benchmarks
+
+def parse_hal_constants():
+    """Parse constants directly from docker_runner.py without importing.
+
+    This avoids dependency chain issues (pydantic, etc.) while ensuring
+    we always use the exact same values as HAL.
+    """
+    content = DOCKER_RUNNER_PY.read_text()
+
+    # Parse DOCKER_IMAGE_NAME = "..."
+    match = re.search(r'DOCKER_IMAGE_NAME\s*=\s*["\']([^"\']+)["\']', content)
+    if not match:
+        raise ValueError("Could not find DOCKER_IMAGE_NAME in docker_runner.py")
+    docker_image_name = match.group(1)
+
+    # Parse AGENT_ENV_PYTHON_VERSION = "..."
+    match = re.search(r'AGENT_ENV_PYTHON_VERSION\s*=\s*["\']([^"\']+)["\']', content)
+    if not match:
+        raise ValueError("Could not find AGENT_ENV_PYTHON_VERSION in docker_runner.py")
+    python_version = match.group(1)
+
+    # Parse AGENT_ENV_TEMPLATE_VERSION = "..."
+    match = re.search(r'AGENT_ENV_TEMPLATE_VERSION\s*=\s*["\']([^"\']+)["\']', content)
+    if not match:
+        raise ValueError("Could not find AGENT_ENV_TEMPLATE_VERSION in docker_runner.py")
+    template_version = match.group(1)
+
+    return docker_image_name, python_version, template_version
+
+
+# Parse constants from HAL's docker_runner.py - always in sync!
+DOCKER_IMAGE_NAME, AGENT_ENV_PYTHON_VERSION, AGENT_ENV_TEMPLATE_VERSION = parse_hal_constants()
+
+# All agents used by benchmarks - only the 4 active benchmarks
 BENCHMARK_AGENTS = {
     "scicode": ["hal_generalist_agent", "scicode_tool_calling_agent"],
     "scienceagentbench": ["hal_generalist_agent", "sab_example_agent"],
     "corebench": ["hal_generalist_agent", "core_agent"],
     "colbench": ["hal_generalist_agent", "colbench_example_agent"],
 }
-
-
-def compute_requirements_hash(requirements_path: Path, docker_client) -> str:
-    """Compute hash exactly as HAL does."""
-    req_bytes = requirements_path.read_bytes()
-    try:
-        base_image_id = docker_client.images.get(DOCKER_IMAGE_NAME).id.encode("utf-8")
-    except Exception:
-        base_image_id = b"unknown-base-image"
-    recipe = (
-        f"template={AGENT_ENV_TEMPLATE_VERSION}\n"
-        f"python={AGENT_ENV_PYTHON_VERSION}\n"
-        "weave=0.51.41\n"
-        "wandb=0.17.9\n"
-    ).encode("utf-8")
-    return hashlib.sha256(req_bytes + b"\n" + base_image_id + b"\n" + recipe).hexdigest()[:16]
 
 
 def image_exists(docker_client, tag: str) -> bool:
@@ -51,15 +69,42 @@ def image_exists(docker_client, tag: str) -> bool:
         return False
 
 
+def compute_requirements_hash(docker_client, requirements_path: str) -> str:
+    """Compute requirements hash exactly as HAL does in _requirements_hash().
+
+    Hash = sha256(requirements.txt + base_image_id + recipe)[:16]
+
+    This must match HAL's docker_runner.py _requirements_hash() exactly!
+    """
+    req_bytes = Path(requirements_path).read_bytes()
+
+    # Get base image ID (matches HAL's logic)
+    try:
+        base_image_id = docker_client.images.get(DOCKER_IMAGE_NAME).id.encode("utf-8")
+    except Exception:
+        base_image_id = b"unknown-base-image"
+
+    # Recipe string (matches HAL's _requirements_hash exactly)
+    recipe = (
+        f"template={AGENT_ENV_TEMPLATE_VERSION}\n"
+        f"python={AGENT_ENV_PYTHON_VERSION}\n"
+        "weave=0.51.41\n"
+        "wandb=0.17.9\n"
+    ).encode("utf-8")
+
+    return hashlib.sha256(req_bytes + b"\n" + base_image_id + b"\n" + recipe).hexdigest()[:16]
+
+
 def build_agent_env(docker_client, agent_dir: str, agents_path: Path) -> bool:
-    """Build agent-env image for a specific agent with verbose output."""
+    """Build agent-env image for a specific agent using HAL's exact hash calculation."""
     req_file = agents_path / agent_dir / "requirements.txt"
 
     if not req_file.exists():
         print(f"  [SKIP] {agent_dir} - no requirements.txt")
         return True
 
-    req_hash = compute_requirements_hash(req_file, docker_client)
+    # Use HAL's actual hash calculation method
+    req_hash = compute_requirements_hash(docker_client, str(req_file))
     tag = f"hal-agent-runner:agent-env-{req_hash}"
 
     if image_exists(docker_client, tag):
@@ -71,14 +116,15 @@ def build_agent_env(docker_client, agent_dir: str, agents_path: Path) -> bool:
     print(f"    Installing {num_packages} packages...")
     sys.stdout.flush()
 
-    # Create Dockerfile content
+    # Create Dockerfile content - must match HAL's _ensure_prepared_image exactly
+    # Using mamba for template v7+
     dockerfile = f"""
 FROM {DOCKER_IMAGE_NAME}
 
-RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \\
-    conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
+RUN conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main 2>/dev/null || true && \\
+    conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r 2>/dev/null || true
 
-RUN conda create -y -n agent_env python={AGENT_ENV_PYTHON_VERSION} && \\
+RUN mamba create -y -n agent_env python={AGENT_ENV_PYTHON_VERSION} && \\
     conda run -n agent_env python -m pip install -U pip
 
 COPY requirements.txt /tmp/requirements.txt
@@ -150,9 +196,14 @@ WORKDIR /workspace
 
 
 def main():
-    print("=" * 50)
+    print("=" * 60)
     print("Pre-building ALL Agent Environment Images")
-    print("=" * 50)
+    print("=" * 60)
+    print()
+    print(f"Using HAL constants (parsed from hal/utils/docker_runner.py):")
+    print(f"  DOCKER_IMAGE_NAME: {DOCKER_IMAGE_NAME}")
+    print(f"  AGENT_ENV_TEMPLATE_VERSION: {AGENT_ENV_TEMPLATE_VERSION}")
+    print(f"  AGENT_ENV_PYTHON_VERSION: {AGENT_ENV_PYTHON_VERSION}")
     print()
     sys.stdout.flush()
 
@@ -198,7 +249,7 @@ def main():
             failed += 1
 
     print()
-    print("=" * 50)
+    print("=" * 60)
     print("Summary:")
     for img in docker_client.images.list():
         for tag in img.tags:
@@ -211,13 +262,12 @@ def main():
         print(f"All {len(all_agents)} agent-env images ready!")
         print()
         print("You can now run benchmarks with full parallelism:")
-        print("  ./run_benchmark_with_data.sh python scripts/run_benchmark_fixes.py \\")
-        print("      --benchmark scicode --docker --parallel-tasks 10")
+        print("  ./run_all_benchmarks.sh moon5_ 20")
     else:
         print(f"WARNING: {failed} image(s) failed to build")
         sys.exit(1)
 
-    print("=" * 50)
+    print("=" * 60)
 
 
 if __name__ == "__main__":
