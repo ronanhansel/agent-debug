@@ -113,7 +113,7 @@ cat > "$LOG_DIR/config.json" << EOF
 }
 EOF
 
-# Function to filter and colorize log output
+# Function to filter log output (minimal - only critical messages)
 filter_log() {
     local benchmark=$1
     local color=$2
@@ -122,24 +122,13 @@ filter_log() {
         # Skip empty lines
         [[ -z "$line" ]] && continue
 
-        # Always show these patterns
+        # Only show critical messages (errors and completion)
         if echo "$line" | grep -qiE "error|exception|failed|traceback|401|unauthorized"; then
             echo -e "${RED}[$benchmark] $line${NC}"
-        elif echo "$line" | grep -qiE "success|completed|finished|\[DONE\]"; then
+        elif echo "$line" | grep -qiE "COMPLETED|FINISHED|All.*done"; then
             echo -e "${GREEN}[$benchmark] $line${NC}"
-        elif echo "$line" | grep -qiE "starting|started|running|task.*[0-9]+/[0-9]+|\[hal\]|\[main\]"; then
-            echo -e "${color}[$benchmark] $line${NC}"
-        elif echo "$line" | grep -qiE "warning|warn"; then
-            echo -e "${YELLOW}[$benchmark] $line${NC}"
-        elif echo "$line" | grep -qiE "trace saved|upload"; then
-            echo -e "${GREEN}[$benchmark] $line${NC}"
-        # Show build progress
-        elif echo "$line" | grep -qiE "\[BUILD\]|\[OK\]|Building.*image|mamba create|conda create|Installing|Collecting|Downloading|agent-env"; then
-            echo -e "${YELLOW}[$benchmark] $line${NC}"
-        elif echo "$line" | grep -qiE "Pre-building|Step [0-9]+/[0-9]+"; then
-            echo -e "${CYAN}[$benchmark] $line${NC}"
         fi
-        # Other lines are written to log but not displayed
+        # All other lines are only written to log, not displayed
     done
 }
 
@@ -181,15 +170,10 @@ run_benchmark() {
     echo -e "${color}[$(date +%H:%M:%S)] $benchmark started with PID $pid${NC}"
 }
 
-# Function to monitor progress
-monitor_progress() {
-    local check_interval=60  # Check every 60 seconds
-
+# Function to wait for completion (silent, no progress output)
+wait_for_completion() {
     while true; do
-        sleep $check_interval
-
-        echo ""
-        echo -e "${CYAN}[$(date +%H:%M:%S)] === PROGRESS UPDATE ===${NC}"
+        sleep 30  # Check every 30 seconds
 
         all_done=true
         for benchmark in "${BENCHMARKS[@]}"; do
@@ -197,54 +181,21 @@ monitor_progress() {
             exit_code_file="$LOG_DIR/${benchmark}.exit_code"
 
             if [ -f "$exit_code_file" ]; then
-                exit_code=$(cat "$exit_code_file")
-                if [ "$exit_code" -eq 0 ]; then
-                    echo -e "${GREEN}  $benchmark: COMPLETED${NC}"
-                else
-                    echo -e "${RED}  $benchmark: FAILED (exit code: $exit_code)${NC}"
-                fi
+                # Completed (success or failure)
+                continue
             elif [ -f "$pid_file" ]; then
                 pid=$(cat "$pid_file")
                 if ps -p $pid > /dev/null 2>&1; then
-                    # Get last few relevant lines from log (expanded patterns)
-                    last_activity=$(grep -iE "task|success|error|fail|\[hal\]|\[main\]|\[BUILD\]|\[OK\]|\[DONE\]|Building|Installing|mamba|conda|pip install|Collecting|Downloading" "$LOG_DIR/${benchmark}.log" 2>/dev/null | tail -1)
-                    echo -e "${BLUE}  $benchmark: RUNNING (PID: $pid)${NC}"
-                    [ -n "$last_activity" ] && echo -e "    Last: $last_activity"
                     all_done=false
-                else
-                    echo -e "${YELLOW}  $benchmark: STOPPED (no exit code)${NC}"
                 fi
             else
-                echo -e "${YELLOW}  $benchmark: NOT STARTED${NC}"
                 all_done=false
             fi
         done
 
-        # Show Docker status with more detail
-        agent_containers=$(docker ps --format "{{.Names}}" 2>/dev/null | grep -c "agentrun" || true)
-        agent_containers=${agent_containers:-0}
-        total_containers=$(docker ps -q 2>/dev/null | wc -l | tr -d ' ')
-        total_containers=${total_containers:-0}
-        build_containers=$((total_containers - agent_containers))
-        [ "$build_containers" -lt 0 ] 2>/dev/null && build_containers=0
-
-        images_built=$(docker images 2>/dev/null | grep -c "agent-env" || true)
-        images_built=${images_built:-0}
-
-        echo -e "${CYAN}  Docker: ${agent_containers} agent containers, ${build_containers} build containers, ${images_built} images cached${NC}"
-
-        # Show current build activity if any
-        if [ "$build_containers" -gt 0 ]; then
-            build_activity=$(docker ps --format "{{.Command}}" 2>/dev/null | grep -oE "(mamba|conda|pip) [a-z]+" | head -3 | tr '\n' ', ' | sed 's/, $//')
-            [ -n "$build_activity" ] && echo -e "${YELLOW}    Building: $build_activity${NC}"
-        fi
-
         if $all_done; then
-            echo -e "${GREEN}[$(date +%H:%M:%S)] All benchmarks completed!${NC}"
             break
         fi
-
-        echo -e "${CYAN}===============================${NC}"
     done
 }
 
@@ -285,12 +236,25 @@ for i in "${!BENCHMARKS[@]}"; do
 done
 
 echo ""
-echo -e "${CYAN}[$(date +%H:%M:%S)] All benchmarks started. Monitoring progress...${NC}"
+echo -e "${CYAN}============================================================${NC}"
+echo -e "${CYAN}[$(date +%H:%M:%S)] All benchmarks started!${NC}"
+echo -e "${CYAN}============================================================${NC}"
+echo ""
+echo -e "${GREEN}Phase: RUNNING EVALUATIONS${NC}"
+echo -e "${BLUE}Status: All 4 benchmarks running in parallel${NC}"
+echo ""
+echo -e "${YELLOW}To monitor progress, open another terminal and run:${NC}"
+echo -e "  ${WHITE}./watch_all.sh${NC}           # Dashboard view (default)"
+echo -e "  ${WHITE}./watch_all.sh logs${NC}      # Detailed log output"
+echo -e "  ${WHITE}./watch_all.sh errors${NC}    # Errors only"
+echo ""
+echo -e "${BLUE}Log directory:${NC} $LOG_DIR"
 echo -e "${CYAN}Press Ctrl+C to stop all benchmarks${NC}"
+echo -e "${CYAN}============================================================${NC}"
 echo ""
 
-# Start monitoring in background
-monitor_progress &
+# Start waiting in background (silent)
+wait_for_completion &
 monitor_pid=$!
 
 # Wait for all benchmark processes to complete
