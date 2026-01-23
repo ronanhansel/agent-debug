@@ -122,7 +122,12 @@ link_dir() {
     local src="$WORKDIR/$name"
     local target="$DATA_RUN_ROOT/$name"
     if [ -L "$src" ]; then
-        return
+        if [ ! -e "$src" ]; then
+            echo "WARN: $src is a broken symlink. Re-linking to $target."
+            rm -f "$src"
+        else
+            return
+        fi
     fi
     if [ -e "$src" ]; then
         if $DATA_PATH_ENFORCE || is_truthy "${HAL_MIGRATE_DATA_DIRS:-}"; then

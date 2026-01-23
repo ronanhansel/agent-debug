@@ -1,4 +1,6 @@
 traces
+.results*/
+.logs*/
 *tmp*/
 *tmp*
 log*

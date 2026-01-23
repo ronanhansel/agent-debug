@@ -20,7 +20,12 @@ detect_logs_root() {
         echo "$HAL_DATA_ROOT/hal_runs/$namespace/$(basename "$SCRIPT_DIR")/logs"
         return
     fi
-    echo "$SCRIPT_DIR/logs"
+    local candidate="$SCRIPT_DIR/logs"
+    if [ -L "$candidate" ] && [ ! -e "$candidate" ]; then
+        echo "$SCRIPT_DIR/.logs"
+        return
+    fi
+    echo "$candidate"
 }
 
 LOGS_BASE="$(detect_logs_root)"
