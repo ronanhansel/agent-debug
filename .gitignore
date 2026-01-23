@@ -1,3 +1,7 @@
+*tmp*/
+*tmp*
+log*
+log*/
 .env*
 .config/
 __pycache__/
