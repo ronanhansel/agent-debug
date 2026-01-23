@@ -58,9 +58,18 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 import threading
 
-# Load .env file early to ensure Azure config is available
+# Repo paths (needed before dotenv loading)
+REPO_ROOT = Path(__file__).resolve().parents[1]
+HAL_HARNESS = REPO_ROOT / "hal-harness"
+
+# Load Azure/TRAPI .env first when available, then local overrides.
 from dotenv import load_dotenv
-load_dotenv()
+if not os.environ.get("HAL_DOTENV_PATH"):
+    default_dotenv = HAL_HARNESS / ".env"
+    if default_dotenv.exists():
+        os.environ["HAL_DOTENV_PATH"] = str(default_dotenv)
+        load_dotenv(default_dotenv, override=False)
+load_dotenv(override=False)
 
 # If using direct Azure, remove proxy URLs and validate tokens
 if os.environ.get('USE_DIRECT_AZURE', '').lower() == 'true':
@@ -95,33 +104,58 @@ if os.environ.get('USE_DIRECT_AZURE', '').lower() == 'true':
                 print("[WARN] Run 'az login' to authenticate")
                 return False
 
-            # Try to acquire token silently (will refresh if needed)
+            # Try to acquire token silently from ALL accounts (will refresh if needed)
             scope = os.environ.get('TRAPI_SCOPE', 'api://trapi/.default')
-            result = app.acquire_token_silent([scope], account=accounts[0])
+            last_error = None
+            for idx, account in enumerate(accounts):
+                username = account.get('username', 'unknown')
+                result = app.acquire_token_silent([scope], account=account, force_refresh=True)
 
-            if result and 'access_token' in result:
-                print(f"[OK] Azure token valid (account: {accounts[0].get('username', 'unknown')})")
-                return True
-            else:
-                error = result.get('error_description', 'unknown') if result else 'no result'
-                print(f"[WARN] Azure token refresh failed: {error}")
-                print("[WARN] Run 'az login' to re-authenticate")
-                return False
+                if result and 'access_token' in result:
+                    if cache.has_state_changed:
+                        try:
+                            with open(cache_path, 'w') as f:
+                                f.write(cache.serialize())
+                        except Exception as e:
+                            print(f"[WARN] Failed to persist MSAL cache: {e}")
+                    print(f"[OK] Azure token valid (account {idx}: {username})")
+                    return True
+
+                if result:
+                    last_error = result.get('error_description', 'unknown')
+                else:
+                    last_error = f"No token for account {username}"
+
+            print(f"[WARN] Azure token refresh failed: {last_error or 'no result'}")
+            print("[WARN] Run 'az login' to re-authenticate")
+            return False
 
         except ImportError:
-            print("[WARN] msal package not installed - cannot validate Azure tokens")
-            return True  # Assume it's fine if we can't check
+            print("[ERROR] msal package not installed - cannot validate Azure tokens")
+            return False
         except Exception as e:
             print(f"[WARN] Azure token check failed: {e}")
-            return True  # Don't block on check failures
+            return False
 
-    _check_azure_token()
+    def _require_azure_ready(max_attempts: int = 3, delay_seconds: float = 2.0) -> None:
+        """Retry Azure token acquisition a few times, then fail fast."""
+        import time
+        for attempt in range(1, max_attempts + 1):
+            ok = _check_azure_token()
+            if ok:
+                return
+            if attempt < max_attempts:
+                print(f"[WARN] Azure preflight failed (attempt {attempt}/{max_attempts}). Retrying...")
+                time.sleep(delay_seconds)
+
+        print("[ERROR] Azure preflight failed after retries. Aborting to avoid long-running failure.")
+        raise SystemExit(2)
+
+    _require_azure_ready()
 
 # =============================================================================
 # Path Configuration
 # =============================================================================
-REPO_ROOT = Path(__file__).resolve().parents[1]
-HAL_HARNESS = REPO_ROOT / "hal-harness"
 FIXES_DIR = REPO_ROOT / "fixes"
 
 def _resolve_data_dir(env_key: str, default_path: Path) -> Path:

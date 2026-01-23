@@ -8,6 +8,11 @@ REPO_ROOT="${HAL_REPO_ROOT:-$SCRIPT_DIR}"
 WORKDIR="${HAL_WORKDIR:-$REPO_ROOT}"
 HAL_HARNESS="$REPO_ROOT/hal-harness"
 
+# Ensure Docker runner loads the Azure/TRAPI environment when present.
+if [ -z "${HAL_DOTENV_PATH:-}" ] && [ -f "$HAL_HARNESS/.env" ]; then
+    export HAL_DOTENV_PATH="$HAL_HARNESS/.env"
+fi
+
 # =============================================================================
 # Dynamic storage detection - works on any machine
 # =============================================================================
