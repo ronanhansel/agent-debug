@@ -9,9 +9,25 @@
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+detect_logs_root() {
+    if [ -n "${DATA_PATH:-}" ] && [ -d "$DATA_PATH" ] && [ -w "$DATA_PATH" ]; then
+        local namespace="${HAL_DATA_NAMESPACE:-$USER}"
+        echo "$DATA_PATH/hal_runs/$namespace/$(basename "$SCRIPT_DIR")/logs"
+        return
+    fi
+    if [ -n "${HAL_DATA_ROOT:-}" ] && [ -d "$HAL_DATA_ROOT" ] && [ -w "$HAL_DATA_ROOT" ]; then
+        local namespace="${HAL_DATA_NAMESPACE:-$USER}"
+        echo "$HAL_DATA_ROOT/hal_runs/$namespace/$(basename "$SCRIPT_DIR")/logs"
+        return
+    fi
+    echo "$SCRIPT_DIR/logs"
+}
+
+LOGS_BASE="$(detect_logs_root)"
+
 # Find the most recent log directory if not specified
 if [ -z "$1" ]; then
-    LOG_DIR=$(ls -td "$SCRIPT_DIR/logs/benchmark_run_"* 2>/dev/null | head -1)
+    LOG_DIR=$(ls -td "$LOGS_BASE/benchmark_run_"* 2>/dev/null | head -1)
     if [ -z "$LOG_DIR" ]; then
         echo "No benchmark runs found. Start a run with ./run_all_benchmarks.sh first."
         exit 1

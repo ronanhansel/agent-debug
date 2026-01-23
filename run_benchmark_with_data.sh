@@ -13,20 +13,49 @@ if [ -z "${HAL_DOTENV_PATH:-}" ] && [ -f "$HAL_HARNESS/.env" ]; then
     export HAL_DOTENV_PATH="$HAL_HARNESS/.env"
 fi
 
+# Optional rootless Docker mode (set ROOTLESS=TRUE)
+is_truthy() {
+    case "$(echo "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes|on) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+if is_truthy "${ROOTLESS:-}"; then
+    ROOTLESS_SOCKET="${ROOTLESS_SOCKET:-/run/user/$UID/docker.sock}"
+    export DOCKER_HOST="${DOCKER_HOST:-unix://$ROOTLESS_SOCKET}"
+    export HAL_DOCKER_HOST="${HAL_DOCKER_HOST:-$DOCKER_HOST}"
+    echo "[Docker] Rootless mode enabled: $DOCKER_HOST"
+fi
+
 # =============================================================================
 # Dynamic storage detection - works on any machine
 # =============================================================================
 # Priority order:
-# 1. HAL_DATA_ROOT environment variable (explicit override)
-# 2. /Data/home/${USER} if exists and writable
-# 3. /Data if exists and writable
-# 4. Repository's .hal_data directory (always works, uses repo storage)
+# 1. DATA_PATH environment variable (explicit override)
+# 2. HAL_DATA_ROOT environment variable (explicit override)
+# 3. /Data/home/${USER} if exists and writable
+# 4. /Data if exists and writable
+# 5. Repository's .hal_data directory (always works, uses repo storage)
 
 detect_data_root() {
     # Check if explicitly set
+    if [ -n "${DATA_PATH:-}" ]; then
+        if [ -d "$DATA_PATH" ] && [ -w "$DATA_PATH" ]; then
+            echo "$DATA_PATH"
+            return
+        else
+            echo "WARN: DATA_PATH=$DATA_PATH is not writable; ignoring." >&2
+        fi
+    fi
+
     if [ -n "${HAL_DATA_ROOT:-}" ]; then
-        echo "$HAL_DATA_ROOT"
-        return
+        if [ -d "$HAL_DATA_ROOT" ] && [ -w "$HAL_DATA_ROOT" ]; then
+            echo "$HAL_DATA_ROOT"
+            return
+        else
+            echo "WARN: HAL_DATA_ROOT=$HAL_DATA_ROOT is not writable; ignoring." >&2
+        fi
     fi
 
     # Try /Data/home/${USER}
@@ -73,22 +102,62 @@ export DOCKER_TMPDIR="${HAL_DOCKER_TMPDIR:-$TMPDIR/docker}"
 export HAL_RESULTS_DIR="${HAL_RESULTS_DIR:-$DATA_RUN_ROOT/results}"
 export HAL_TRACES_DIR="${HAL_TRACES_DIR:-$DATA_RUN_ROOT/traces}"
 export HAL_TMP_DIR="${HAL_TMP_DIR:-$DATA_RUN_ROOT/tmp}"
+if [ -n "${DATA_PATH:-}" ] && [ -z "${XDG_CACHE_HOME:-}" ]; then
+    export XDG_CACHE_HOME="$DATA_RUN_ROOT/.cache"
+fi
 
 # Ensure temp directory exists
 mkdir -p "$TMPDIR" "$DOCKER_TMPDIR" "$HAL_RESULTS_DIR" "$HAL_TRACES_DIR" "$HAL_TMP_DIR"
+if [ -n "${XDG_CACHE_HOME:-}" ]; then
+    mkdir -p "$XDG_CACHE_HOME"
+fi
+
+DATA_PATH_ENFORCE=false
+if [ -n "${DATA_PATH:-}" ]; then
+    DATA_PATH_ENFORCE=true
+fi
 
 link_dir() {
     local name="$1"
+    local src="$WORKDIR/$name"
     local target="$DATA_RUN_ROOT/$name"
+    if [ -L "$src" ]; then
+        return
+    fi
+    if [ -e "$src" ]; then
+        if $DATA_PATH_ENFORCE || is_truthy "${HAL_MIGRATE_DATA_DIRS:-}"; then
+            local stamp
+            stamp=$(date +%Y%m%d_%H%M%S)
+            if [ ! -d "$src" ]; then
+                echo "WARN: $src exists and is not a directory. Skipping migrate."
+                return
+            fi
+            if [ -e "$target" ] && [ ! -d "$target" ]; then
+                echo "WARN: $target exists and is not a directory. Skipping migrate."
+                return
+            fi
+            if [ -e "$target" ]; then
+                mkdir -p "$target"
+                local migrated="$target/_migrated_$stamp"
+                echo "Moving existing $src to $migrated"
+                if ! mv "$src" "$migrated"; then
+                    echo "WARN: Failed to move $src to $migrated"
+                    return
+                fi
+            else
+                echo "Moving existing $src to $target"
+                if ! mv "$src" "$target"; then
+                    echo "WARN: Failed to move $src to $target"
+                    return
+                fi
+            fi
+        else
+            echo "WARN: $src exists and is not a symlink. Move it to $target or delete it to enable linking."
+            return
+        fi
+    fi
     mkdir -p "$target"
-    if [ -L "$WORKDIR/$name" ]; then
-        return
-    fi
-    if [ -e "$WORKDIR/$name" ]; then
-        echo "WARN: $WORKDIR/$name exists and is not a symlink. Move it to $target or delete it to enable linking."
-        return
-    fi
-    ln -s "$target" "$WORKDIR/$name"
+    ln -s "$target" "$src"
 }
 
 if [ "${HAL_LINK_DATA_DIRS:-1}" != "0" ]; then
@@ -264,16 +333,31 @@ docker system df --format "table {{.Type}}\t{{.Size}}\t{{.Reclaimable}}" 2>/dev/
 echo "=========================================="
 echo ""
 
-# Check if we have enough space
+# Check if we have enough space on root
 ROOT_USAGE=$(df / | tail -1 | awk '{print $5}' | sed 's/%//')
+ROOT_CHECK_BYPASS=false
+if is_truthy "${HAL_SKIP_ROOT_CHECK:-}"; then
+    ROOT_CHECK_BYPASS=true
+elif is_truthy "${ROOTLESS:-}" && [ "$DATA_ROOT" != "/" ]; then
+    ROOT_CHECK_BYPASS=true
+fi
+
 if [ $ROOT_USAGE -ge 95 ]; then
     echo "WARNING: Root partition is ${ROOT_USAGE}% full!"
     echo "Consider running ./cleanup_docker.sh first"
     echo ""
-    read -p "Continue anyway? (y/N): " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "Aborted. Please run ./cleanup_docker.sh to free space."
+    if $ROOT_CHECK_BYPASS; then
+        echo "Continuing despite full root (HAL_SKIP_ROOT_CHECK/ROOTLESS enabled)."
+        echo ""
+    elif [ -t 0 ]; then
+        read -p "Continue anyway? (y/N): " -n 1 -r
+        echo
+        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+            echo "Aborted. Please run ./cleanup_docker.sh to free space."
+            exit 1
+        fi
+    else
+        echo "Aborted (non-interactive shell). Set HAL_SKIP_ROOT_CHECK=1 to override."
         exit 1
     fi
 fi
@@ -308,5 +392,16 @@ fi
 echo "Starting command with /Data temporary storage..."
 echo "Command: $@"
 echo ""
+
+if [ "$1" = "python" ] && ! command -v python >/dev/null 2>&1; then
+    if command -v python3 >/dev/null 2>&1; then
+        echo "WARN: python not found; using python3"
+        shift
+        set -- python3 "$@"
+    else
+        echo "ERROR: python not found and python3 not available"
+        exit 127
+    fi
+fi
 
 exec "$@"

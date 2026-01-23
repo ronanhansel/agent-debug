@@ -946,14 +946,93 @@ def run_with_retry(
 
 
 # =============================================================================
+# Completion checks
+# =============================================================================
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+
+def strip_ansi(text: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", text)
+
+def output_has_incomplete_marker(stdout: Optional[str], stderr: Optional[str]) -> bool:
+    combined = f"{stdout or ''}\n{stderr or ''}"
+    combined = strip_ansi(combined).lower()
+    markers = (
+        "tasks are incomplete",
+        "incomplete tasks",
+        "continue-run flag to retry",
+    )
+    return any(marker in combined for marker in markers)
+
+def count_dataset_tasks(dataset_path: Optional[Path]) -> Optional[int]:
+    if not dataset_path or not dataset_path.exists():
+        return None
+    try:
+        if dataset_path.suffix.lower() == ".jsonl":
+            with open(dataset_path, "r", encoding="utf-8") as f:
+                return sum(1 for line in f if line.strip())
+        data = json.loads(dataset_path.read_text(encoding="utf-8"))
+        return len(data) if isinstance(data, list) else None
+    except Exception:
+        return None
+
+def count_completed_submissions(submissions_path: Optional[Path]) -> Optional[int]:
+    if not submissions_path or not submissions_path.exists():
+        return None
+    completed: Dict[str, object] = {}
+    try:
+        with open(submissions_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    submission = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(submission, dict) or not submission:
+                    continue
+                task_id = next(iter(submission.keys()))
+                completed[task_id] = submission[task_id]
+    except Exception:
+        return None
+    return sum(
+        1 for value in completed.values()
+        if not (isinstance(value, str) and value.startswith("ERROR"))
+    )
+
+
+# =============================================================================
 # HAL Evaluation Runner
 # =============================================================================
+
+def find_latest_run_id(benchmark: str, prefix: str, config_key: str) -> Optional[str]:
+    results_root = RESULTS_DIR / benchmark
+    if not results_root.exists():
+        return None
+    name_prefix = f"{prefix}{config_key}_"
+    latest_name = None
+    latest_mtime = -1.0
+    for path in results_root.iterdir():
+        if not path.is_dir():
+            continue
+        if not path.name.startswith(name_prefix):
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            continue
+        if mtime > latest_mtime:
+            latest_mtime = mtime
+            latest_name = path.name
+    return latest_name
 
 def run_hal_eval(
     benchmark: str,
     config_key: str,
     entry: Dict[str, Any],
     prefix: str,
+    resume: bool = False,
     docker: bool = False,
     max_tasks: Optional[int] = None,
     parallel_tasks: int = 1,
@@ -980,9 +1059,20 @@ def run_hal_eval(
     agent_path, agent_function = get_agent_info(entry)
     agent_args = build_agent_args(entry)
 
-    # Build run_id from config_key (e.g., "o4-mini_core_agent")
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    run_id = f"{prefix}{config_key}_{timestamp}"
+    # Build or reuse run_id from config_key (e.g., "o4-mini_core_agent")
+    continue_run = False
+    run_id: Optional[str] = None
+    if resume:
+        existing = find_latest_run_id(benchmark, prefix, config_key)
+        if existing:
+            run_id = existing
+            continue_run = True
+            log(f"Resuming run_id: {run_id}", "hal")
+        else:
+            log(f"Resume requested but no prior run found for {config_key}", "hal")
+    if run_id is None:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        run_id = f"{prefix}{config_key}_{timestamp}"
 
     # Build command
     cmd = [
@@ -994,6 +1084,9 @@ def run_hal_eval(
         "--run_id", run_id,
         "--max_concurrent", str(parallel_tasks),  # HAL's concurrent task execution
     ]
+
+    if continue_run:
+        cmd.append("--continue_run")
 
     if docker:
         cmd.append("--docker")
@@ -1093,6 +1186,10 @@ def run_hal_eval(
                 log(f"Stdout (last 1000 chars):\n{result.stdout[-1000:]}", "hal")
         return False, error_msg, None
 
+    incomplete_msg: Optional[str] = None
+    if result and output_has_incomplete_marker(result.stdout, result.stderr):
+        incomplete_msg = "HAL reported incomplete tasks; rerun with --resume."
+
     # Find output trace
     results_dir = RESULTS_DIR / benchmark / run_id
     trace_path = results_dir / f"{run_id}_UPLOAD.json"
@@ -1104,6 +1201,17 @@ def run_hal_eval(
         if alt_trace.exists():
             results_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy(alt_trace, trace_path)
+    if incomplete_msg is None:
+        submissions_path = results_dir / f"{run_id}_RAW_SUBMISSIONS.jsonl"
+        if not submissions_path.exists():
+            alt_results = HAL_HARNESS / "results" / benchmark / run_id
+            alt_submissions = alt_results / f"{run_id}_RAW_SUBMISSIONS.jsonl"
+            if alt_submissions.exists():
+                submissions_path = alt_submissions
+        total_tasks = count_dataset_tasks(dataset_path)
+        completed_tasks = count_completed_submissions(submissions_path)
+        if total_tasks is not None and completed_tasks is not None and completed_tasks < total_tasks:
+            incomplete_msg = f"Incomplete tasks: completed {completed_tasks}/{total_tasks}"
 
     if trace_path.exists():
         # Copy to traces directory
@@ -1111,8 +1219,12 @@ def run_hal_eval(
         TRACES_DIR.mkdir(parents=True, exist_ok=True)
         shutil.copy(trace_path, dest)
         log(f"Trace saved: {dest.name}", "hal")
+        if incomplete_msg:
+            return False, incomplete_msg, dest
         return True, "Success", dest
 
+    if incomplete_msg:
+        return False, incomplete_msg, None
     return True, "Success (no trace)", None
 
 
@@ -1172,6 +1284,10 @@ def main():
         "--parallel-tasks", type=int, default=1,
         help="Number of tasks to run concurrently within each HAL evaluation (default: 1). "
              "Uses HAL's --max_concurrent flag."
+    )
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="Resume prior runs when available (uses HAL --continue_run with last run_id)."
     )
     parser.add_argument(
         "--max-tasks", type=int,
@@ -1521,6 +1637,7 @@ def main():
             print(f"\n{'='*70}")
             print(f"Parallel models: {args.parallel_models}")
             print(f"Parallel tasks (per model): {args.parallel_tasks}")
+            print(f"Resume: {args.resume}")
             print(f"Docker: {args.docker}")
             print(f"All tasks mode: {args.all_tasks}")
             print(f"{'='*70}")
@@ -1534,6 +1651,7 @@ def main():
         # Run evaluations
         log(f"Running {len(selected)} configurations with prefix '{prefix}'", "main")
         log(f"Parallel models: {args.parallel_models}, Parallel tasks: {args.parallel_tasks}", "main")
+        log(f"Resume: {args.resume}", "main")
         if args.all_tasks:
             log(f"Mode: ALL TASKS (fixes auto-applied where available)", "main")
         else:
@@ -1553,6 +1671,7 @@ def main():
                 config_key=key,
                 entry=entry,
                 prefix=prefix,
+                resume=args.resume,
                 docker=args.docker,
                 max_tasks=args.max_tasks,
                 parallel_tasks=args.parallel_tasks,
@@ -1618,6 +1737,8 @@ def main():
                 print(f"  - [{benchmark}] {key}: {msg}")
 
         print(f"{'='*70}\n")
+        if failed:
+            sys.exit(1)
 
 
 if __name__ == "__main__":

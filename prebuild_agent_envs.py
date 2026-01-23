@@ -251,11 +251,34 @@ def main():
     print()
     print("=" * 60)
     print("Summary:")
-    for img in docker_client.images.list():
-        for tag in img.tags:
+    try:
+        images = docker_client.images.list()
+    except docker.errors.ImageNotFound as e:
+        print(f"  [WARN] Failed to list images: {e}")
+        images = []
+    except Exception as e:
+        print(f"  [WARN] Failed to list images: {type(e).__name__}: {e}")
+        images = []
+    for img in images:
+        try:
+            tags = img.tags or []
+        except docker.errors.ImageNotFound:
+            continue
+        except Exception:
+            continue
+        for tag in tags:
             if tag.startswith("hal-agent-runner:"):
-                size_mb = img.attrs["Size"] / 1024 / 1024
-                print(f"  {tag} ({size_mb:.0f}MB)")
+                try:
+                    size_bytes = img.attrs.get("Size")
+                except docker.errors.ImageNotFound:
+                    size_bytes = None
+                except Exception:
+                    size_bytes = None
+                if size_bytes:
+                    size_mb = size_bytes / 1024 / 1024
+                    print(f"  {tag} ({size_mb:.0f}MB)")
+                else:
+                    print(f"  {tag}")
     print()
 
     if failed == 0:

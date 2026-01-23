@@ -7,6 +7,7 @@
 #
 # Options:
 #   --continue    Continue from most recent failed run (reuses prefix and log dir)
+#   --resume      Resume HAL runs (reuse run_id per config when available)
 #
 # Examples:
 #   ./run_all_benchmarks.sh moon2_ 20           # Fresh run with moon2_ prefix
@@ -20,9 +21,29 @@ set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Log directory detection (respects DATA_PATH/HAL_DATA_ROOT)
+detect_logs_root() {
+    if [ -n "${DATA_PATH:-}" ] && [ -d "$DATA_PATH" ] && [ -w "$DATA_PATH" ]; then
+        local namespace="${HAL_DATA_NAMESPACE:-$USER}"
+        echo "$DATA_PATH/hal_runs/$namespace/$(basename "$SCRIPT_DIR")/logs"
+        return
+    fi
+    if [ -n "${HAL_DATA_ROOT:-}" ] && [ -d "$HAL_DATA_ROOT" ] && [ -w "$HAL_DATA_ROOT" ]; then
+        local namespace="${HAL_DATA_NAMESPACE:-$USER}"
+        echo "$HAL_DATA_ROOT/hal_runs/$namespace/$(basename "$SCRIPT_DIR")/logs"
+        return
+    fi
+    echo "$SCRIPT_DIR/logs"
+}
+
+LOGS_BASE="$(detect_logs_root)"
+mkdir -p "$LOGS_BASE" 2>/dev/null || true
+
 # Parse arguments
 CONTINUE_MODE=false
+RESUME_MODE=false
 PREFIX=""
+PREFIX_FROM_ARG=false
 PARALLEL=""
 
 while [[ $# -gt 0 ]]; do
@@ -31,9 +52,14 @@ while [[ $# -gt 0 ]]; do
             CONTINUE_MODE=true
             shift
             ;;
+        --resume)
+            RESUME_MODE=true
+            shift
+            ;;
         *)
             if [ -z "$PREFIX" ]; then
                 PREFIX="$1"
+                PREFIX_FROM_ARG=true
             elif [ -z "$PARALLEL" ]; then
                 PARALLEL="$1"
             fi
@@ -73,11 +99,132 @@ if $CONTINUE_MODE; then
     echo -e "${CYAN}       CONTINUE MODE - Finding previous run...${NC}"
     echo -e "${CYAN}============================================================${NC}"
 
+    has_incomplete_marker() {
+        local log_file="$1"
+        [ -f "$log_file" ] || return 1
+        grep -qiE "tasks are incomplete|incomplete tasks|continue-run flag to retry" "$log_file"
+    }
+
+    has_incomplete_results() {
+        local benchmark="$1"
+        local log_file="$2"
+        python3 - "$benchmark" "$log_file" << 'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+benchmark = sys.argv[1]
+log_path = Path(sys.argv[2])
+if not log_path.exists():
+    sys.exit(0)
+
+hal_map = {
+    "scicode": "scicode",
+    "scienceagentbench": "scienceagentbench",
+    "corebench": "corebench_hard",
+    "colbench": "colbench_backend_programming",
+}
+hal_benchmark = hal_map.get(benchmark, benchmark)
+
+text = log_path.read_text(errors="ignore")
+totals = [int(m.group(1)) for m in re.finditer(r"\((\d+) tasks\)", text)]
+total_tasks = max(totals) if totals else None
+
+run_ids = re.findall(r"Run ID: (\S+)", text)
+if not run_ids:
+    sys.exit(0)
+
+run_ids = sorted(set(run_ids))
+
+def find_run_dir(run_id: str) -> Path | None:
+    for base in (Path("results") / hal_benchmark, Path("results") / benchmark):
+        candidate = base / run_id
+        if candidate.exists():
+            return candidate
+    return None
+
+def count_completed(raw_path: Path) -> tuple[int, int]:
+    completed = 0
+    errors = 0
+    with raw_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict) or not obj:
+                continue
+            value = next(iter(obj.values()))
+            if isinstance(value, str) and value.startswith("ERROR"):
+                errors += 1
+            else:
+                completed += 1
+    return completed, errors
+
+for run_id in run_ids:
+    run_dir = find_run_dir(run_id)
+    if run_dir is None:
+        sys.exit(0)
+    raw_path = run_dir / f"{run_id}_RAW_SUBMISSIONS.jsonl"
+    if not raw_path.exists():
+        sys.exit(0)
+    completed, errors = count_completed(raw_path)
+    if errors:
+        sys.exit(0)
+    if total_tasks is not None and completed < total_tasks:
+        sys.exit(0)
+
+sys.exit(1)
+PY
+    }
+
+    find_log_dir_for_prefix() {
+        local log_base="$1"
+        local target_prefix="$2"
+        local dir
+        for dir in $(ls -td "$log_base"/benchmark_run_* 2>/dev/null); do
+            local cfg="$dir/config.json"
+            [ -f "$cfg" ] || continue
+            local saved_prefix
+            saved_prefix=$(grep -o '"prefix": *"[^"]*"' "$cfg" | cut -d'"' -f4)
+            if [ "$saved_prefix" = "$target_prefix" ]; then
+                echo "$dir"
+                return 0
+            fi
+        done
+        return 1
+    }
+
     # Find the most recent log directory
-    LATEST_LOG_DIR=$(ls -td "$SCRIPT_DIR/logs"/benchmark_run_* 2>/dev/null | head -1)
+    if $PREFIX_FROM_ARG; then
+        LATEST_LOG_DIR=$(find_log_dir_for_prefix "$LOGS_BASE" "$PREFIX")
+    else
+        LATEST_LOG_DIR=$(ls -td "$LOGS_BASE"/benchmark_run_* 2>/dev/null | head -1)
+    fi
+    if [ -z "$LATEST_LOG_DIR" ] && [ "$LOGS_BASE" != "$SCRIPT_DIR/logs" ]; then
+        original_logs_base="$LOGS_BASE"
+        if $PREFIX_FROM_ARG; then
+            FALLBACK_LOG_DIR=$(find_log_dir_for_prefix "$SCRIPT_DIR/logs" "$PREFIX")
+        else
+            FALLBACK_LOG_DIR=$(ls -td "$SCRIPT_DIR/logs"/benchmark_run_* 2>/dev/null | head -1)
+        fi
+        if [ -n "$FALLBACK_LOG_DIR" ]; then
+            LOGS_BASE="$SCRIPT_DIR/logs"
+            LATEST_LOG_DIR="$FALLBACK_LOG_DIR"
+            echo -e "${YELLOW}No runs found in ${original_logs_base}; using repo logs instead.${NC}"
+        fi
+    fi
 
     if [ -z "$LATEST_LOG_DIR" ]; then
-        echo -e "${RED}No previous runs found in logs/. Starting fresh run.${NC}"
+        if $PREFIX_FROM_ARG; then
+            echo -e "${RED}No previous runs found for prefix '${PREFIX}'. Starting fresh run.${NC}"
+        else
+            echo -e "${RED}No previous runs found in logs/. Starting fresh run.${NC}"
+        fi
         CONTINUE_MODE=false
     else
         echo -e "${BLUE}Found previous run:${NC} $LATEST_LOG_DIR"
@@ -86,8 +233,21 @@ if $CONTINUE_MODE; then
         if [ -f "$LATEST_LOG_DIR/config.json" ]; then
             SAVED_PREFIX=$(grep -o '"prefix": *"[^"]*"' "$LATEST_LOG_DIR/config.json" | cut -d'"' -f4)
             if [ -n "$SAVED_PREFIX" ]; then
-                PREFIX="$SAVED_PREFIX"
-                echo -e "${BLUE}Using saved prefix:${NC} $PREFIX"
+                if $PREFIX_FROM_ARG; then
+                    if [ "$SAVED_PREFIX" != "$PREFIX" ]; then
+                        echo -e "${YELLOW}Saved prefix '$SAVED_PREFIX' differs from requested '$PREFIX'. Using requested.${NC}"
+                    fi
+                else
+                    PREFIX="$SAVED_PREFIX"
+                    echo -e "${BLUE}Using saved prefix:${NC} $PREFIX"
+                fi
+            fi
+            if ! $RESUME_MODE; then
+                SAVED_RESUME=$(grep -o '"resume_mode": *[^,}]*' "$LATEST_LOG_DIR/config.json" | head -1 | awk -F: '{print $2}' | tr -d ' ,')
+                if [ "$SAVED_RESUME" = "true" ]; then
+                    RESUME_MODE=true
+                    echo -e "${BLUE}Using saved resume mode:${NC} $RESUME_MODE"
+                fi
             fi
         fi
 
@@ -101,11 +261,17 @@ if $CONTINUE_MODE; then
         for benchmark in "${ALL_BENCHMARKS[@]}"; do
             exit_code_file="$LOG_DIR/${benchmark}.exit_code"
             pid_file="$LOG_DIR/${benchmark}.pid"
+            log_file="$LOG_DIR/${benchmark}.log"
 
             if [ -f "$exit_code_file" ]; then
                 exit_code=$(cat "$exit_code_file")
                 if [ "$exit_code" -eq 0 ]; then
-                    echo -e "  ${GREEN}[OK]${NC} $benchmark - completed successfully, skipping"
+                    if has_incomplete_marker "$log_file" || has_incomplete_results "$benchmark" "$log_file"; then
+                        echo -e "  ${YELLOW}[INCOMPLETE]${NC} $benchmark - incomplete tasks detected, will retry"
+                        BENCHMARKS_TO_RUN+=("$benchmark")
+                    else
+                        echo -e "  ${GREEN}[OK]${NC} $benchmark - completed successfully, skipping"
+                    fi
                 else
                     echo -e "  ${RED}[FAILED]${NC} $benchmark - exit code $exit_code, will retry"
                     BENCHMARKS_TO_RUN+=("$benchmark")
@@ -140,7 +306,7 @@ fi
 # If not continue mode or no previous run found, run all benchmarks
 if ! $CONTINUE_MODE; then
     TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    LOG_DIR="$SCRIPT_DIR/logs/benchmark_run_${TIMESTAMP}"
+    LOG_DIR="$LOGS_BASE/benchmark_run_${TIMESTAMP}"
     BENCHMARKS_TO_RUN=("${ALL_BENCHMARKS[@]}")
 fi
 
@@ -195,6 +361,7 @@ echo -e "${BLUE}Log Directory:${NC} $LOG_DIR"
 echo -e "${BLUE}Parallel Models:${NC} $PARALLEL_MODELS"
 echo -e "${BLUE}Parallel Tasks:${NC} $PARALLEL_TASKS"
 echo -e "${BLUE}Continue Mode:${NC} $CONTINUE_MODE"
+echo -e "${BLUE}Resume Mode:${NC} $RESUME_MODE"
 echo -e "${BLUE}Benchmarks:${NC} ${BENCHMARKS_TO_RUN[*]}"
 echo -e "${CYAN}============================================================${NC}"
 echo ""
@@ -207,7 +374,8 @@ cat > "$LOG_DIR/config.json" << EOF
     "parallel_models": $PARALLEL_MODELS,
     "parallel_tasks": $PARALLEL_TASKS,
     "benchmarks": ["scicode", "scienceagentbench", "corebench", "colbench"],
-    "continue_mode": $CONTINUE_MODE
+    "continue_mode": $CONTINUE_MODE,
+    "resume_mode": $RESUME_MODE
 }
 EOF
 
@@ -232,6 +400,11 @@ run_benchmark() {
     local color=$2
     local log_file="$LOG_DIR/${benchmark}.log"
     local pid_file="$LOG_DIR/${benchmark}.pid"
+    local resume_args=()
+
+    if $RESUME_MODE; then
+        resume_args+=(--resume)
+    fi
 
     echo -e "${color}[$(date +%H:%M:%S)] Starting $benchmark benchmark...${NC}"
 
@@ -246,6 +419,7 @@ run_benchmark() {
             --docker \
             --parallel-models "$PARALLEL_MODELS" \
             --parallel-tasks "$PARALLEL_TASKS" \
+            "${resume_args[@]}" \
             2>&1 | tee -a "$log_file" | filter_log "$benchmark" "$color"
 
         exit_code=${PIPESTATUS[0]}

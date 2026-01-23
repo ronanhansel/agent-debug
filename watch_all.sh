@@ -8,6 +8,7 @@
 #   logs      - Real-time log tailing (verbose output)
 #   errors    - Only show errors from logs
 #   api       - Only show API calls/responses from logs
+#   agents    - Per-agent progress tracker (completed/evaluated)
 #
 
 # Get script directory
@@ -30,6 +31,24 @@ NC='\033[0m'
 
 RESULTS_DIR="$SCRIPT_DIR/results"
 LOGS_DIR="$SCRIPT_DIR/logs"
+
+detect_run_root() {
+    if [ -n "${DATA_PATH:-}" ] && [ -d "$DATA_PATH" ] && [ -w "$DATA_PATH" ]; then
+        local namespace="${HAL_DATA_NAMESPACE:-$USER}"
+        echo "$DATA_PATH/hal_runs/$namespace/$(basename "$SCRIPT_DIR")"
+        return
+    fi
+    if [ -n "${HAL_DATA_ROOT:-}" ] && [ -d "$HAL_DATA_ROOT" ] && [ -w "$HAL_DATA_ROOT" ]; then
+        local namespace="${HAL_DATA_NAMESPACE:-$USER}"
+        echo "$HAL_DATA_ROOT/hal_runs/$namespace/$(basename "$SCRIPT_DIR")"
+        return
+    fi
+    echo "$SCRIPT_DIR"
+}
+
+RUN_ROOT="$(detect_run_root)"
+RESULTS_DIR="$RUN_ROOT/results"
+LOGS_DIR="$RUN_ROOT/logs"
 
 # Benchmarks
 BENCHMARKS=("scicode" "scienceagentbench" "corebench" "colbench")
@@ -380,6 +399,9 @@ case "$MODE" in
         ;;
     progress)
         watch_logs "task|starting|running|completed|success|finished|\[hal\]|\[main\]|SUCCESS|FAILED"
+        ;;
+    agents)
+        python3 "$SCRIPT_DIR/scripts/track_run_progress.py" --watch
         ;;
     dashboard|*)
         run_dashboard
