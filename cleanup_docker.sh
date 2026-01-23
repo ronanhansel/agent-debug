@@ -7,10 +7,45 @@ echo "HAL Benchmark Docker Cleanup"
 echo "=========================================="
 echo ""
 
+resolve_docker_host() {
+    if [ -z "${DOCKER_HOST:-}" ] && [ -n "${HAL_DOCKER_HOST:-}" ]; then
+        export DOCKER_HOST="$HAL_DOCKER_HOST"
+    fi
+    if [ -z "${DOCKER_HOST:-}" ] && [ -S "/run/user/$UID/docker.sock" ]; then
+        export DOCKER_HOST="unix:///run/user/$UID/docker.sock"
+    fi
+}
+
+docker_ready=false
+if command -v docker >/dev/null 2>&1; then
+    resolve_docker_host
+    if docker info >/dev/null 2>&1; then
+        docker_ready=true
+    else
+        echo "WARN: Docker daemon not reachable; skipping Docker cleanup."
+    fi
+else
+    echo "WARN: Docker CLI not found; skipping Docker cleanup."
+fi
+
+if ! $docker_ready; then
+    echo ""
+    echo "=========================================="
+    echo "AFTER cleanup:"
+    df -h / | grep -v Filesystem
+    echo "Docker unavailable"
+    echo "=========================================="
+    exit 0
+fi
+
 # Show before state
 echo "BEFORE cleanup:"
 df -h / | grep -v Filesystem
-docker system df 2>/dev/null
+if command -v timeout >/dev/null 2>&1; then
+    timeout 5 docker system df 2>/dev/null || echo "Docker info timed out"
+else
+    docker system df 2>/dev/null || echo "Docker info unavailable"
+fi
 echo ""
 
 # Step 1: Kill benchmark containers (by name pattern)
@@ -51,7 +86,11 @@ echo ""
 echo "=========================================="
 echo "AFTER cleanup:"
 df -h / | grep -v Filesystem
-docker system df 2>/dev/null
+if command -v timeout >/dev/null 2>&1; then
+    timeout 5 docker system df 2>/dev/null || echo "Docker info timed out"
+else
+    docker system df 2>/dev/null || echo "Docker info unavailable"
+fi
 echo ""
 echo "Images preserved:"
 docker images --format "  {{.Repository}}:{{.Tag}} ({{.Size}})"

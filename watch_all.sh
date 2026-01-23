@@ -30,8 +30,6 @@ DIM='\033[2m'
 NC='\033[0m'
 
 RESULTS_DIR="$SCRIPT_DIR/results"
-LOGS_DIR="$SCRIPT_DIR/logs"
-
 detect_run_root() {
     if [ -n "${DATA_PATH:-}" ] && [ -d "$DATA_PATH" ] && [ -w "$DATA_PATH" ]; then
         local namespace="${HAL_DATA_NAMESPACE:-$USER}"
@@ -48,7 +46,31 @@ detect_run_root() {
 
 RUN_ROOT="$(detect_run_root)"
 RESULTS_DIR="$RUN_ROOT/results"
-LOGS_DIR="$RUN_ROOT/logs"
+
+local_logs_root() {
+    local candidate="$SCRIPT_DIR/logs"
+    if [ -L "$candidate" ] && [ ! -e "$candidate" ]; then
+        echo "$SCRIPT_DIR/.logs"
+        return
+    fi
+    echo "$candidate"
+}
+
+detect_logs_root() {
+    if [ -n "${DATA_PATH:-}" ] && [ -d "$DATA_PATH" ] && [ -w "$DATA_PATH" ]; then
+        local namespace="${HAL_DATA_NAMESPACE:-$USER}"
+        echo "$DATA_PATH/hal_runs/$namespace/$(basename "$SCRIPT_DIR")/logs"
+        return
+    fi
+    if [ -n "${HAL_DATA_ROOT:-}" ] && [ -d "$HAL_DATA_ROOT" ] && [ -w "$HAL_DATA_ROOT" ]; then
+        local namespace="${HAL_DATA_NAMESPACE:-$USER}"
+        echo "$HAL_DATA_ROOT/hal_runs/$namespace/$(basename "$SCRIPT_DIR")/logs"
+        return
+    fi
+    local_logs_root
+}
+
+LOGS_DIR="$(detect_logs_root)"
 
 # Benchmarks
 BENCHMARKS=("scicode" "scienceagentbench" "corebench" "colbench")

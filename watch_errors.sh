@@ -8,9 +8,34 @@
 # Get script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+local_logs_root() {
+    local candidate="$SCRIPT_DIR/logs"
+    if [ -L "$candidate" ] && [ ! -e "$candidate" ]; then
+        echo "$SCRIPT_DIR/.logs"
+        return
+    fi
+    echo "$candidate"
+}
+
+detect_logs_root() {
+    if [ -n "${DATA_PATH:-}" ] && [ -d "$DATA_PATH" ] && [ -w "$DATA_PATH" ]; then
+        local namespace="${HAL_DATA_NAMESPACE:-$USER}"
+        echo "$DATA_PATH/hal_runs/$namespace/$(basename "$SCRIPT_DIR")/logs"
+        return
+    fi
+    if [ -n "${HAL_DATA_ROOT:-}" ] && [ -d "$HAL_DATA_ROOT" ] && [ -w "$HAL_DATA_ROOT" ]; then
+        local namespace="${HAL_DATA_NAMESPACE:-$USER}"
+        echo "$HAL_DATA_ROOT/hal_runs/$namespace/$(basename "$SCRIPT_DIR")/logs"
+        return
+    fi
+    local_logs_root
+}
+
+LOGS_BASE="$(detect_logs_root)"
+
 # Find the most recent log directory if not specified
 if [ -z "$1" ]; then
-    LOG_DIR=$(ls -td "$SCRIPT_DIR/logs/benchmark_run_"* 2>/dev/null | head -1)
+    LOG_DIR=$(ls -td "$LOGS_BASE/benchmark_run_"* 2>/dev/null | head -1)
     if [ -z "$LOG_DIR" ]; then
         echo "No benchmark runs found."
         exit 1

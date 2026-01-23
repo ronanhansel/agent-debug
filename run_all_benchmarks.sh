@@ -22,6 +22,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # Log directory detection (respects DATA_PATH/HAL_DATA_ROOT)
+local_logs_root() {
+    local candidate="$SCRIPT_DIR/logs"
+    if [ -L "$candidate" ] && [ ! -e "$candidate" ]; then
+        echo "$SCRIPT_DIR/.logs"
+        return
+    fi
+    echo "$candidate"
+}
+
 detect_logs_root() {
     if [ -n "${DATA_PATH:-}" ] && [ -d "$DATA_PATH" ] && [ -w "$DATA_PATH" ]; then
         local namespace="${HAL_DATA_NAMESPACE:-$USER}"
@@ -33,11 +42,14 @@ detect_logs_root() {
         echo "$HAL_DATA_ROOT/hal_runs/$namespace/$(basename "$SCRIPT_DIR")/logs"
         return
     fi
-    echo "$SCRIPT_DIR/logs"
+    local_logs_root
 }
 
 LOGS_BASE="$(detect_logs_root)"
-mkdir -p "$LOGS_BASE" 2>/dev/null || true
+if ! mkdir -p "$LOGS_BASE" 2>/dev/null; then
+    LOGS_BASE="$(local_logs_root)"
+    mkdir -p "$LOGS_BASE" 2>/dev/null || true
+fi
 
 # Parse arguments
 CONTINUE_MODE=false
@@ -205,15 +217,16 @@ PY
     else
         LATEST_LOG_DIR=$(ls -td "$LOGS_BASE"/benchmark_run_* 2>/dev/null | head -1)
     fi
-    if [ -z "$LATEST_LOG_DIR" ] && [ "$LOGS_BASE" != "$SCRIPT_DIR/logs" ]; then
+    local_logs_root_value="$(local_logs_root)"
+    if [ -z "$LATEST_LOG_DIR" ] && [ "$LOGS_BASE" != "$local_logs_root_value" ]; then
         original_logs_base="$LOGS_BASE"
         if $PREFIX_FROM_ARG; then
-            FALLBACK_LOG_DIR=$(find_log_dir_for_prefix "$SCRIPT_DIR/logs" "$PREFIX")
+            FALLBACK_LOG_DIR=$(find_log_dir_for_prefix "$local_logs_root_value" "$PREFIX")
         else
-            FALLBACK_LOG_DIR=$(ls -td "$SCRIPT_DIR/logs"/benchmark_run_* 2>/dev/null | head -1)
+            FALLBACK_LOG_DIR=$(ls -td "$local_logs_root_value"/benchmark_run_* 2>/dev/null | head -1)
         fi
         if [ -n "$FALLBACK_LOG_DIR" ]; then
-            LOGS_BASE="$SCRIPT_DIR/logs"
+            LOGS_BASE="$local_logs_root_value"
             LATEST_LOG_DIR="$FALLBACK_LOG_DIR"
             echo -e "${YELLOW}No runs found in ${original_logs_base}; using repo logs instead.${NC}"
         fi
