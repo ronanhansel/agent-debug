@@ -137,77 +137,6 @@ def parse_dataset_path(text: str, benchmark: str) -> Optional[Path]:
     return Path(matches[-1])
 
 
-def find_latest_dataset(tmp_dir: Path, pattern: str) -> Optional[Path]:
-    if not tmp_dir.exists():
-        return None
-    candidates = list(tmp_dir.glob(pattern))
-    if not candidates:
-        return None
-    return max(candidates, key=lambda p: p.stat().st_mtime)
-
-
-def resolve_dataset_path(
-    benchmark: str,
-    log_text: str,
-    run_root: Path,
-    args: argparse.Namespace,
-) -> Optional[Path]:
-    # 1) explicit CLI arg
-    cli_map = {
-        "scicode": args.dataset_scicode,
-        "scienceagentbench": args.dataset_scienceagentbench,
-        "corebench": args.dataset_corebench,
-        "colbench": args.dataset_colbench,
-    }
-    cli_value = cli_map.get(benchmark)
-    if cli_value:
-        path = Path(cli_value)
-        if path.exists():
-            return path
-
-    # 2) env var
-    env_map = {
-        "scicode": "SCICODE_DATASET_PATH",
-        "scienceagentbench": "SCIENCEAGENTBENCH_DATASET_PATH",
-        "corebench": "HAL_COREBENCH_DATASET_PATH",
-        "colbench": "COLBENCH_BACKEND_DATASET_PATH",
-    }
-    env_val = os.environ.get(env_map.get(benchmark, ""))
-    if env_val:
-        path = Path(env_val)
-        if path.exists():
-            return path
-
-    # 3) parse from logs if present
-    if log_text:
-        path = parse_dataset_path(log_text, benchmark)
-        if path and path.exists():
-            return path
-
-    # 4) try tmp datasets
-    tmp_dir = run_root / "tmp"
-    if benchmark == "scicode":
-        path = find_latest_dataset(tmp_dir, "scicode_modified_*.json")
-    elif benchmark == "scienceagentbench":
-        path = find_latest_dataset(tmp_dir, "scienceagentbench_modified_*.json")
-    elif benchmark == "corebench":
-        path = find_latest_dataset(tmp_dir, "corebench_modified_*.json")
-    elif benchmark == "colbench":
-        path = find_latest_dataset(tmp_dir, "colbench_modified_*.jsonl")
-    else:
-        path = None
-    if path and path.exists():
-        return path
-
-    # 5) corebench default dataset in repo
-    if benchmark == "corebench":
-        default_path = REPO_ROOT / "hal-harness" / "hal" / "benchmarks" / "corebench" / "core_test.json"
-        if default_path.exists():
-            return default_path
-
-    return None
-
-
 def derive_config_key(run_id: str, benchmark: str, prefix: str) -> str:
     if run_id.startswith(f"{benchmark}_"):
         run_id = run_id[len(benchmark) + 1 :]
@@ -228,29 +157,6 @@ def resolve_run_dir(run_root: Path, repo_root: Path, benchmark: str, run_id: str
         if candidate.exists():
             return candidate
     return None
-
-
-def find_run_ids_from_results(
-    run_root: Path,
-    repo_root: Path,
-    benchmark: str,
-    prefix: str,
-) -> List[str]:
-    hal_name = HAL_BENCHMARK_MAP.get(benchmark, benchmark)
-    candidates = [
-        run_root / "results" / hal_name,
-        run_root / "results" / benchmark,
-        repo_root / "results" / hal_name,
-        repo_root / "results" / benchmark,
-    ]
-    run_ids: List[str] = []
-    for base in candidates:
-        if not base.exists():
-            continue
-        for child in base.iterdir():
-            if child.is_dir() and prefix in child.name:
-                run_ids.append(child.name)
-    return sorted(set(run_ids))
 
 
 def is_error_value(value: object) -> bool:
@@ -624,10 +530,6 @@ def main() -> None:
     parser.add_argument("--oauth", action="store_true", help="Use OAuth for Google Sheets")
     parser.add_argument("--reeval", action="store_true", help="Re-evaluate tasks from raw submissions")
     parser.add_argument("--skip-benchmark", action="append", default=[], help="Skip benchmark(s) by name")
-    parser.add_argument("--dataset-scicode", help="Path to SciCode dataset json")
-    parser.add_argument("--dataset-scienceagentbench", help="Path to ScienceAgentBench dataset json")
-    parser.add_argument("--dataset-corebench", help="Path to CoreBench dataset json")
-    parser.add_argument("--dataset-colbench", help="Path to ColBench dataset jsonl")
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parents[1]
@@ -636,8 +538,9 @@ def main() -> None:
 
     logs_base = run_root / "logs"
     log_dir = Path(args.log_dir) if args.log_dir else find_log_dir_for_prefix(logs_base, args.prefix)
-    if log_dir and not log_dir.exists():
-        log_dir = None
+    if not log_dir or not log_dir.exists():
+        print(f"No log dir found for prefix {args.prefix}")
+        sys.exit(1)
 
     # Build task columns
     benchmark_task_ids: Dict[str, List[str]] = {}
@@ -646,13 +549,11 @@ def main() -> None:
     for benchmark in BENCHMARKS:
         if benchmark in skip_set:
             continue
-        text = ""
-        if log_dir:
-            log_file = log_dir / f"{benchmark}.log"
-            if log_file.exists():
-                text = log_file.read_text(errors="ignore")
-
-        dataset_path = resolve_dataset_path(benchmark, text, run_root, args)
+        log_file = log_dir / f"{benchmark}.log"
+        if not log_file.exists():
+            continue
+        text = log_file.read_text(errors="ignore")
+        dataset_path = parse_dataset_path(text, benchmark)
         if not dataset_path or not dataset_path.exists():
             print(f"Missing dataset path for {benchmark}; cannot build columns")
             sys.exit(1)
@@ -674,14 +575,11 @@ def main() -> None:
     for benchmark in BENCHMARKS:
         if benchmark in skip_set:
             continue
-        text = ""
-        if log_dir:
-            log_file = log_dir / f"{benchmark}.log"
-            if log_file.exists():
-                text = log_file.read_text(errors="ignore")
+        log_file = log_dir / f"{benchmark}.log"
+        if not log_file.exists():
+            continue
+        text = log_file.read_text(errors="ignore")
         run_ids = [rid for rid in parse_run_ids(text) if args.prefix in rid]
-        if not run_ids:
-            run_ids = find_run_ids_from_results(run_root, repo_root, benchmark, args.prefix)
         for run_id in run_ids:
             config_key = derive_config_key(run_id, benchmark, args.prefix)
             row_label = f"{benchmark}.{config_key}"
@@ -695,7 +593,7 @@ def main() -> None:
 
             success_map: Dict[str, int] = {}
             if args.reeval:
-                dataset_path = resolve_dataset_path(benchmark, text, run_root, args)
+                dataset_path = parse_dataset_path(text, benchmark)
                 if not dataset_path or not dataset_path.exists():
                     print(f"Missing dataset path for {benchmark}; cannot re-evaluate")
                     sys.exit(1)
