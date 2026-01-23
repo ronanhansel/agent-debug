@@ -167,8 +167,55 @@ def is_error_value(value: object) -> bool:
     lowered = value.lower()
     return any(snippet in lowered for snippet in AUTH_ERROR_SNIPPETS)
 
+def is_non_null_scalar(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip() != ""
+    return True
 
-def load_raw_ok_tasks(raw_path: Path) -> Dict[str, object]:
+
+def is_non_null_submission(benchmark: str, task_id: str, payload: object, task_meta: Optional[Dict[str, List[str]]]) -> bool:
+    if payload is None:
+        return False
+    if benchmark == "scicode":
+        if not isinstance(payload, dict):
+            return False
+        required = task_meta.get(task_id) if task_meta else None
+        if required:
+            for key in required:
+                if key not in payload or not is_non_null_scalar(payload.get(key)):
+                    return False
+            return True
+        for value in payload.values():
+            if not is_non_null_scalar(value):
+                return False
+        return len(payload) > 0
+
+    if benchmark == "corebench":
+        if not isinstance(payload, dict):
+            return False
+        for value in payload.values():
+            if not is_non_null_scalar(value):
+                return False
+        return len(payload) > 0
+
+    if benchmark == "colbench":
+        if not isinstance(payload, dict):
+            return False
+        answer = payload.get("answer")
+        return is_non_null_scalar(answer)
+
+    if benchmark == "scienceagentbench":
+        if not isinstance(payload, dict):
+            return False
+        code = _extract_python_code(payload)
+        return is_non_null_scalar(code)
+
+    return is_non_null_scalar(payload)
+
+
+def load_raw_ok_tasks(raw_path: Path, benchmark: str, task_meta: Optional[Dict[str, List[str]]]) -> Dict[str, object]:
     ok: Dict[str, object] = {}
     if not raw_path.exists():
         return ok
@@ -186,7 +233,9 @@ def load_raw_ok_tasks(raw_path: Path) -> Dict[str, object]:
             task_id = next(iter(obj.keys()))
             value = obj[task_id]
             if not is_error_value(value):
-                ok[str(task_id)] = value
+                task_id = str(task_id)
+                if is_non_null_submission(benchmark, task_id, value, task_meta):
+                    ok[task_id] = value
     return ok
 
 
@@ -203,6 +252,17 @@ def load_task_ids(benchmark: str, dataset_path: Path) -> List[str]:
     data = json.loads(dataset_path.read_text(encoding="utf-8"))
     field = TASK_ID_FIELD[benchmark]
     return [str(task[field]) for task in data]
+
+
+def build_scicode_task_meta(dataset_path: Path) -> Dict[str, List[str]]:
+    data = json.loads(dataset_path.read_text(encoding="utf-8"))
+    meta: Dict[str, List[str]] = {}
+    for task in data:
+        task_id = str(task.get("problem_id"))
+        sub_steps = task.get("sub_steps", [])
+        keys = [f"{task_id}.{idx + 1}" for idx in range(len(sub_steps))]
+        meta[task_id] = keys
+    return meta
 
 
 def load_scicode_success(run_dir: Path, run_id: str) -> Optional[set]:
@@ -430,13 +490,33 @@ def get_gspread_client(use_oauth: bool = False):
     return gc
 
 
-def write_csv(path: Path, header: List[str], rows: List[List[str]]) -> None:
+def write_csv(path: Path, header: List[str], rows: List[List[str]]) -> Path:
     import csv
-    path.parent.mkdir(parents=True, exist_ok=True)
+    parent = path.parent
+    try:
+        if parent.exists():
+            if parent.is_dir():
+                pass
+            elif parent.is_symlink():
+                target = Path(os.path.realpath(parent))
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                raise RuntimeError(f"Output parent is not a directory: {parent}")
+        else:
+            if parent.is_symlink():
+                target = Path(os.path.realpath(parent))
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                parent.mkdir(parents=True, exist_ok=True)
+    except PermissionError:
+        fallback = REPO_ROOT / "output_local" / path.name
+        fallback.parent.mkdir(parents=True, exist_ok=True)
+        path = fallback
     with path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(header)
         writer.writerows(rows)
+    return path
 
 
 def main() -> None:
@@ -446,7 +526,7 @@ def main() -> None:
     parser.add_argument("--run-root", help="Override run root path")
     parser.add_argument("--output", help="CSV output path")
     parser.add_argument("--upload", action="store_true", help="Upload to Google Sheets")
-    parser.add_argument("--sheet-name", default="Response Matrix", help="Worksheet name")
+    parser.add_argument("--sheet-name", help="Worksheet name")
     parser.add_argument("--oauth", action="store_true", help="Use OAuth for Google Sheets")
     parser.add_argument("--reeval", action="store_true", help="Re-evaluate tasks from raw submissions")
     parser.add_argument("--skip-benchmark", action="append", default=[], help="Skip benchmark(s) by name")
@@ -464,6 +544,7 @@ def main() -> None:
 
     # Build task columns
     benchmark_task_ids: Dict[str, List[str]] = {}
+    benchmark_task_meta: Dict[str, Optional[Dict[str, List[str]]]] = {}
     skip_set = set(args.skip_benchmark)
     for benchmark in BENCHMARKS:
         if benchmark in skip_set:
@@ -477,6 +558,10 @@ def main() -> None:
             print(f"Missing dataset path for {benchmark}; cannot build columns")
             sys.exit(1)
         benchmark_task_ids[benchmark] = load_task_ids(benchmark, dataset_path)
+        if benchmark == "scicode":
+            benchmark_task_meta[benchmark] = build_scicode_task_meta(dataset_path)
+        else:
+            benchmark_task_meta[benchmark] = None
 
     columns: List[str] = []
     for benchmark in BENCHMARKS:
@@ -503,7 +588,8 @@ def main() -> None:
             if not run_dir:
                 continue
             raw_path = run_dir / f"{run_id}_RAW_SUBMISSIONS.jsonl"
-            ok_tasks = load_raw_ok_tasks(raw_path)
+            task_meta = benchmark_task_meta.get(benchmark)
+            ok_tasks = load_raw_ok_tasks(raw_path, benchmark, task_meta)
 
             success_map: Dict[str, int] = {}
             if args.reeval:
@@ -576,28 +662,49 @@ def main() -> None:
     header = ["agent"] + columns
     output_path = Path(args.output) if args.output else repo_root / "output" / f"response_matrix_{args.prefix}.csv"
     rows_with_labels = [[row_labels[i]] + rows[i] for i in range(len(rows))]
-    write_csv(output_path, header, rows_with_labels)
+    output_path = write_csv(output_path, header, rows_with_labels)
     print(f"Wrote CSV: {output_path}")
+
+    if args.sheet_name is None:
+        args.sheet_name = f"resmat_{args.prefix.rstrip('_')}"
 
     if args.upload:
         try:
             from scripts.tmux_watcher import SPREADSHEET_ID
         except Exception:
-            print("Failed to import SPREADSHEET_ID from scripts/tmux_watcher.py")
-            sys.exit(1)
+            SPREADSHEET_ID = None
+            watcher_path = repo_root / "scripts" / "tmux_watcher.py"
+            if watcher_path.exists():
+                match = re.search(
+                    r"SPREADSHEET_ID\s*=\s*[\"']([^\"']+)[\"']",
+                    watcher_path.read_text(encoding="utf-8", errors="ignore"),
+                )
+                if match:
+                    SPREADSHEET_ID = match.group(1)
+            if not SPREADSHEET_ID:
+                print("Failed to import or find SPREADSHEET_ID in scripts/tmux_watcher.py")
+                sys.exit(1)
 
         gc = get_gspread_client(use_oauth=args.oauth)
         if gc is None:
             print("gspread not available or no credentials; skipping upload")
             sys.exit(1)
-        sheet = gc.open_by_key(SPREADSHEET_ID)
         try:
-            worksheet = sheet.worksheet(args.sheet_name)
-        except Exception:
-            worksheet = sheet.add_worksheet(title=args.sheet_name, rows=max(100, len(rows) + 5), cols=max(10, len(header) + 5))
-        worksheet.clear()
-        worksheet.update([header] + rows_with_labels, "A1")
-        print(f"Uploaded to sheet: {args.sheet_name}")
+            sheet = gc.open_by_key(SPREADSHEET_ID)
+            try:
+                worksheet = sheet.worksheet(args.sheet_name)
+            except Exception:
+                worksheet = sheet.add_worksheet(
+                    title=args.sheet_name,
+                    rows=max(100, len(rows) + 5),
+                    cols=max(10, len(header) + 5),
+                )
+            worksheet.clear()
+            worksheet.update([header] + rows_with_labels, "A1")
+            print(f"Uploaded to sheet: {args.sheet_name}")
+        except Exception as exc:
+            print(f"Upload failed: {exc}")
+            sys.exit(1)
 
 
 if __name__ == "__main__":
