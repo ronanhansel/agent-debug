@@ -11,8 +11,8 @@
     "agent_function": "main.run",
     "max_steps": 5
   },
-  "phi-4-reasoning_colbench_example_agent": {
-    "model_id": "phi-4-reasoning",
+  "gpt-oss-120b_colbench_example_agent": {
+    "model_id": "openai/gpt-oss-120b",
     "agent_dir": "hal-harness/agents/colbench_example_agent",
     "agent_function": "main.run",
     "max_steps": 5

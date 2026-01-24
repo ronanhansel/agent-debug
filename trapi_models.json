@@ -1,6 +1,5 @@
 {
   "description": "TRAPI supported models with Weave pricing name mappings",
-  "source_file": "/home/v-tatruong/api/deploy/configs/python/litellm.trapi.yaml",
   "trapi_base_url": "https://trapi.research.microsoft.com",
   "total_models": 227,
   "models": {
