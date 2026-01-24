@@ -81,6 +81,14 @@ All scripts support running specific benchmarks:
 
 ---
 
+## Google Sheets Upload
+
+Some scripts (e.g., `scripts/build_response_matrix.py --upload`) push results to Google Sheets via `gspread`.
+
+- Put a service account JSON at `~/.config/gspread/service_account.json`.
+- Share the target spreadsheet with the service account email (e.g., `watcher-hal@lecole-0000.iam.gserviceaccount.com`).
+- Never commit credentials to this repo.
+
 ## Fresh Machine Setup
 
 ### Prerequisites

@@ -333,6 +333,8 @@ def format_window(window_seconds: int) -> str:
     return f"{window_seconds}s"
 
 
+
+
 def token_rate_label(unit: str) -> str:
     return "tokens/sec" if unit == "sec" else "tokens/min"
 

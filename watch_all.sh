@@ -347,22 +347,26 @@ collect_logs() {
 
     if [ "$include_runs" = "true" ]; then
         if [ -d "$LOGS_DIR" ]; then
-            for log_dir in $(ls -td "$LOGS_DIR"/benchmark_run_* 2>/dev/null | head -3); do
-                for log in "$log_dir"/*.log; do
+            local latest_run_dir
+            latest_run_dir=$(ls -td "$LOGS_DIR"/benchmark_run_* 2>/dev/null | head -1)
+            if [ -n "$latest_run_dir" ]; then
+                for log in "$latest_run_dir"/*.log; do
                     [ -f "$log" ] && all_logs="$all_logs $log"
                 done
-            done
+            fi
         fi
     fi
 
     if [ "$include_verbose" = "true" ]; then
         for benchmark_dir in "$RESULTS_DIR"/*/; do
             if [ -d "$benchmark_dir" ]; then
-                for run_dir in $(ls -td "$benchmark_dir"*/ 2>/dev/null | head -5); do
-                    for log in "$run_dir"/*_verbose.log; do
+                local latest_run_dir
+                latest_run_dir=$(ls -td "$benchmark_dir"*/ 2>/dev/null | head -1)
+                if [ -n "$latest_run_dir" ]; then
+                    for log in "$latest_run_dir"/*_verbose.log; do
                         [ -f "$log" ] && all_logs="$all_logs $log"
                     done
-                done
+                fi
             fi
         done
     fi
@@ -432,7 +436,7 @@ case "$MODE" in
         watch_logs "" "false" "true"
         ;;
     agents)
-        python3 "$SCRIPT_DIR/scripts/track_run_progress.py" --watch
+        python3 "$SCRIPT_DIR/scripts/track_run_progress.py" --watch --interval 2
         ;;
     dashboard|*)
         run_dashboard
