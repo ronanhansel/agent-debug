@@ -74,6 +74,16 @@ detect_logs_root() {
 
 LOGS_DIR="$(detect_logs_root)"
 
+get_latest_run_dir() {
+    ls -td "$LOGS_DIR"/benchmark_run_* 2>/dev/null | head -1
+}
+
+get_latest_run_id() {
+    local latest_run_dir
+    latest_run_dir="$(get_latest_run_dir)"
+    [ -n "$latest_run_dir" ] && basename "$latest_run_dir" | sed 's/^benchmark_run_//'
+}
+
 # Benchmarks
 BENCHMARKS=("scicode" "scienceagentbench" "corebench" "colbench")
 
@@ -344,27 +354,34 @@ collect_logs() {
     local include_runs="$1"
     local include_verbose="$2"
     local all_logs=""
+    local latest_run_dir
+    local run_id
+
+    latest_run_dir="$(get_latest_run_dir)"
+    run_id="$(get_latest_run_id)"
 
     if [ "$include_runs" = "true" ]; then
-        if [ -d "$LOGS_DIR" ]; then
-            for log_dir in $(ls -td "$LOGS_DIR"/benchmark_run_* 2>/dev/null | head -3); do
-                for log in "$log_dir"/*.log; do
-                    [ -f "$log" ] && all_logs="$all_logs $log"
-                done
+        if [ -n "$latest_run_dir" ]; then
+            for log in "$latest_run_dir"/*.log; do
+                [ -f "$log" ] && all_logs="$all_logs $log"
             done
         fi
     fi
 
     if [ "$include_verbose" = "true" ]; then
-        for benchmark_dir in "$RESULTS_DIR"/*/; do
-            if [ -d "$benchmark_dir" ]; then
-                for run_dir in $(ls -td "$benchmark_dir"*/ 2>/dev/null | head -5); do
-                    for log in "$run_dir"/*_verbose.log; do
-                        [ -f "$log" ] && all_logs="$all_logs $log"
-                    done
-                done
-            fi
-        done
+        if [ -n "$run_id" ]; then
+            for benchmark_dir in "$RESULTS_DIR"/*/; do
+                if [ -d "$benchmark_dir" ]; then
+                    local matching_run_dir
+                    matching_run_dir=$(ls -td "$benchmark_dir"*_"$run_id"/ 2>/dev/null | head -1)
+                    if [ -n "$matching_run_dir" ]; then
+                        for log in "$matching_run_dir"/*_verbose.log; do
+                            [ -f "$log" ] && all_logs="$all_logs $log"
+                        done
+                    fi
+                fi
+            done
+        fi
     fi
 
     echo "$all_logs"
@@ -432,7 +449,7 @@ case "$MODE" in
         watch_logs "" "false" "true"
         ;;
     agents)
-        python3 "$SCRIPT_DIR/scripts/track_run_progress.py" --watch
+        python3 "$SCRIPT_DIR/scripts/track_run_progress.py" --watch --interval 2
         ;;
     dashboard|*)
         run_dashboard
