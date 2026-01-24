@@ -11,8 +11,8 @@
     "agent_function": "main.run",
     "max_steps": 5
   },
-  "gpt-oss-120b_colbench_example_agent": {
-    "model_id": "openai/gpt-oss-120b_1",
+  "o3_colbench_example_agent": {
+    "model_id": "openai/o3_2025-04-16",
     "agent_dir": "hal-harness/agents/colbench_example_agent",
     "agent_function": "main.run",
     "max_steps": 5
