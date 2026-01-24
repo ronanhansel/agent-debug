@@ -8,6 +8,13 @@
 # Options:
 #   --continue    Continue from most recent failed run (reuses prefix and log dir)
 #   --resume      Resume HAL runs (reuse run_id per config when available)
+#   --prefix PFX  Prefix for run IDs and output files (default: moon1_)
+#   --benchmarks  Comma-separated list of benchmarks to run (e.g., colbench,scicode)
+#   --parallel-models N  Number of model configs to run concurrently
+#   --parallel-tasks N   Number of tasks to run concurrently per model
+#   --trace-mode MODE    Set HAL_TRACE_MODE (e.g., local)
+#   --sample-tasks N     Randomly sample N tasks from each benchmark dataset
+#   --sample-seed N      Seed for --sample-tasks to make selection reproducible
 #
 # Examples:
 #   ./run_all_benchmarks.sh moon2_ 20           # Fresh run with moon2_ prefix
@@ -57,6 +64,12 @@ RESUME_MODE=false
 PREFIX=""
 PREFIX_FROM_ARG=false
 PARALLEL=""
+PARALLEL_MODELS=""
+PARALLEL_TASKS=""
+TRACE_MODE=""
+SAMPLE_TASKS=""
+SAMPLE_SEED=""
+REQUESTED_BENCHMARKS=()
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -66,6 +79,42 @@ while [[ $# -gt 0 ]]; do
             ;;
         --resume)
             RESUME_MODE=true
+            shift
+            ;;
+        --prefix)
+            shift
+            PREFIX="${1:-}"
+            PREFIX_FROM_ARG=true
+            shift
+            ;;
+        --benchmarks|--tags)
+            shift
+            IFS=',' read -r -a REQUESTED_BENCHMARKS <<< "${1:-}"
+            shift
+            ;;
+        --parallel-models)
+            shift
+            PARALLEL_MODELS="${1:-}"
+            shift
+            ;;
+        --parallel-tasks)
+            shift
+            PARALLEL_TASKS="${1:-}"
+            shift
+            ;;
+        --trace-mode)
+            shift
+            TRACE_MODE="${1:-}"
+            shift
+            ;;
+        --sample-tasks)
+            shift
+            SAMPLE_TASKS="${1:-}"
+            shift
+            ;;
+        --sample-seed)
+            shift
+            SAMPLE_SEED="${1:-}"
             shift
             ;;
         *)
@@ -83,8 +132,8 @@ done
 # Defaults
 PREFIX="${PREFIX:-moon1_}"
 PARALLEL="${PARALLEL:-10}"
-PARALLEL_MODELS=$PARALLEL
-PARALLEL_TASKS=$PARALLEL
+PARALLEL_MODELS="${PARALLEL_MODELS:-$PARALLEL}"
+PARALLEL_TASKS="${PARALLEL_TASKS:-$PARALLEL}"
 
 # Use host networking to avoid docker0 bridge limits (allows 1000+ containers)
 export HAL_DOCKER_NETWORK_MODE=host
@@ -101,6 +150,28 @@ NC='\033[0m' # No Color
 # Benchmarks to run
 ALL_BENCHMARKS=("scicode" "scienceagentbench" "corebench" "colbench")
 BENCHMARKS_TO_RUN=()
+
+benchmark_in_list() {
+    local target="$1"
+    shift
+    local item
+    for item in "$@"; do
+        if [ "$item" = "$target" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+if [ ${#REQUESTED_BENCHMARKS[@]} -gt 0 ]; then
+    for b in "${REQUESTED_BENCHMARKS[@]}"; do
+        if ! benchmark_in_list "$b" "${ALL_BENCHMARKS[@]}"; then
+            echo "Unknown benchmark: $b"
+            echo "Valid benchmarks: ${ALL_BENCHMARKS[*]}"
+            exit 1
+        fi
+    done
+fi
 
 # =============================================================================
 # CONTINUE MODE LOGIC
@@ -323,6 +394,21 @@ if ! $CONTINUE_MODE; then
     BENCHMARKS_TO_RUN=("${ALL_BENCHMARKS[@]}")
 fi
 
+if [ ${#REQUESTED_BENCHMARKS[@]} -gt 0 ]; then
+    filtered=()
+    for benchmark in "${BENCHMARKS_TO_RUN[@]}"; do
+        if benchmark_in_list "$benchmark" "${REQUESTED_BENCHMARKS[@]}"; then
+            filtered+=("$benchmark")
+        fi
+    done
+    BENCHMARKS_TO_RUN=("${filtered[@]}")
+    if [ ${#BENCHMARKS_TO_RUN[@]} -eq 0 ]; then
+        echo "No benchmarks selected after filtering."
+        exit 1
+    fi
+    echo -e "${BLUE}Using benchmark filter:${NC} ${BENCHMARKS_TO_RUN[*]}"
+fi
+
 # Create log directory
 mkdir -p "$LOG_DIR"
 
@@ -373,6 +459,16 @@ echo -e "${BLUE}Prefix:${NC} $PREFIX"
 echo -e "${BLUE}Log Directory:${NC} $LOG_DIR"
 echo -e "${BLUE}Parallel Models:${NC} $PARALLEL_MODELS"
 echo -e "${BLUE}Parallel Tasks:${NC} $PARALLEL_TASKS"
+if [ -n "$TRACE_MODE" ]; then
+    echo -e "${BLUE}HAL_TRACE_MODE:${NC} $TRACE_MODE"
+fi
+if [ -n "$SAMPLE_TASKS" ]; then
+    if [ -n "$SAMPLE_SEED" ]; then
+        echo -e "${BLUE}Sample Tasks:${NC} $SAMPLE_TASKS (seed=$SAMPLE_SEED)"
+    else
+        echo -e "${BLUE}Sample Tasks:${NC} $SAMPLE_TASKS (seed=random)"
+    fi
+fi
 echo -e "${BLUE}Continue Mode:${NC} $CONTINUE_MODE"
 echo -e "${BLUE}Resume Mode:${NC} $RESUME_MODE"
 echo -e "${BLUE}Benchmarks:${NC} ${BENCHMARKS_TO_RUN[*]}"
@@ -380,13 +476,15 @@ echo -e "${CYAN}============================================================${NC
 echo ""
 
 # Save configuration
+benchmarks_json=$(printf '"%s",' "${BENCHMARKS_TO_RUN[@]}")
+benchmarks_json="[${benchmarks_json%,}]"
 cat > "$LOG_DIR/config.json" << EOF
 {
     "timestamp": "$TIMESTAMP",
     "prefix": "$PREFIX",
     "parallel_models": $PARALLEL_MODELS,
     "parallel_tasks": $PARALLEL_TASKS,
-    "benchmarks": ["scicode", "scienceagentbench", "corebench", "colbench"],
+    "benchmarks": $benchmarks_json,
     "continue_mode": $CONTINUE_MODE,
     "resume_mode": $RESUME_MODE
 }
@@ -413,10 +511,19 @@ run_benchmark() {
     local color=$2
     local log_file="$LOG_DIR/${benchmark}.log"
     local pid_file="$LOG_DIR/${benchmark}.pid"
-    local resume_args=()
+    local extra_args=()
 
     if $RESUME_MODE; then
-        resume_args+=(--resume)
+        extra_args+=(--resume)
+    fi
+    if [ -n "$TRACE_MODE" ]; then
+        extra_args+=(--trace-mode "$TRACE_MODE")
+    fi
+    if [ -n "$SAMPLE_TASKS" ]; then
+        extra_args+=(--sample-tasks "$SAMPLE_TASKS")
+    fi
+    if [ -n "$SAMPLE_SEED" ]; then
+        extra_args+=(--sample-seed "$SAMPLE_SEED")
     fi
 
     echo -e "${color}[$(date +%H:%M:%S)] Starting $benchmark benchmark...${NC}"
@@ -432,7 +539,7 @@ run_benchmark() {
             --docker \
             --parallel-models "$PARALLEL_MODELS" \
             --parallel-tasks "$PARALLEL_TASKS" \
-            "${resume_args[@]}" \
+            "${extra_args[@]}" \
             2>&1 | tee -a "$log_file" | filter_log "$benchmark" "$color"
 
         exit_code=${PIPESTATUS[0]}
@@ -556,7 +663,7 @@ echo -e "${CYAN}============================================================${NC
 total_success=0
 total_failed=0
 
-for benchmark in "${ALL_BENCHMARKS[@]}"; do
+for benchmark in "${BENCHMARKS_TO_RUN[@]}"; do
     exit_code_file="$LOG_DIR/${benchmark}.exit_code"
     log_file="$LOG_DIR/${benchmark}.log"
 
@@ -595,7 +702,7 @@ Prefix: $PREFIX
 Continue Mode: $CONTINUE_MODE
 
 Results:
-$(for benchmark in "${ALL_BENCHMARKS[@]}"; do
+$(for benchmark in "${BENCHMARKS_TO_RUN[@]}"; do
     exit_code_file="$LOG_DIR/${benchmark}.exit_code"
     if [ -f "$exit_code_file" ]; then
         exit_code=$(cat "$exit_code_file")

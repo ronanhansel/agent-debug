@@ -5,10 +5,12 @@
 # Usage: ./watch_all.sh [mode]
 # Modes:
 #   (default) - Dashboard showing task progress per benchmark
-#   logs      - Real-time log tailing (verbose output)
+#   logs      - Real-time log tailing (benchmark runs + verbose)
 #   errors    - Only show errors from logs
 #   api       - Only show API calls/responses from logs
 #   agents    - Aggregate progress per benchmark (use --per-agent for details)
+#   runs      - Benchmark run logs only (from benchmark_run_*)
+#   verbose   - Per-task verbose logs only (*_verbose.log)
 #
 
 # Get script directory
@@ -339,36 +341,45 @@ format_and_colorize() {
 }
 
 collect_logs() {
+    local include_runs="$1"
+    local include_verbose="$2"
     local all_logs=""
 
-    if [ -d "$LOGS_DIR" ]; then
-        for log_dir in $(ls -td "$LOGS_DIR"/benchmark_run_* 2>/dev/null | head -3); do
-            for log in "$log_dir"/*.log; do
-                [ -f "$log" ] && all_logs="$all_logs $log"
-            done
-        done
-    fi
-
-    for benchmark_dir in "$RESULTS_DIR"/*/; do
-        if [ -d "$benchmark_dir" ]; then
-            for run_dir in $(ls -td "$benchmark_dir"*/ 2>/dev/null | head -5); do
-                for log in "$run_dir"/*_verbose.log; do
+    if [ "$include_runs" = "true" ]; then
+        if [ -d "$LOGS_DIR" ]; then
+            for log_dir in $(ls -td "$LOGS_DIR"/benchmark_run_* 2>/dev/null | head -3); do
+                for log in "$log_dir"/*.log; do
                     [ -f "$log" ] && all_logs="$all_logs $log"
                 done
             done
         fi
-    done
+    fi
+
+    if [ "$include_verbose" = "true" ]; then
+        for benchmark_dir in "$RESULTS_DIR"/*/; do
+            if [ -d "$benchmark_dir" ]; then
+                for run_dir in $(ls -td "$benchmark_dir"*/ 2>/dev/null | head -5); do
+                    for log in "$run_dir"/*_verbose.log; do
+                        [ -f "$log" ] && all_logs="$all_logs $log"
+                    done
+                done
+            fi
+        done
+    fi
 
     echo "$all_logs"
 }
 
 watch_logs() {
     local filter="$1"
+    local include_runs="$2"
+    local include_verbose="$3"
 
     echo -e "${CYAN}============================================================${NC}"
     echo -e "${CYAN}           LOG VIEWER MODE${NC}"
     echo -e "${CYAN}============================================================${NC}"
     echo -e "${BLUE}Filter:${NC} ${filter:-all}"
+    echo -e "${BLUE}Sources:${NC} runs=${include_runs:-true}, verbose=${include_verbose:-true}"
     echo -e "${BLUE}Results:${NC} $RESULTS_DIR"
     echo -e "${BLUE}Logs:${NC} $LOGS_DIR"
     echo -e "${CYAN}Press Ctrl+C to stop${NC}"
@@ -376,7 +387,7 @@ watch_logs() {
     echo ""
 
     while true; do
-        LOG_FILES=$(collect_logs)
+        LOG_FILES=$(collect_logs "${include_runs:-true}" "${include_verbose:-true}")
 
         if [ -z "$LOG_FILES" ]; then
             echo -e "${YELLOW}No log files found. Waiting...${NC}"
@@ -403,16 +414,22 @@ watch_logs() {
 
 case "$MODE" in
     logs|all)
-        watch_logs ""
+        watch_logs "" "true" "true"
         ;;
     errors)
-        watch_logs "error|exception|failed|traceback|401|403|429|500|502|503|504|timeout|unauthorized|denied"
+        watch_logs "error|exception|failed|traceback|401|403|429|500|502|503|504|timeout|unauthorized|denied" "true" "true"
         ;;
     api)
-        watch_logs "openai|azure|api|request|response|token|model|gpt|o3|o4"
+        watch_logs "openai|azure|api|request|response|token|model|gpt|o3|o4" "true" "true"
         ;;
     progress)
-        watch_logs "task|starting|running|completed|success|finished|\[hal\]|\[main\]|SUCCESS|FAILED"
+        watch_logs "task|starting|running|completed|success|finished|\[hal\]|\[main\]|SUCCESS|FAILED" "true" "true"
+        ;;
+    runs)
+        watch_logs "" "true" "false"
+        ;;
+    verbose)
+        watch_logs "" "false" "true"
         ;;
     agents)
         python3 "$SCRIPT_DIR/scripts/track_run_progress.py" --watch

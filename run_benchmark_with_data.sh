@@ -334,7 +334,7 @@ echo "Temp directory: $TMPDIR"
 echo "Available for temp files: $(df -h "$TMPDIR" 2>/dev/null | tail -1 | awk '{print $4}' || echo 'N/A')"
 echo ""
 echo "Docker usage:"
-docker system df --format "table {{.Type}}\t{{.Size}}\t{{.Reclaimable}}" 2>/dev/null || echo "(docker not available)"
+timeout 5s docker system df --format "table {{.Type}}\t{{.Size}}\t{{.Reclaimable}}" 2>/dev/null || echo "(docker df timed out or not available)"
 echo "=========================================="
 echo ""
 

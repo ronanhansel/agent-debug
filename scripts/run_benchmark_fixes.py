@@ -743,6 +743,31 @@ def create_modified_dataset(
     return modified_dataset, all_changes, tasks_with_fixes, tasks_without_fixes
 
 
+def sample_dataset_tasks(
+    dataset: List[Dict[str, Any]],
+    benchmark: str,
+    sample_size: int,
+    seed: Optional[int],
+) -> List[Dict[str, Any]]:
+    if sample_size <= 0:
+        raise ValueError("sample_size must be > 0")
+
+    total = len(dataset)
+    if total <= sample_size:
+        log(f"Sample size {sample_size} >= total {total}; using full dataset", "main")
+        return dataset
+
+    rng = random.Random(seed)
+    sampled = rng.sample(dataset, sample_size)
+    id_field = BENCHMARK_TASK_ID_FIELD.get(benchmark, "id")
+    sample_ids = [str(task.get(id_field, "")) for task in sampled[:10]]
+    seed_label = seed if seed is not None else "random"
+    log(f"Sampled {len(sampled)}/{total} tasks for {benchmark} (seed={seed_label})", "main")
+    if sample_ids:
+        log(f"Sampled task IDs (first {len(sample_ids)}): {', '.join(sample_ids)}", "main")
+    return sampled
+
+
 # =============================================================================
 # Benchmark and Fix Detection
 # =============================================================================
@@ -1038,6 +1063,7 @@ def run_hal_eval(
     parallel_tasks: int = 1,
     dataset_path: Optional[Path] = None,
     all_tasks_mode: bool = False,
+    trace_mode: Optional[str] = None,
 ) -> Tuple[bool, str, Optional[Path]]:
     """
     Run HAL evaluation for a specific configuration.
@@ -1052,6 +1078,7 @@ def run_hal_eval(
         parallel_tasks: Number of tasks to run concurrently (HAL's --max_concurrent)
         dataset_path: Path to modified dataset file with fixes applied
         all_tasks_mode: Whether running in --all-tasks mode (full benchmark vs fixes-only)
+        trace_mode: HAL_TRACE_MODE value to set for the run
 
     Returns:
         (success, message, trace_path)
@@ -1119,6 +1146,8 @@ def run_hal_eval(
     env.setdefault("WANDB_SILENT", "true")
     env["HAL_PRICING_MODEL_NAME"] = config_key
     env["HAL_WEAVE_PROJECT"] = f"{prefix.rstrip('_')}_{benchmark}"
+    if trace_mode:
+        env["HAL_TRACE_MODE"] = trace_mode
 
     # If dataset_path provided, set the appropriate environment variable
     if dataset_path:
@@ -1286,12 +1315,24 @@ def main():
              "Uses HAL's --max_concurrent flag."
     )
     parser.add_argument(
+        "--trace-mode",
+        help="Set HAL_TRACE_MODE for runs (e.g., local)."
+    )
+    parser.add_argument(
         "--resume", action="store_true",
         help="Resume prior runs when available (uses HAL --continue_run with last run_id)."
     )
     parser.add_argument(
         "--max-tasks", type=int,
         help="Maximum tasks per config (for testing)."
+    )
+    parser.add_argument(
+        "--sample-tasks", type=int,
+        help="Randomly sample N tasks from the dataset before running."
+    )
+    parser.add_argument(
+        "--sample-seed", type=int,
+        help="Seed for --sample-tasks to make selection reproducible."
     )
     parser.add_argument(
         "--all-tasks", action="store_true",
@@ -1323,6 +1364,11 @@ def main():
     )
 
     args = parser.parse_args()
+    if args.sample_tasks is not None and args.sample_tasks <= 0:
+        log("ERROR: --sample-tasks must be > 0", "main")
+        sys.exit(1)
+    if args.sample_seed is not None and args.sample_tasks is None:
+        log("WARNING: --sample-seed has no effect without --sample-tasks", "main")
 
     # List benchmarks mode
     if args.list_benchmarks:
@@ -1500,6 +1546,18 @@ def main():
             modified_dataset = filtered_dataset
             log(f"Filtered dataset: {len(modified_dataset)} tasks with fixes (from {len(dataset)} total)", "main")
 
+        if args.sample_tasks:
+            try:
+                modified_dataset = sample_dataset_tasks(
+                    modified_dataset,
+                    benchmark,
+                    args.sample_tasks,
+                    args.sample_seed,
+                )
+            except ValueError as e:
+                log(f"ERROR: {e}", "main")
+                continue
+
         # Save modified dataset to temp file
         # Different benchmarks use different formats:
         # - ColBench: JSONL (one JSON object per line)
@@ -1637,9 +1695,14 @@ def main():
             print(f"\n{'='*70}")
             print(f"Parallel models: {args.parallel_models}")
             print(f"Parallel tasks (per model): {args.parallel_tasks}")
+            if args.sample_tasks:
+                seed_label = args.sample_seed if args.sample_seed is not None else "random"
+                print(f"Sample tasks: {args.sample_tasks} (seed={seed_label})")
             print(f"Resume: {args.resume}")
             print(f"Docker: {args.docker}")
             print(f"All tasks mode: {args.all_tasks}")
+            if args.trace_mode:
+                print(f"HAL_TRACE_MODE: {args.trace_mode}")
             print(f"{'='*70}")
 
             # Clean up temp dataset if created for dry run
@@ -1677,6 +1740,7 @@ def main():
                 parallel_tasks=args.parallel_tasks,
                 dataset_path=_dataset_path,  # Modified dataset with fixes applied
                 all_tasks_mode=_all_tasks_mode,
+                trace_mode=args.trace_mode,
             )
             return key, success, msg, trace
 
