@@ -10,6 +10,7 @@
 #   --resume      Resume HAL runs (reuse run_id per config when available)
 #   --prefix PFX  Prefix for run IDs and output files (default: moon1_)
 #   --benchmarks  Comma-separated list of benchmarks to run (e.g., colbench,scicode)
+#   --parallel    Total parallel tasks to run (caps at 800, ignores --parallel-models)
 #   --parallel-models N  Number of model configs to run concurrently
 #   --parallel-tasks N   Number of tasks to run concurrently per model
 #   --trace-mode MODE    Set HAL_TRACE_MODE (e.g., local)
@@ -64,6 +65,8 @@ RESUME_MODE=false
 PREFIX=""
 PREFIX_FROM_ARG=false
 PARALLEL=""
+PARALLEL_TOTAL=""
+PARALLEL_FLAG=false
 PARALLEL_MODELS=""
 PARALLEL_TASKS=""
 TRACE_MODE=""
@@ -90,6 +93,12 @@ while [[ $# -gt 0 ]]; do
         --benchmarks|--tags)
             shift
             IFS=',' read -r -a REQUESTED_BENCHMARKS <<< "${1:-}"
+            shift
+            ;;
+        --parallel)
+            shift
+            PARALLEL_TOTAL="${1:-}"
+            PARALLEL_FLAG=true
             shift
             ;;
         --parallel-models)
@@ -134,6 +143,47 @@ PREFIX="${PREFIX:-moon1_}"
 PARALLEL="${PARALLEL:-10}"
 PARALLEL_MODELS="${PARALLEL_MODELS:-$PARALLEL}"
 PARALLEL_TASKS="${PARALLEL_TASKS:-$PARALLEL}"
+PARALLEL_CAP=800
+
+is_positive_int() {
+    [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -gt 0 ]
+}
+
+if $PARALLEL_FLAG; then
+    if ! is_positive_int "$PARALLEL_TOTAL"; then
+        echo "Invalid --parallel value: '$PARALLEL_TOTAL' (expected positive integer)"
+        exit 1
+    fi
+    if [ "$PARALLEL_TOTAL" -gt "$PARALLEL_CAP" ]; then
+        echo "Capping --parallel from $PARALLEL_TOTAL to $PARALLEL_CAP for stability."
+        PARALLEL_TOTAL="$PARALLEL_CAP"
+    fi
+    PARALLEL_MODELS=1
+    PARALLEL_TASKS="$PARALLEL_TOTAL"
+else
+    if ! is_positive_int "$PARALLEL_MODELS"; then
+        echo "Invalid --parallel-models value: '$PARALLEL_MODELS' (expected positive integer)"
+        exit 1
+    fi
+    if ! is_positive_int "$PARALLEL_TASKS"; then
+        echo "Invalid --parallel-tasks value: '$PARALLEL_TASKS' (expected positive integer)"
+        exit 1
+    fi
+    if [ "$PARALLEL_MODELS" -gt "$PARALLEL_CAP" ]; then
+        echo "Capping --parallel-models from $PARALLEL_MODELS to $PARALLEL_CAP for stability."
+        PARALLEL_MODELS="$PARALLEL_CAP"
+        PARALLEL_TASKS=1
+    fi
+    total_parallel=$((PARALLEL_MODELS * PARALLEL_TASKS))
+    if [ "$total_parallel" -gt "$PARALLEL_CAP" ]; then
+        adjusted=$((PARALLEL_CAP / PARALLEL_MODELS))
+        if [ "$adjusted" -lt 1 ]; then
+            adjusted=1
+        fi
+        echo "Capping total parallelism to $PARALLEL_CAP containers by setting --parallel-tasks to $adjusted."
+        PARALLEL_TASKS="$adjusted"
+    fi
+fi
 
 # Use host networking to avoid docker0 bridge limits (allows 1000+ containers)
 export HAL_DOCKER_NETWORK_MODE=host
