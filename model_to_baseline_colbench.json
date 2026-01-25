@@ -5,12 +5,6 @@
     "agent_function": "main.run",
     "max_steps": 5
   },
-  "DeepSeek-R1_colbench_example_agent": {
-    "model_id": "DeepSeek-R1_1",
-    "agent_dir": "hal-harness/agents/colbench_example_agent",
-    "agent_function": "main.run",
-    "max_steps": 5
-  },
   "gpt-5-codex_colbench_example_agent": {
     "model_id": "openai/gpt-5-codex_2025-09-15",
     "agent_dir": "hal-harness/agents/colbench_example_agent",
