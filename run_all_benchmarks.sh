@@ -550,6 +550,9 @@ filter_log() {
             echo -e "${RED}[$benchmark] $line${NC}"
         elif echo "$line" | grep -qiE "COMPLETED|FINISHED|All.*done"; then
             echo -e "${GREEN}[$benchmark] $line${NC}"
+        elif echo "$line" | grep -q "STEP:"; then
+             # Allow progress steps to be visible
+             echo -e "${color}[$benchmark] $line${NC}"
         fi
     done
 }

@@ -936,9 +936,48 @@ def run_with_retry(
             if attempt > 0:
                 log(f"Attempt {attempt + 1}/{max_retries} (timeout={timeout}s)", "retry")
 
-            result = subprocess.run(
-                cmd, cwd=cwd, env=env, timeout=timeout,
-                capture_output=True, text=True,
+            # Stream output live
+            process = subprocess.Popen(
+                cmd, cwd=cwd, env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,  # Line buffered
+                encoding='utf-8',
+                errors='replace'
+            )
+
+            stdout_lines = []
+            stderr_lines = []
+
+            def stream_reader(pipe, lines_acc, dest):
+                try:
+                    for line in pipe:
+                        dest.write(line)
+                        dest.flush()
+                        lines_acc.append(line)
+                except Exception:
+                    pass
+
+            t_out = threading.Thread(target=stream_reader, args=(process.stdout, stdout_lines, sys.stdout))
+            t_err = threading.Thread(target=stream_reader, args=(process.stderr, stderr_lines, sys.stderr))
+
+            t_out.start()
+            t_err.start()
+
+            try:
+                process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                t_out.join()
+                t_err.join()
+                raise subprocess.TimeoutExpired(cmd, timeout)
+
+            t_out.join()
+            t_err.join()
+
+            result = subprocess.CompletedProcess(
+                cmd, process.returncode, "".join(stdout_lines), "".join(stderr_lines)
             )
 
             if result.returncode == 0:

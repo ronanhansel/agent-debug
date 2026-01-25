@@ -168,6 +168,19 @@ get_latest_run_dir() {
     for root in "${roots[@]}"; do
         for dir in "$root"/benchmark_run_*; do
             [ -d "$dir" ] || continue
+            
+            # Filter by prefix if provided
+            if [ -n "$PREFIX" ]; then
+                # Check config.json for prefix
+                if [ -f "$dir/config.json" ]; then
+                    local run_prefix
+                    run_prefix=$(grep -o '"prefix": *"[^"]*"' "$dir/config.json" | cut -d'"' -f4)
+                    if [[ "$run_prefix" != "$PREFIX" ]]; then
+                        continue
+                    fi
+                fi
+            fi
+            
             local run_id
             run_id="$(basename "$dir" | sed 's/^benchmark_run_//')"
             entries+=("${run_id} ${dir}")
@@ -189,7 +202,8 @@ get_latest_run_id() {
 # Format and colorize function for log tailing
 format_and_colorize() {
     awk -v red="$RED" -v green="$GREEN" -v yellow="$YELLOW" -v blue="$BLUE" \
-        -v cyan="$CYAN" -v magenta="$MAGENTA" -v white="$WHITE" -v bold_green="$BOLD_GREEN" -v nc="$NC" '
+        -v cyan="$CYAN" -v magenta="$MAGENTA" -v white="$WHITE" -v bold_green="$BOLD_GREEN" \
+        -v nc="$NC" -v prefix_val="$PREFIX" '
     BEGIN {
         current_run_id = ""
     }
@@ -211,16 +225,23 @@ format_and_colorize() {
     /^$/ { next }
     {
         timestamp = strftime("%H:%M:%S")
-        if (current_benchmark != "") {
-            run = current_run_id
-            if (length(run) > 30) {
-                run = substr(run, 1, 10) ".." substr(run, length(run)-14)
+        run = current_run_id
+        
+        if (current_run_id != "") {
+            # Try to strip benchmark + prefix from the start
+            # e.g. colbench_sun13_gpt-5.1-codex_... -> gpt-5.1-codex_...
+            if (prefix_val != "") {
+                p_idx = index(run, prefix_val)
+                if (p_idx > 0) {
+                    run = substr(run, p_idx + length(prefix_val))
+                }
+            } else {
+                # Fallback: strip first two underscore-separated parts
+                sub(/^[a-zA-Z0-9-]+_[a-zA-Z0-9-]+_/, "", run)
             }
-            display_id = current_benchmark "/" run
-        } else {
-            display_id = current_run_id
         }
-        prefix = sprintf("[%s %s] ", timestamp, display_id)
+        
+        prefix = sprintf("[%s %s] ", timestamp, run)
 
         line = $0
         gsub(/^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2},[0-9]+ - [a-zA-Z_.]+ - (DEBUG|INFO|WARNING|ERROR) - /, "", line)
@@ -239,6 +260,9 @@ format_and_colorize() {
             printf "%s%s%s%s\n", yellow, prefix, line, nc
         } else if (tolower(line) ~ /starting|running|task/) {
             printf "%s%s%s%s\n", blue, prefix, line, nc
+        } else if (line ~ /^\[hal\]/) {
+            # Explicitly show [hal] verbose logs in cyan/white
+            printf "%s%s%s\n", prefix, line, nc
         } else {
             printf "%s%s\n", prefix, line
         }
@@ -251,24 +275,44 @@ collect_logs() {
     local latest_run_dir="$2"
     local all_logs=""
 
-    if [ -n "$latest_run_dir" ]; then
-        for log in "$latest_run_dir"/*.log; do
-            [ -f "$log" ] && all_logs="$all_logs $log"
-        done
-    fi
-
-    if [ -n "$run_id" ]; then
-        shopt -s nullglob
-        for benchmark_dir in "$RESULTS_DIR"/*/; do
-            [ -d "$benchmark_dir" ] || continue
-            for run_dir in "$benchmark_dir"*_"$run_id"/; do
-                [ -d "$run_dir" ] || continue
-                for log in "$run_dir"/*_verbose.log; do
-                    [ -f "$log" ] && all_logs="$all_logs $log"
-                done
+    if [ -n "$PREFIX" ]; then
+        # 1. Main logs for this prefix (search in all log roots)
+        mapfile -t roots < <(list_logs_roots)
+        for root in "${roots[@]}"; do
+            # Find log dir that contains this prefix in config
+            for dir in "$root"/benchmark_run_*; do
+                [ -d "$dir" ] || continue
+                if [ -f "$dir/config.json" ]; then
+                    local p=$(grep -o '"prefix": *"[^"]*"' "$dir/config.json" | cut -d'"' -f4)
+                    if [[ "$p" == "$PREFIX" ]]; then
+                        for log in "$dir"/*.log; do
+                            [ -f "$log" ] && all_logs="$all_logs $log"
+                        done
+                    fi
+                fi
             done
         done
-        shopt -u nullglob
+
+        # 2. Verbose logs for this prefix in results dir
+        # Limit depth to 3 levels for speed: results/benchmark/run_dir/verbose.log
+        while IFS= read -r log_file; do
+             all_logs="$all_logs $log_file"
+        done < <(find "$RESULTS_DIR" -maxdepth 3 -type f -name "*${PREFIX}*_verbose.log" 2>/dev/null)
+
+    else
+        # Original logic (fallback to run_id if no prefix)
+        if [ -n "$latest_run_dir" ]; then
+            for log in "$latest_run_dir"/*.log; do
+                [ -f "$log" ] && all_logs="$all_logs $log"
+            done
+        fi
+
+        if [ -n "$run_id" ]; then
+            # Find all verbose logs in results dir matching the run timestamp
+            while IFS= read -r log_file; do
+                 all_logs="$all_logs $log_file"
+            done < <(find "$RESULTS_DIR" -maxdepth 3 -type f -name "*${run_id}*_verbose.log" 2>/dev/null)
+        fi
     fi
 
     echo "$all_logs"
@@ -322,6 +366,8 @@ watch_logs() {
             if ! kill -0 "$tail_pid" 2>/dev/null; then
                 break
             fi
+            
+            # Check if run ID changed
             local new_run_id
             new_run_id="$(get_latest_run_id)"
             if [ -n "$new_run_id" ] && [ "$new_run_id" != "$current_run_id" ]; then

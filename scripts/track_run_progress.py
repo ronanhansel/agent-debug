@@ -153,10 +153,26 @@ def collect_logs_roots(script_dir: Path, run_root: Path) -> List[Path]:
     return roots
 
 
-def latest_run_dir_from_roots(logs_roots: List[Path]) -> Optional[Path]:
+def latest_run_dir_from_roots(logs_roots: List[Path], prefix: Optional[str] = None) -> Optional[Path]:
     candidates: List[Path] = []
     for root in logs_roots:
         candidates.extend(root.glob("benchmark_run_*"))
+    
+    if prefix:
+        filtered = []
+        for cand in candidates:
+            if not cand.is_dir():
+                continue
+            cfg = cand / "config.json"
+            if cfg.exists():
+                try:
+                    data = json.loads(cfg.read_text())
+                    if data.get("prefix") == prefix:
+                        filtered.append(cand)
+                except Exception:
+                    pass
+        candidates = filtered
+
     if not candidates:
         return None
     def run_key(path: Path) -> str:
@@ -664,7 +680,7 @@ def maybe_refresh_state(
 ) -> WatchState:
     if not follow_latest:
         return state
-    latest = latest_run_dir_from_roots(logs_roots)
+    latest = latest_run_dir_from_roots(logs_roots, prefix_override)
     if latest and latest != state.run_dir:
         return build_watch_state(
             latest,
@@ -1010,7 +1026,7 @@ def main() -> None:
 
     logs_dir = run_root / "logs"
     logs_roots = collect_logs_roots(script_dir, run_root)
-    run_dir = Path(args.run_dir) if args.run_dir else latest_run_dir_from_roots(logs_roots)
+    run_dir = Path(args.run_dir) if args.run_dir else latest_run_dir_from_roots(logs_roots, args.prefix)
     if not run_dir or not run_dir.exists():
         print("No benchmark_run_* directory found.")
         return
