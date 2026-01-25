@@ -513,12 +513,12 @@ def increment_prefix(prefix: Optional[str]) -> Optional[str]:
     return f"{base}{next_num}{suffix}"
 
 
-def build_auto_command(next_prefix: Optional[str]) -> Optional[str]:
+def build_auto_command(next_prefix: Optional[str], parallel_tasks: int) -> Optional[str]:
     if not next_prefix:
         return None
     return (
         "./run_all_benchmarks.sh --benchmarks colbench "
-        f"--prefix {next_prefix} --parallel-models 10 --parallel-tasks 45 --trace-mode local"
+        f"--prefix {next_prefix} --parallel-models 10 --parallel-tasks {parallel_tasks} --trace-mode local"
     )
 
 
@@ -647,10 +647,11 @@ def build_watch_state(
     logs_dir: Path,
     window_seconds: int,
     watch: bool,
+    parallel_tasks: int,
 ) -> WatchState:
     current_prefix = load_prefix(run_dir) or prefix_override
     next_prefix = increment_prefix(current_prefix)
-    auto_command = build_auto_command(next_prefix)
+    auto_command = build_auto_command(next_prefix, parallel_tasks)
     auto_tracker = AutoRelaunch(
         enabled=batch_mode,
         command=auto_command,
@@ -677,6 +678,7 @@ def maybe_refresh_state(
     logs_roots: List[Path],
     window_seconds: int,
     watch: bool,
+    parallel_tasks: int,
 ) -> WatchState:
     if not follow_latest:
         return state
@@ -690,6 +692,7 @@ def maybe_refresh_state(
             logs_roots[0] if logs_roots else repo_root / "logs",
             window_seconds,
             watch,
+            parallel_tasks,
         )
     return state
 
@@ -1018,6 +1021,7 @@ def main() -> None:
     )
     parser.add_argument("--batch-mode", action="store_true", help="Auto-start the next colbench run if progress stalls or completes.")
     parser.add_argument("--prefix", help="Current run prefix (e.g., sun12_). Used to compute the next prefix.")
+    parser.add_argument("--parallel-tasks", type=int, default=50, help="Number of parallel tasks for auto-relaunch (default: 50).")
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parents[1]
@@ -1040,6 +1044,7 @@ def main() -> None:
         logs_dir,
         args.window_seconds,
         args.watch,
+        args.parallel_tasks,
     )
 
     use_tui = False
@@ -1069,8 +1074,6 @@ def main() -> None:
             use_tui = False
 
     while True:
-        sys.stdout.write("\033[H\033[J")
-        sys.stdout.flush()
         state = maybe_refresh_state(
             state,
             follow_latest,
@@ -1080,6 +1083,7 @@ def main() -> None:
             logs_roots,
             args.window_seconds,
             args.watch,
+            args.parallel_tasks,
         )
         lines = build_output_lines(
             state.run_dir,
@@ -1091,7 +1095,12 @@ def main() -> None:
             args.token_rate_unit,
             state,
         )
-        print("\n".join(lines))
+        
+        # Clear screen and print immediately to minimize flicker
+        sys.stdout.write("\033[H\033[J")
+        sys.stdout.write("\n".join(lines) + "\n")
+        sys.stdout.flush()
+        
         if not args.watch:
             break
         time.sleep(max(2, args.interval))
