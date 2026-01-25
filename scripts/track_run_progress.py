@@ -54,6 +54,16 @@ class AggregateMetrics:
     tokens_total: int
 
 
+@dataclass
+class WatchState:
+    run_dir: Path
+    current_prefix: Optional[str]
+    next_prefix: Optional[str]
+    auto_command: Optional[str]
+    auto_tracker: "AutoRelaunch"
+    rate_tracker: Optional[RateTracker]
+
+
 class RateTracker:
     def __init__(self, window_seconds: int) -> None:
         self.window_seconds = max(1, window_seconds)
@@ -103,6 +113,9 @@ class RateTracker:
 
 
 def detect_run_root(script_dir: Path) -> Path:
+    local_hal = script_dir / ".hal_data"
+    if local_hal.is_dir() and os.access(local_hal, os.W_OK):
+        return local_hal
     data_path = os.environ.get("DATA_PATH")
     if data_path and Path(data_path).is_dir():
         namespace = os.environ.get("HAL_DATA_NAMESPACE") or os.environ.get("USER") or "user"
@@ -124,6 +137,34 @@ def latest_run_dir(logs_dir: Path) -> Optional[Path]:
             return match.group(1)
         return path.name
     return max(runs, key=run_key)
+
+
+def collect_logs_roots(script_dir: Path, run_root: Path) -> List[Path]:
+    roots: List[Path] = []
+
+    def add_root(path: Path) -> None:
+        if path.is_dir() and path not in roots:
+            roots.append(path)
+
+    add_root(script_dir / ".hal_data" / "logs")
+    add_root(run_root / "logs")
+    add_root(script_dir / "logs")
+    add_root(script_dir / ".logs")
+    return roots
+
+
+def latest_run_dir_from_roots(logs_roots: List[Path]) -> Optional[Path]:
+    candidates: List[Path] = []
+    for root in logs_roots:
+        candidates.extend(root.glob("benchmark_run_*"))
+    if not candidates:
+        return None
+    def run_key(path: Path) -> str:
+        match = RUN_DIR_RE.fullmatch(path.name)
+        if match:
+            return match.group(1)
+        return path.name
+    return max(candidates, key=run_key)
 
 
 def read_text(path: Path) -> str:
@@ -582,6 +623,59 @@ class AutoRelaunch:
         self.trigger_pid = proc.pid
 
 
+def build_watch_state(
+    run_dir: Path,
+    prefix_override: Optional[str],
+    batch_mode: bool,
+    repo_root: Path,
+    logs_dir: Path,
+    window_seconds: int,
+    watch: bool,
+) -> WatchState:
+    current_prefix = load_prefix(run_dir) or prefix_override
+    next_prefix = increment_prefix(current_prefix)
+    auto_command = build_auto_command(next_prefix)
+    auto_tracker = AutoRelaunch(
+        enabled=batch_mode,
+        command=auto_command,
+        repo_root=repo_root,
+        logs_dir=logs_dir,
+    )
+    rate_tracker = RateTracker(window_seconds) if watch else None
+    return WatchState(
+        run_dir=run_dir,
+        current_prefix=current_prefix,
+        next_prefix=next_prefix,
+        auto_command=auto_command,
+        auto_tracker=auto_tracker,
+        rate_tracker=rate_tracker,
+    )
+
+
+def maybe_refresh_state(
+    state: WatchState,
+    follow_latest: bool,
+    prefix_override: Optional[str],
+    batch_mode: bool,
+    repo_root: Path,
+    logs_roots: List[Path],
+    window_seconds: int,
+    watch: bool,
+) -> WatchState:
+    if not follow_latest:
+        return state
+    latest = latest_run_dir_from_roots(logs_roots)
+    if latest and latest != state.run_dir:
+        return build_watch_state(
+            latest,
+            prefix_override,
+            batch_mode,
+            repo_root,
+            logs_roots[0] if logs_roots else repo_root / "logs",
+            window_seconds,
+            watch,
+        )
+    return state
 
 
 def token_rate_label(unit: str) -> str:
@@ -803,17 +897,13 @@ def build_output_lines(
     rate_tracker: Optional[RateTracker],
     window_seconds: int,
     token_rate_unit: str,
-    current_prefix: Optional[str],
-    next_prefix: Optional[str],
-    auto_command: Optional[str],
-    auto_tracker: Optional[AutoRelaunch],
+    state: WatchState,
 ) -> List[str]:
     rows: List[Tuple[str, ...]]
     metrics: List[AggregateMetrics] = []
     if per_agent:
         rows = get_per_agent_rows(run_dir, run_root, repo_root)
-        if auto_tracker:
-            metrics = collect_aggregate_metrics(run_dir, run_root, repo_root)
+        metrics = collect_aggregate_metrics(run_dir, run_root, repo_root)
     else:
         metrics = collect_aggregate_metrics(run_dir, run_root, repo_root)
         rates = rate_tracker.update(metrics) if rate_tracker else {}
@@ -822,18 +912,17 @@ def build_output_lines(
     if not per_agent:
         header = f"{header} | window={format_window(window_seconds)}"
     lines = [header]
-    if current_prefix or next_prefix:
-        lines.append(f"Prefix: {current_prefix or '?'} -> {next_prefix or '?'}")
+    if state.current_prefix or state.next_prefix:
+        lines.append(f"Prefix: {state.current_prefix or '?'} -> {state.next_prefix or '?'}")
     else:
         lines.append("Prefix: ? (pass --prefix to set the current prefix)")
-    if auto_command:
-        lines.append(f"Next command: {auto_command}")
+    if state.auto_command:
+        lines.append(f"Next command: {state.auto_command}")
     else:
         lines.append("Next command: (set --prefix to compute next run)")
-    if auto_tracker:
-        tasks_done, tasks_total = select_progress(metrics)
-        auto_tracker.update(tasks_done, tasks_total)
-        lines.append(auto_tracker.status_line(tasks_done, tasks_total, repo_root))
+    tasks_done, tasks_total = select_progress(metrics)
+    state.auto_tracker.update(tasks_done, tasks_total)
+    lines.append(state.auto_tracker.status_line(tasks_done, tasks_total, repo_root))
     lines.extend(build_table(rows))
     return lines
 
@@ -846,31 +935,39 @@ def run_tui(
     interval: int,
     window_seconds: int,
     token_rate_unit: str,
-    current_prefix: Optional[str],
-    next_prefix: Optional[str],
-    auto_command: Optional[str],
-    auto_tracker: Optional[AutoRelaunch],
+    state: WatchState,
+    follow_latest: bool,
+    prefix_override: Optional[str],
+    batch_mode: bool,
+    logs_roots: List[Path],
 ) -> None:
     import curses
 
     def _loop(screen: "curses._CursesWindow") -> None:
+        nonlocal state
         curses.curs_set(0)
         screen.nodelay(True)
         screen.timeout(max(100, interval * 1000))
-        rate_tracker = RateTracker(window_seconds)
         while True:
+            state = maybe_refresh_state(
+                state,
+                follow_latest,
+                prefix_override,
+                batch_mode,
+                repo_root,
+                logs_roots,
+                window_seconds,
+                watch=True,
+            )
             lines = build_output_lines(
-                run_dir,
+                state.run_dir,
                 run_root,
                 repo_root,
                 per_agent,
-                rate_tracker,
+                state.rate_tracker,
                 window_seconds,
                 token_rate_unit,
-                current_prefix,
-                next_prefix,
-                auto_command,
-                auto_tracker,
+                state,
             )
             height, width = screen.getmaxyx()
             screen.erase()
@@ -912,19 +1009,21 @@ def main() -> None:
     repo_root = script_dir
 
     logs_dir = run_root / "logs"
-    run_dir = Path(args.run_dir) if args.run_dir else latest_run_dir(logs_dir)
+    logs_roots = collect_logs_roots(script_dir, run_root)
+    run_dir = Path(args.run_dir) if args.run_dir else latest_run_dir_from_roots(logs_roots)
     if not run_dir or not run_dir.exists():
         print("No benchmark_run_* directory found.")
         return
 
-    current_prefix = args.prefix or load_prefix(run_dir)
-    next_prefix = increment_prefix(current_prefix)
-    auto_command = build_auto_command(next_prefix)
-    auto_tracker = AutoRelaunch(
-        enabled=args.batch_mode,
-        command=auto_command,
-        repo_root=repo_root,
-        logs_dir=logs_dir,
+    follow_latest = args.run_dir is None
+    state = build_watch_state(
+        run_dir,
+        args.prefix,
+        args.batch_mode,
+        repo_root,
+        logs_dir,
+        args.window_seconds,
+        args.watch,
     )
 
     use_tui = False
@@ -936,38 +1035,45 @@ def main() -> None:
     if use_tui:
         try:
             run_tui(
-                run_dir,
+                state.run_dir,
                 run_root,
                 repo_root,
                 args.per_agent,
                 args.interval,
                 args.window_seconds,
                 args.token_rate_unit,
-                current_prefix,
-                next_prefix,
-                auto_command,
-                auto_tracker,
+                state,
+                follow_latest,
+                args.prefix,
+                args.batch_mode,
+                logs_roots,
             )
             return
         except Exception:
             use_tui = False
 
-    rate_tracker = RateTracker(args.window_seconds) if args.watch else None
     while True:
         sys.stdout.write("\033[H\033[J")
         sys.stdout.flush()
+        state = maybe_refresh_state(
+            state,
+            follow_latest,
+            args.prefix,
+            args.batch_mode,
+            repo_root,
+            logs_roots,
+            args.window_seconds,
+            args.watch,
+        )
         lines = build_output_lines(
-            run_dir,
+            state.run_dir,
             run_root,
             repo_root,
             args.per_agent,
-            rate_tracker,
+            state.rate_tracker,
             args.window_seconds,
             args.token_rate_unit,
-            current_prefix,
-            next_prefix,
-            auto_command,
-            auto_tracker,
+            state,
         )
         print("\n".join(lines))
         if not args.watch:

@@ -410,9 +410,11 @@ def run_hal_eval(
     results_dir = REPO_ROOT / "results" / benchmark / run_id
     results_dir.mkdir(parents=True, exist_ok=True)
 
+    timeout_seconds = int(os.environ.get("HAL_TASK_TIMEOUT_SECONDS", "600"))
+    log(f"Task timeout: {timeout_seconds}s (HAL_TASK_TIMEOUT_SECONDS)", "hal")
     try:
         # Run from REPO_ROOT (like scienceagentbench) - let output stream to console
-        result = subprocess.run(cmd, cwd=REPO_ROOT, env=env, timeout=14400)  # 4 hours
+        result = subprocess.run(cmd, cwd=REPO_ROOT, env=env, timeout=timeout_seconds)
 
         # Find output trace in REPO_ROOT/results
         trace_path = results_dir / f"{run_id}_UPLOAD.json"

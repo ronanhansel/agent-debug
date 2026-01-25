@@ -504,6 +504,8 @@ def run_hal_eval(
     # Use retry wrapper with exponential backoff
     task_id_str = task_id or "unknown"
     model_id_str = str(agent_args.get("model_name", "unknown"))
+    base_timeout = int(os.environ.get("HAL_TASK_TIMEOUT_SECONDS", "600"))
+    log(f"Task timeout: {base_timeout}s (HAL_TASK_TIMEOUT_SECONDS)", "hal")
     success, error_msg, result = run_with_retry(
         cmd=cmd,
         env=env,
@@ -511,7 +513,7 @@ def run_hal_eval(
         task_id=task_id_str,
         model_id=model_id_str,
         max_retries=3,
-        base_timeout=14400,  # 4 hours
+        base_timeout=base_timeout,
     )
 
     if not success:

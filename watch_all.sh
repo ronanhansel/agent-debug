@@ -84,6 +84,10 @@ NC='\033[0m'
 
 RESULTS_DIR="$SCRIPT_DIR/results"
 detect_run_root() {
+    if [ -d "$SCRIPT_DIR/.hal_data" ] && [ -w "$SCRIPT_DIR/.hal_data" ]; then
+        echo "$SCRIPT_DIR/.hal_data"
+        return
+    fi
     if [ -n "${DATA_PATH:-}" ] && [ -d "$DATA_PATH" ] && [ -w "$DATA_PATH" ]; then
         local namespace="${HAL_DATA_NAMESPACE:-$USER}"
         echo "$DATA_PATH/hal_runs/$namespace/$(basename "$SCRIPT_DIR")"
@@ -106,6 +110,10 @@ elif [ -d "$SCRIPT_DIR/.hal_data/results" ]; then
 fi
 
 local_logs_root() {
+    if [ -d "$SCRIPT_DIR/.hal_data/logs" ]; then
+        echo "$SCRIPT_DIR/.hal_data/logs"
+        return
+    fi
     local candidate="$SCRIPT_DIR/logs"
     if [ -L "$candidate" ] && [ ! -e "$candidate" ]; then
         echo "$SCRIPT_DIR/.logs"
@@ -130,18 +138,46 @@ detect_logs_root() {
 
 LOGS_DIR="$(detect_logs_root)"
 
+list_logs_roots() {
+    local roots=()
+    local seen="|"
+    add_root() {
+        local dir="$1"
+        [ -d "$dir" ] || return
+        case "$seen" in
+            *"|$dir|"*) return ;;
+        esac
+        roots+=("$dir")
+        seen="${seen}${dir}|"
+    }
+    add_root "$SCRIPT_DIR/.hal_data/logs"
+    add_root "$LOGS_DIR"
+    add_root "$SCRIPT_DIR/logs"
+    add_root "$SCRIPT_DIR/.logs"
+    printf "%s\n" "${roots[@]}"
+}
+
 get_latest_run_dir() {
-    local runs=()
-    local sorted=()
-    shopt -s nullglob
-    runs=("$LOGS_DIR"/benchmark_run_*)
-    shopt -u nullglob
-    if [ ${#runs[@]} -eq 0 ]; then
+    local roots=()
+    local entries=()
+    mapfile -t roots < <(list_logs_roots)
+    if [ ${#roots[@]} -eq 0 ]; then
         return
     fi
-    IFS=$'\n' sorted=($(printf '%s\n' "${runs[@]}" | sort -r))
-    unset IFS
-    printf "%s\n" "${sorted[0]}"
+    shopt -s nullglob
+    for root in "${roots[@]}"; do
+        for dir in "$root"/benchmark_run_*; do
+            [ -d "$dir" ] || continue
+            local run_id
+            run_id="$(basename "$dir" | sed 's/^benchmark_run_//')"
+            entries+=("${run_id} ${dir}")
+        done
+    done
+    shopt -u nullglob
+    if [ ${#entries[@]} -eq 0 ]; then
+        return
+    fi
+    printf "%s\n" "${entries[@]}" | sort -r | head -n 1 | cut -d' ' -f2-
 }
 
 get_latest_run_id() {
@@ -243,20 +279,30 @@ watch_logs() {
     echo -e "${CYAN}           LOG VIEWER MODE (LATEST RUN ONLY)${NC}"
     echo -e "${CYAN}============================================================${NC}"
     echo -e "${BLUE}Results:${NC} $RESULTS_DIR"
-    echo -e "${BLUE}Logs:${NC} $LOGS_DIR"
+    echo -e "${BLUE}Logs roots:${NC} $(list_logs_roots | paste -sd ', ' -)"
     echo -e "${CYAN}Press Ctrl+C to stop${NC}"
     echo -e "${CYAN}============================================================${NC}"
     echo ""
 
+    local current_run_id=""
     while true; do
         local latest_run_dir
         local run_id
         latest_run_dir="$(get_latest_run_dir)"
         run_id="$(get_latest_run_id)"
 
-        echo -e "${BLUE}Run ID:${NC} ${run_id:-none}"
-        LOG_FILES=$(collect_logs "$run_id" "$latest_run_dir")
+        if [ -z "$run_id" ]; then
+            echo -e "${YELLOW}No benchmark run found yet. Waiting...${NC}"
+            sleep 5
+            continue
+        fi
 
+        if [ "$run_id" != "$current_run_id" ]; then
+            echo -e "${BLUE}Run ID:${NC} ${run_id}"
+            current_run_id="$run_id"
+        fi
+
+        LOG_FILES=$(collect_logs "$run_id" "$latest_run_dir")
         if [ -z "$LOG_FILES" ]; then
             echo -e "${YELLOW}No log files found for the latest run. Waiting...${NC}"
             sleep 5
@@ -266,8 +312,25 @@ watch_logs() {
         LOG_COUNT=$(echo $LOG_FILES | wc -w)
         echo -e "${CYAN}Watching $LOG_COUNT log files...${NC}"
 
-        tail -f $LOG_FILES 2>/dev/null | format_and_colorize
-        sleep 2
+        (
+            tail -f $LOG_FILES 2>/dev/null | format_and_colorize
+        ) &
+        local tail_pid=$!
+
+        while true; do
+            sleep 2
+            if ! kill -0 "$tail_pid" 2>/dev/null; then
+                break
+            fi
+            local new_run_id
+            new_run_id="$(get_latest_run_id)"
+            if [ -n "$new_run_id" ] && [ "$new_run_id" != "$current_run_id" ]; then
+                kill "$tail_pid" 2>/dev/null || true
+                wait "$tail_pid" 2>/dev/null || true
+                current_run_id="$new_run_id"
+                break
+            fi
+        done
     done
 }
 
