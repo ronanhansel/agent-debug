@@ -1021,7 +1021,7 @@ def main() -> None:
     )
     parser.add_argument("--batch-mode", action="store_true", help="Auto-start the next colbench run if progress stalls or completes.")
     parser.add_argument("--prefix", help="Current run prefix (e.g., sun12_). Used to compute the next prefix.")
-    parser.add_argument("--parallel-tasks", type=int, default=50, help="Number of parallel tasks for auto-relaunch (default: 50).")
+    parser.add_argument("--parallel-tasks", type=int, default=40, help="Number of parallel tasks for auto-relaunch (default: 40).")
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parents[1]
