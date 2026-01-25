@@ -27,6 +27,11 @@ BOLD_GREEN='\033[1;32m'
 NC='\033[0m'
 
 RESULTS_DIR="$SCRIPT_DIR/results"
+if [ -n "${HAL_RESULTS_DIR:-}" ] && [ -d "$HAL_RESULTS_DIR" ]; then
+    RESULTS_DIR="$HAL_RESULTS_DIR"
+elif [ -d "$SCRIPT_DIR/.hal_data/results" ]; then
+    RESULTS_DIR="$SCRIPT_DIR/.hal_data/results"
+fi
 
 echo -e "${CYAN}============================================================${NC}"
 echo -e "${CYAN}           VERBOSE LOG WATCHER${NC}"

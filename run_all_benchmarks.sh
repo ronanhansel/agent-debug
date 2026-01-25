@@ -158,8 +158,21 @@ if $PARALLEL_FLAG; then
         echo "Capping --parallel from $PARALLEL_TOTAL to $PARALLEL_CAP for stability."
         PARALLEL_TOTAL="$PARALLEL_CAP"
     fi
-    PARALLEL_MODELS=1
-    PARALLEL_TASKS="$PARALLEL_TOTAL"
+    if ! is_positive_int "$PARALLEL_MODELS"; then
+        echo "Invalid --parallel-models value: '$PARALLEL_MODELS' (expected positive integer)"
+        exit 1
+    fi
+    if [ "$PARALLEL_MODELS" -gt "$PARALLEL_TOTAL" ]; then
+        PARALLEL_MODELS="$PARALLEL_TOTAL"
+    fi
+    PARALLEL_TASKS=$(( (PARALLEL_TOTAL + PARALLEL_MODELS - 1) / PARALLEL_MODELS ))
+    if [ "$PARALLEL_TASKS" -lt 1 ]; then
+        PARALLEL_TASKS=1
+    fi
+    PARALLEL_MODELS=$(( PARALLEL_TOTAL / PARALLEL_TASKS ))
+    if [ "$PARALLEL_MODELS" -lt 1 ]; then
+        PARALLEL_MODELS=1
+    fi
 else
     if ! is_positive_int "$PARALLEL_MODELS"; then
         echo "Invalid --parallel-models value: '$PARALLEL_MODELS' (expected positive integer)"
@@ -168,20 +181,6 @@ else
     if ! is_positive_int "$PARALLEL_TASKS"; then
         echo "Invalid --parallel-tasks value: '$PARALLEL_TASKS' (expected positive integer)"
         exit 1
-    fi
-    if [ "$PARALLEL_MODELS" -gt "$PARALLEL_CAP" ]; then
-        echo "Capping --parallel-models from $PARALLEL_MODELS to $PARALLEL_CAP for stability."
-        PARALLEL_MODELS="$PARALLEL_CAP"
-        PARALLEL_TASKS=1
-    fi
-    total_parallel=$((PARALLEL_MODELS * PARALLEL_TASKS))
-    if [ "$total_parallel" -gt "$PARALLEL_CAP" ]; then
-        adjusted=$((PARALLEL_CAP / PARALLEL_MODELS))
-        if [ "$adjusted" -lt 1 ]; then
-            adjusted=1
-        fi
-        echo "Capping total parallelism to $PARALLEL_CAP containers by setting --parallel-tasks to $adjusted."
-        PARALLEL_TASKS="$adjusted"
     fi
 fi
 

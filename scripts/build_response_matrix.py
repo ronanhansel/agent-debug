@@ -618,6 +618,7 @@ def main() -> None:
     parser.add_argument("--sheet-name", help="Worksheet name")
     parser.add_argument("--oauth", action="store_true", help="Use OAuth for Google Sheets")
     parser.add_argument("--reeval", action="store_true", help="Re-evaluate tasks from raw submissions")
+    parser.add_argument("--progress-only", action="store_true", help="Only update the progress sheet")
     parser.add_argument("--skip-benchmark", action="append", default=[], help="Skip benchmark(s) by name")
     parser.add_argument("--dataset-scicode", help="Path to SciCode dataset json")
     parser.add_argument("--dataset-scienceagentbench", help="Path to ScienceAgentBench dataset json")
@@ -634,7 +635,7 @@ def main() -> None:
     if log_dir and not log_dir.exists():
         log_dir = None
 
-    # Build task columns
+    # Build task columns and totals
     benchmark_task_ids: Dict[str, List[str]] = {}
     benchmark_task_meta: Dict[str, Optional[Dict[str, List[str]]]] = {}
     skip_set = set(args.skip_benchmark)
@@ -657,13 +658,15 @@ def main() -> None:
             benchmark_task_meta[benchmark] = None
 
     columns: List[str] = []
-    for benchmark in BENCHMARKS:
-        for task_id in benchmark_task_ids.get(benchmark, []):
-            columns.append(f"{benchmark}.{task_id}")
+    if not args.progress_only:
+        for benchmark in BENCHMARKS:
+            for task_id in benchmark_task_ids.get(benchmark, []):
+                columns.append(f"{benchmark}.{task_id}")
 
-    # Build rows
+    # Build rows + progress rows
     rows: List[List[str]] = []
     row_labels: List[str] = []
+    progress_rows: List[List[str]] = []
 
     for benchmark in BENCHMARKS:
         if benchmark in skip_set:
@@ -686,83 +689,94 @@ def main() -> None:
             raw_path = run_dir / f"{run_id}_RAW_SUBMISSIONS.jsonl"
             task_meta = benchmark_task_meta.get(benchmark)
             ok_tasks = load_raw_ok_tasks(raw_path, benchmark, task_meta)
+            total_tasks = len(benchmark_task_ids.get(benchmark, []))
+            progress_rows.append(
+                [
+                    config_key,
+                    benchmark,
+                    f"{len(ok_tasks)}/{total_tasks}",
+                ]
+            )
 
-            success_map: Dict[str, int] = {}
-            if args.reeval:
-                dataset_path = resolve_dataset_path(benchmark, text, run_root, args)
-                if not dataset_path or not dataset_path.exists():
-                    print(f"Missing dataset path for {benchmark}; cannot re-evaluate")
-                    sys.exit(1)
-                if benchmark == "scicode":
-                    success_map = reeval_scicode(dataset_path, ok_tasks)
-                elif benchmark == "corebench":
-                    success_map = reeval_corebench(dataset_path, ok_tasks)
-                elif benchmark == "colbench":
-                    success_map = reeval_colbench(dataset_path, ok_tasks)
-                elif benchmark == "scienceagentbench":
-                    success_map = reeval_scienceagentbench(dataset_path, ok_tasks)
-            else:
-                success_set = None
-                colbench_scores = None
-                sab_scores: Dict[str, float] = {}
+            if not args.progress_only:
+                success_map: Dict[str, int] = {}
+                if args.reeval:
+                    dataset_path = resolve_dataset_path(benchmark, text, run_root, args)
+                    if not dataset_path or not dataset_path.exists():
+                        print(f"Missing dataset path for {benchmark}; cannot re-evaluate")
+                        sys.exit(1)
+                    if benchmark == "scicode":
+                        success_map = reeval_scicode(dataset_path, ok_tasks)
+                    elif benchmark == "corebench":
+                        success_map = reeval_corebench(dataset_path, ok_tasks)
+                    elif benchmark == "colbench":
+                        success_map = reeval_colbench(dataset_path, ok_tasks)
+                    elif benchmark == "scienceagentbench":
+                        success_map = reeval_scienceagentbench(dataset_path, ok_tasks)
+                else:
+                    success_set = None
+                    colbench_scores = None
+                    sab_scores: Dict[str, float] = {}
 
-                if benchmark == "scicode":
-                    success_set = load_scicode_success(run_dir, run_id)
-                elif benchmark == "corebench":
-                    success_set = load_corebench_success(run_dir, run_id)
-                elif benchmark == "colbench":
-                    colbench_scores = load_colbench_correctness(run_dir, run_id)
-                elif benchmark == "scienceagentbench":
-                    sab_scores = load_scienceagentbench_eval(run_dir, run_id, benchmark_task_ids[benchmark])
+                    if benchmark == "scicode":
+                        success_set = load_scicode_success(run_dir, run_id)
+                    elif benchmark == "corebench":
+                        success_set = load_corebench_success(run_dir, run_id)
+                    elif benchmark == "colbench":
+                        colbench_scores = load_colbench_correctness(run_dir, run_id)
+                    elif benchmark == "scienceagentbench":
+                        sab_scores = load_scienceagentbench_eval(run_dir, run_id, benchmark_task_ids[benchmark])
 
-            row: List[str] = []
-            for b in BENCHMARKS:
-                if b in skip_set:
-                    continue
-                for task_id in benchmark_task_ids.get(b, []):
-                    if b != benchmark:
-                        row.append("")
+                row = []
+                for b in BENCHMARKS:
+                    if b in skip_set:
                         continue
-                    if task_id not in ok_tasks:
-                        row.append("")
-                        continue
-                    if args.reeval:
-                        if task_id in success_map:
-                            row.append("1" if success_map[task_id] == 1 else "0")
-                        else:
+                    for task_id in benchmark_task_ids.get(b, []):
+                        if b != benchmark:
                             row.append("")
-                    else:
-                        if benchmark in ("scicode", "corebench"):
-                            if success_set is None:
-                                row.append("")
+                            continue
+                        if task_id not in ok_tasks:
+                            row.append("")
+                            continue
+                        if args.reeval:
+                            if task_id in success_map:
+                                row.append("1" if success_map[task_id] == 1 else "0")
                             else:
-                                row.append("1" if task_id in success_set else "0")
-                        elif benchmark == "colbench":
-                            if colbench_scores is None:
                                 row.append("")
+                        else:
+                            if benchmark in ("scicode", "corebench"):
+                                if success_set is None:
+                                    row.append("")
+                                else:
+                                    row.append("1" if task_id in success_set else "0")
+                            elif benchmark == "colbench":
+                                if colbench_scores is None:
+                                    row.append("")
+                                else:
+                                    idx = int(task_id)
+                                    if idx < len(colbench_scores):
+                                        row.append("1" if colbench_scores[idx] >= 0.999 else "0")
+                                    else:
+                                        row.append("")
                             else:
-                                idx = int(task_id)
-                                if idx < len(colbench_scores):
-                                    row.append("1" if colbench_scores[idx] >= 0.999 else "0")
+                                if task_id in sab_scores:
+                                    row.append("1" if sab_scores[task_id] >= 1.0 else "0")
                                 else:
                                     row.append("")
-                        else:
-                            if task_id in sab_scores:
-                                row.append("1" if sab_scores[task_id] >= 1.0 else "0")
-                            else:
-                                row.append("")
 
-            rows.append(row)
-            row_labels.append(row_label)
+                rows.append(row)
+                row_labels.append(row_label)
 
-    header = ["agent"] + columns
-    output_path = Path(args.output) if args.output else repo_root / "output" / f"response_matrix_{args.prefix}.csv"
-    rows_with_labels = [[row_labels[i]] + rows[i] for i in range(len(rows))]
-    output_path = write_csv(output_path, header, rows_with_labels)
-    print(f"Wrote CSV: {output_path}")
+    if not args.progress_only:
+        header = ["agent"] + columns
+        output_path = Path(args.output) if args.output else repo_root / "output" / f"response_matrix_{args.prefix}.csv"
+        rows_with_labels = [[row_labels[i]] + rows[i] for i in range(len(rows))]
+        output_path = write_csv(output_path, header, rows_with_labels)
+        print(f"Wrote CSV: {output_path}")
 
-    if args.sheet_name is None:
-        args.sheet_name = f"resmat_{args.prefix.rstrip('_')}"
+    sheet_prefix = args.prefix.rstrip("_")
+    resmat_sheet = args.sheet_name or f"resmat_{sheet_prefix}"
+    progress_sheet = f"progress_{sheet_prefix}"
 
     if args.upload:
         try:
@@ -787,17 +801,31 @@ def main() -> None:
             sys.exit(1)
         try:
             sheet = gc.open_by_key(SPREADSHEET_ID)
+            if not args.progress_only:
+                try:
+                    worksheet = sheet.worksheet(resmat_sheet)
+                except Exception:
+                    worksheet = sheet.add_worksheet(
+                        title=resmat_sheet,
+                        rows=max(100, len(rows) + 5),
+                        cols=max(10, len(header) + 5),
+                    )
+                worksheet.clear()
+                worksheet.update([header] + rows_with_labels, "A1")
+                print(f"Uploaded to sheet: {resmat_sheet}")
+
+            progress_header = ["model", "benchmark", "finished/total"]
             try:
-                worksheet = sheet.worksheet(args.sheet_name)
+                worksheet = sheet.worksheet(progress_sheet)
             except Exception:
                 worksheet = sheet.add_worksheet(
-                    title=args.sheet_name,
-                    rows=max(100, len(rows) + 5),
-                    cols=max(10, len(header) + 5),
+                    title=progress_sheet,
+                    rows=max(100, len(progress_rows) + 5),
+                    cols=max(10, len(progress_header) + 5),
                 )
             worksheet.clear()
-            worksheet.update([header] + rows_with_labels, "A1")
-            print(f"Uploaded to sheet: {args.sheet_name}")
+            worksheet.update([progress_header] + progress_rows, "A1")
+            print(f"Uploaded to sheet: {progress_sheet}")
         except Exception as exc:
             print(f"Upload failed: {exc}")
             sys.exit(1)

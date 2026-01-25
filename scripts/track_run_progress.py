@@ -15,6 +15,7 @@ import os
 import re
 import sys
 import time
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +32,8 @@ HAL_BENCHMARK_MAP = {
 
 TIMESTAMP_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3})")
 TOKEN_RE = re.compile(r"Input tokens:\s*([\d,]+).*Output tokens:\s*([\d,]+)")
+PREFIX_RE = re.compile(r"^(.*?)(\d+)([^0-9]*)$")
+RUN_DIR_RE = re.compile(r"benchmark_run_(\d{8}_\d{6})$")
 
 
 @dataclass
@@ -112,8 +115,15 @@ def detect_run_root(script_dir: Path) -> Path:
 
 
 def latest_run_dir(logs_dir: Path) -> Optional[Path]:
-    runs = sorted(logs_dir.glob("benchmark_run_*"), key=lambda p: p.stat().st_mtime, reverse=True)
-    return runs[0] if runs else None
+    runs = list(logs_dir.glob("benchmark_run_*"))
+    if not runs:
+        return None
+    def run_key(path: Path) -> str:
+        match = RUN_DIR_RE.fullmatch(path.name)
+        if match:
+            return match.group(1)
+        return path.name
+    return max(runs, key=run_key)
 
 
 def read_text(path: Path) -> str:
@@ -139,6 +149,19 @@ def parse_run_ids(text: str) -> Iterable[str]:
     return sorted(set(re.findall(r"Run ID: (\S+)", text)))
 
 
+def filter_latest_run_ids(run_ids: Iterable[str]) -> List[str]:
+    run_ids = list(run_ids)
+    if not run_ids:
+        return []
+    stamp_re = re.compile(r"_(\d{8}_\d{6})$")
+    stamps = [(rid, stamp_re.search(rid)) for rid in run_ids]
+    stamped = [(rid, match.group(1)) for rid, match in stamps if match]
+    if not stamped:
+        return run_ids
+    latest_stamp = max(stamp for _, stamp in stamped)
+    return [rid for rid, stamp in stamped if stamp == latest_stamp]
+
+
 def load_prefix(run_dir: Path) -> Optional[str]:
     cfg = run_dir / "config.json"
     if not cfg.exists():
@@ -157,12 +180,23 @@ def derive_config_key(run_id: str, prefix: Optional[str]) -> str:
 
 def resolve_run_dir(run_root: Path, repo_root: Path, benchmark: str, run_id: str) -> Optional[Path]:
     hal_name = HAL_BENCHMARK_MAP.get(benchmark, benchmark)
+    env_results = os.environ.get("HAL_RESULTS_DIR")
+    extra_roots = []
+    if env_results:
+        extra_roots.append(Path(env_results))
+    else:
+        local_hal = repo_root / ".hal_data" / "results"
+        if local_hal.exists():
+            extra_roots.append(local_hal)
     candidates = [
         run_root / "results" / hal_name / run_id,
         run_root / "results" / benchmark / run_id,
         repo_root / "results" / hal_name / run_id,
         repo_root / "results" / benchmark / run_id,
     ]
+    for root in extra_roots:
+        candidates.append(root / hal_name / run_id)
+        candidates.append(root / benchmark / run_id)
     for candidate in candidates:
         if candidate.exists():
             return candidate
@@ -317,6 +351,53 @@ def parse_verbose_metrics(path: Path) -> VerboseMetrics:
     return VerboseMetrics(start, end, total_tokens, token_start, token_end)
 
 
+def parse_local_trace_tokens(run_dir: Path) -> int:
+    total = 0
+    try:
+        for entry in run_dir.iterdir():
+            if not entry.is_dir():
+                continue
+            trace_path = entry / "local_trace.jsonl"
+            if not trace_path.exists():
+                continue
+            try:
+                with trace_path.open("r", encoding="utf-8", errors="ignore") as handle:
+                    for line in handle:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            payload = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if not isinstance(payload, dict):
+                            continue
+                        output = payload.get("output")
+                        if not isinstance(output, dict):
+                            continue
+                        usage = output.get("usage")
+                        if not isinstance(usage, dict):
+                            continue
+                        total_tokens = usage.get("total_tokens")
+                        if isinstance(total_tokens, (int, float)):
+                            total += int(total_tokens)
+                            continue
+                        prompt_tokens = usage.get("prompt_tokens")
+                        completion_tokens = usage.get("completion_tokens")
+                        input_tokens = usage.get("input_tokens")
+                        output_tokens = usage.get("output_tokens")
+                        if isinstance(prompt_tokens, (int, float)) or isinstance(completion_tokens, (int, float)):
+                            total += int(prompt_tokens or 0) + int(completion_tokens or 0)
+                            continue
+                        if isinstance(input_tokens, (int, float)) or isinstance(output_tokens, (int, float)):
+                            total += int(input_tokens or 0) + int(output_tokens or 0)
+            except Exception:
+                continue
+    except Exception:
+        return 0
+    return total
+
+
 def format_rate(value: Optional[float]) -> str:
     if value is None:
         return "?"
@@ -331,6 +412,174 @@ def format_window(window_seconds: int) -> str:
     if window_seconds % 60 == 0:
         return f"{window_seconds // 60}m"
     return f"{window_seconds}s"
+
+
+def format_duration(seconds: Optional[float]) -> str:
+    if seconds is None:
+        return "?"
+    seconds = max(0.0, seconds)
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    if minutes >= 60:
+        hours = minutes // 60
+        mins = minutes % 60
+        return f"{hours}h{mins:02d}m"
+    if minutes > 0:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
+
+
+def format_dt(value: Optional[float]) -> str:
+    if value is None:
+        return "?"
+    return datetime.fromtimestamp(value).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def display_path(path: Optional[Path], repo_root: Path) -> str:
+    if path is None:
+        return "?"
+    try:
+        return str(path.relative_to(repo_root))
+    except Exception:
+        return str(path)
+
+
+def increment_prefix(prefix: Optional[str]) -> Optional[str]:
+    if not prefix:
+        return None
+    match = PREFIX_RE.match(prefix)
+    if not match:
+        return f"{prefix}2"
+    base, digits, suffix = match.groups()
+    width = len(digits)
+    next_num = str(int(digits) + 1).zfill(width)
+    return f"{base}{next_num}{suffix}"
+
+
+def build_auto_command(next_prefix: Optional[str]) -> Optional[str]:
+    if not next_prefix:
+        return None
+    return (
+        "./run_all_benchmarks.sh --benchmarks colbench "
+        f"--prefix {next_prefix} --parallel-models 10 --parallel-tasks 45 --trace-mode local"
+    )
+
+
+class AutoRelaunch:
+    def __init__(
+        self,
+        enabled: bool,
+        command: Optional[str],
+        repo_root: Path,
+        logs_dir: Path,
+        stall_seconds: int = 7 * 60,
+        delay_seconds: int = 5 * 60,
+        complete_delay_seconds: int = 5 * 60,
+    ) -> None:
+        self.enabled = enabled
+        self.command = command
+        self.repo_root = repo_root
+        self.logs_dir = logs_dir
+        self.stall_seconds = stall_seconds
+        self.delay_seconds = delay_seconds
+        self.complete_delay_seconds = complete_delay_seconds
+        self.last_done: Optional[int] = None
+        self.last_change: Optional[float] = None
+        self.stall_pending_since: Optional[float] = None
+        self.complete_pending_since: Optional[float] = None
+        self.triggered_at: Optional[float] = None
+        self.trigger_reason: Optional[str] = None
+        self.trigger_log: Optional[Path] = None
+        self.trigger_pid: Optional[int] = None
+
+    def update(self, tasks_done: Optional[int], tasks_total: Optional[int]) -> None:
+        now = time.time()
+        if not self.enabled or self.triggered_at is not None:
+            return
+
+        if tasks_done is None:
+            self.last_done = None
+            self.last_change = None
+            self.stall_pending_since = None
+            self.complete_pending_since = None
+            return
+
+        if self.last_done is None or tasks_done != self.last_done:
+            self.last_done = tasks_done
+            self.last_change = now
+            self.stall_pending_since = None
+            self.complete_pending_since = None
+        elif self.last_change is None:
+            self.last_change = now
+
+        if self.last_change and (now - self.last_change) >= self.stall_seconds:
+            if self.stall_pending_since is None:
+                self.stall_pending_since = now
+        else:
+            self.stall_pending_since = None
+
+        if tasks_total is not None and tasks_done >= tasks_total:
+            if self.complete_pending_since is None:
+                self.complete_pending_since = now
+        else:
+            self.complete_pending_since = None
+
+        if self.stall_pending_since and (now - self.stall_pending_since) >= self.delay_seconds:
+            self._trigger("stall")
+        elif self.complete_pending_since and (now - self.complete_pending_since) >= self.complete_delay_seconds:
+            self._trigger("complete")
+
+    def status_line(self, tasks_done: Optional[int], tasks_total: Optional[int], repo_root: Path) -> str:
+        if not self.enabled:
+            return "Auto-relaunch: disabled (use --batch-mode to enable)"
+        if not self.command:
+            return "Auto-relaunch: enabled (set --prefix to compute next command)"
+        if self.triggered_at is not None:
+            log_path = display_path(self.trigger_log, repo_root)
+            return (
+                "Auto-relaunch: triggered "
+                f"({self.trigger_reason}) pid={self.trigger_pid} at {format_dt(self.triggered_at)} "
+                f"log={log_path}"
+            )
+
+        now = time.time()
+        idle = None if self.last_change is None else now - self.last_change
+        if self.complete_pending_since is not None:
+            wait_left = self.complete_delay_seconds - (now - self.complete_pending_since)
+            total_display = tasks_total if tasks_total is not None else "?"
+            return (
+                "Auto-relaunch: pending complete "
+                f"({tasks_done}/{total_display}), launching in {format_duration(wait_left)}"
+            )
+        if self.stall_pending_since is not None:
+            wait_left = self.delay_seconds - (now - self.stall_pending_since)
+            return (
+                "Auto-relaunch: pending stall "
+                f"(idle {format_duration(idle)}), launching in {format_duration(wait_left)}"
+            )
+        if idle is None:
+            return "Auto-relaunch: waiting for progress signal"
+        return f"Auto-relaunch: enabled (idle {format_duration(idle)}; stall=7m+5m, complete=5m)"
+
+    def _trigger(self, reason: str) -> None:
+        if not self.command:
+            return
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        log_path = self.logs_dir / f"auto_relaunch_{timestamp}.log"
+        with log_path.open("a", encoding="utf-8") as log_file:
+            proc = subprocess.Popen(
+                ["/bin/bash", "-lc", self.command],
+                cwd=self.repo_root,
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=log_file,
+                start_new_session=True,
+            )
+        self.triggered_at = time.time()
+        self.trigger_reason = reason
+        self.trigger_log = log_path
+        self.trigger_pid = proc.pid
 
 
 
@@ -359,6 +608,24 @@ def choose_tasks_done(
     return None
 
 
+def select_progress(metrics: List[AggregateMetrics]) -> Tuple[Optional[int], Optional[int]]:
+    for item in metrics:
+        if item.benchmark == "colbench":
+            return item.tasks_done, item.tasks_total
+    total_done = 0
+    total_expected = 0
+    done_known = False
+    total_known = False
+    for item in metrics:
+        if item.tasks_done is not None:
+            total_done += item.tasks_done
+            done_known = True
+        if item.tasks_total is not None:
+            total_expected += item.tasks_total
+            total_known = True
+    return (total_done if done_known else None, total_expected if total_known else None)
+
+
 def get_per_agent_rows(run_dir: Path, run_root: Path, repo_root: Path) -> List[Tuple[str, ...]]:
     prefix = load_prefix(run_dir)
     header = (
@@ -380,7 +647,7 @@ def get_per_agent_rows(run_dir: Path, run_root: Path, repo_root: Path) -> List[T
         total_tasks = parse_total_tasks(text)
         run_root_override = parse_run_root(text)
         run_root_for_bench = Path(run_root_override) if run_root_override else run_root
-        run_ids = parse_run_ids(text)
+        run_ids = filter_latest_run_ids(parse_run_ids(text))
         for run_id in run_ids:
             config_key = derive_config_key(run_id, prefix)
             run_path = resolve_run_dir(run_root_for_bench, repo_root, benchmark, run_id)
@@ -433,7 +700,7 @@ def collect_aggregate_metrics(run_dir: Path, run_root: Path, repo_root: Path) ->
         total_tasks = parse_total_tasks(text)
         run_root_override = parse_run_root(text)
         run_root_for_bench = Path(run_root_override) if run_root_override else run_root
-        run_ids = list(parse_run_ids(text))
+        run_ids = filter_latest_run_ids(parse_run_ids(text))
         if not run_ids:
             continue
 
@@ -470,7 +737,10 @@ def collect_aggregate_metrics(run_dir: Path, run_root: Path, repo_root: Path) ->
 
             verbose_log = run_path / f"{run_id}_verbose.log"
             metrics_item = parse_verbose_metrics(verbose_log)
-            tokens_total += metrics_item.tokens
+            tokens = metrics_item.tokens
+            if tokens == 0:
+                tokens = parse_local_trace_tokens(run_path)
+            tokens_total += tokens
 
         metrics.append(
             AggregateMetrics(
@@ -533,10 +803,17 @@ def build_output_lines(
     rate_tracker: Optional[RateTracker],
     window_seconds: int,
     token_rate_unit: str,
+    current_prefix: Optional[str],
+    next_prefix: Optional[str],
+    auto_command: Optional[str],
+    auto_tracker: Optional[AutoRelaunch],
 ) -> List[str]:
     rows: List[Tuple[str, ...]]
+    metrics: List[AggregateMetrics] = []
     if per_agent:
         rows = get_per_agent_rows(run_dir, run_root, repo_root)
+        if auto_tracker:
+            metrics = collect_aggregate_metrics(run_dir, run_root, repo_root)
     else:
         metrics = collect_aggregate_metrics(run_dir, run_root, repo_root)
         rates = rate_tracker.update(metrics) if rate_tracker else {}
@@ -545,6 +822,18 @@ def build_output_lines(
     if not per_agent:
         header = f"{header} | window={format_window(window_seconds)}"
     lines = [header]
+    if current_prefix or next_prefix:
+        lines.append(f"Prefix: {current_prefix or '?'} -> {next_prefix or '?'}")
+    else:
+        lines.append("Prefix: ? (pass --prefix to set the current prefix)")
+    if auto_command:
+        lines.append(f"Next command: {auto_command}")
+    else:
+        lines.append("Next command: (set --prefix to compute next run)")
+    if auto_tracker:
+        tasks_done, tasks_total = select_progress(metrics)
+        auto_tracker.update(tasks_done, tasks_total)
+        lines.append(auto_tracker.status_line(tasks_done, tasks_total, repo_root))
     lines.extend(build_table(rows))
     return lines
 
@@ -557,6 +846,10 @@ def run_tui(
     interval: int,
     window_seconds: int,
     token_rate_unit: str,
+    current_prefix: Optional[str],
+    next_prefix: Optional[str],
+    auto_command: Optional[str],
+    auto_tracker: Optional[AutoRelaunch],
 ) -> None:
     import curses
 
@@ -574,6 +867,10 @@ def run_tui(
                 rate_tracker,
                 window_seconds,
                 token_rate_unit,
+                current_prefix,
+                next_prefix,
+                auto_command,
+                auto_tracker,
             )
             height, width = screen.getmaxyx()
             screen.erase()
@@ -606,6 +903,8 @@ def main() -> None:
         default="min",
         help="Display token rate per minute or per second (default: min).",
     )
+    parser.add_argument("--batch-mode", action="store_true", help="Auto-start the next colbench run if progress stalls or completes.")
+    parser.add_argument("--prefix", help="Current run prefix (e.g., sun12_). Used to compute the next prefix.")
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parents[1]
@@ -617,6 +916,16 @@ def main() -> None:
     if not run_dir or not run_dir.exists():
         print("No benchmark_run_* directory found.")
         return
+
+    current_prefix = args.prefix or load_prefix(run_dir)
+    next_prefix = increment_prefix(current_prefix)
+    auto_command = build_auto_command(next_prefix)
+    auto_tracker = AutoRelaunch(
+        enabled=args.batch_mode,
+        command=auto_command,
+        repo_root=repo_root,
+        logs_dir=logs_dir,
+    )
 
     use_tui = False
     if args.watch and sys.stdout.isatty() and not args.no_tui:
@@ -634,6 +943,10 @@ def main() -> None:
                 args.interval,
                 args.window_seconds,
                 args.token_rate_unit,
+                current_prefix,
+                next_prefix,
+                auto_command,
+                auto_tracker,
             )
             return
         except Exception:
@@ -651,6 +964,10 @@ def main() -> None:
             rate_tracker,
             args.window_seconds,
             args.token_rate_unit,
+            current_prefix,
+            next_prefix,
+            auto_command,
+            auto_tracker,
         )
         print("\n".join(lines))
         if not args.watch:
