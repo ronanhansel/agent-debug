@@ -679,8 +679,35 @@ def main() -> None:
         run_ids = [rid for rid in parse_run_ids(text) if args.prefix in rid]
         if not run_ids:
             run_ids = find_run_ids_from_results(run_root, repo_root, benchmark, args.prefix)
-        for run_id in run_ids:
-            config_key = derive_config_key(run_id, benchmark, args.prefix)
+
+        # Deduplicate runs: keep the one with the most completed tasks (least NaNs)
+        best_runs: Dict[str, Tuple[str, int]] = {}
+        task_meta = benchmark_task_meta.get(benchmark)
+
+        for rid in run_ids:
+            c_key = derive_config_key(rid, benchmark, args.prefix)
+
+            # Check how many tasks are completed
+            r_dir = resolve_run_dir(run_root, repo_root, benchmark, rid)
+            count = 0
+            if r_dir:
+                raw_path = r_dir / f"{rid}_RAW_SUBMISSIONS.jsonl"
+                if raw_path.exists():
+                    ok = load_raw_ok_tasks(raw_path, benchmark, task_meta)
+                    count = len(ok)
+
+            current_best = best_runs.get(c_key)
+            if current_best is None:
+                best_runs[c_key] = (rid, count)
+            else:
+                best_id, best_count = current_best
+                # Prefer more completed tasks; break ties with newer run_id
+                if count > best_count or (count == best_count and rid > best_id):
+                    best_runs[c_key] = (rid, count)
+
+        latest_runs = {k: v[0] for k, v in best_runs.items()}
+
+        for config_key, run_id in sorted(latest_runs.items()):
             row_label = f"{benchmark}.{config_key}"
 
             run_dir = resolve_run_dir(run_root, repo_root, benchmark, run_id)
