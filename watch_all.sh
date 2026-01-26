@@ -122,6 +122,8 @@ list_results_roots() {
     add_root "$RUN_ROOT/results"
     add_root "$SCRIPT_DIR/.results"
     add_root "$SCRIPT_DIR/results"
+    add_root "$SCRIPT_DIR/.result"
+    add_root "$SCRIPT_DIR/result"
     printf "%s\n" "${roots[@]}"
 }
 
@@ -133,16 +135,16 @@ local_logs_root() {
         echo "$SCRIPT_DIR/.hal_data/logs"
         return
     fi
-    local candidate="$SCRIPT_DIR/logs"
-    if [ -L "$candidate" ] && [ ! -e "$candidate" ]; then
-        echo "$SCRIPT_DIR/.logs"
-        return
-    fi
-    if [ -d "$SCRIPT_DIR/.logs" ]; then
-        echo "$SCRIPT_DIR/.logs"
-        return
-    fi
-    echo "$candidate"
+    for candidate in "$SCRIPT_DIR/logs" "$SCRIPT_DIR/.logs" "$SCRIPT_DIR/log" "$SCRIPT_DIR/.log"; do
+        if [ -L "$candidate" ] && [ ! -e "$candidate" ]; then
+            continue
+        fi
+        if [ -d "$candidate" ]; then
+            echo "$candidate"
+            return
+        fi
+    done
+    echo "$SCRIPT_DIR/logs"
 }
 
 detect_logs_root() {
@@ -177,6 +179,8 @@ list_logs_roots() {
     add_root "$LOGS_DIR"
     add_root "$SCRIPT_DIR/logs"
     add_root "$SCRIPT_DIR/.logs"
+    add_root "$SCRIPT_DIR/log"
+    add_root "$SCRIPT_DIR/.log"
     printf "%s\n" "${roots[@]}"
 }
 
@@ -321,7 +325,7 @@ collect_logs() {
         for r_root in "${r_roots[@]}"; do
             while IFS= read -r log_file; do
                  all_logs="$all_logs $log_file"
-            done < <(find "$r_root" -maxdepth 3 -type f -name "*${PREFIX}*_verbose.log" 2>/dev/null)
+            done < <(find -L "$r_root" -maxdepth 5 -type f -name "*${PREFIX}*_verbose.log" 2>/dev/null)
         done
 
     else
@@ -338,7 +342,7 @@ collect_logs() {
             for r_root in "${r_roots[@]}"; do
                 while IFS= read -r log_file; do
                      all_logs="$all_logs $log_file"
-                done < <(find "$r_root" -maxdepth 3 -type f -name "*${run_id}*_verbose.log" 2>/dev/null)
+                done < <(find -L "$r_root" -maxdepth 5 -type f -name "*${run_id}*_verbose.log" 2>/dev/null)
             done
         fi
     fi
@@ -350,8 +354,8 @@ watch_logs() {
     echo -e "${CYAN}============================================================${NC}"
     echo -e "${CYAN}           LOG VIEWER MODE (LATEST RUN ONLY)${NC}"
     echo -e "${CYAN}============================================================${NC}"
-    echo -e "${BLUE}Results roots:${NC} $(list_results_roots | paste -sd ', ' -)"
-    echo -e "${BLUE}Logs roots:${NC} $(list_logs_roots | paste -sd ', ' -)"
+    echo -e "${BLUE}Results roots:${NC} $(list_results_roots | paste -sd ',' -)"
+    echo -e "${BLUE}Logs roots:${NC} $(list_logs_roots | paste -sd ',' -)"
     echo -e "${CYAN}Press Ctrl+C to stop${NC}"
     echo -e "${CYAN}============================================================${NC}"
     echo ""
@@ -363,20 +367,26 @@ watch_logs() {
         latest_run_dir="$(get_latest_run_dir)"
         run_id="$(get_latest_run_id)"
 
-        if [ -z "$run_id" ]; then
+        if [ -z "$run_id" ] && [ -z "$PREFIX" ]; then
             echo -e "${YELLOW}No benchmark run found yet. Waiting...${NC}"
             sleep 5
             continue
         fi
 
-        if [ "$run_id" != "$current_run_id" ]; then
+        if [ -n "$run_id" ] && [ "$run_id" != "$current_run_id" ]; then
             echo -e "${BLUE}Run ID:${NC} ${run_id}"
             current_run_id="$run_id"
+        elif [ -z "$run_id" ] && [ -n "$PREFIX" ]; then
+            # If we have a prefix but no run_id yet, use prefix for display
+            if [ "$current_run_id" != "$PREFIX" ]; then
+                echo -e "${BLUE}Prefix:${NC} ${PREFIX}"
+                current_run_id="$PREFIX"
+            fi
         fi
 
         LOG_FILES=$(collect_logs "$run_id" "$latest_run_dir")
         if [ -z "$LOG_FILES" ]; then
-            echo -e "${YELLOW}No log files found for the latest run. Waiting...${NC}"
+            echo -e "${YELLOW}No log files found for current search. Waiting...${NC}"
             sleep 5
             continue
         fi
@@ -385,7 +395,7 @@ watch_logs() {
         echo -e "${CYAN}Watching $LOG_COUNT log files...${NC}"
 
         (
-            tail -f $LOG_FILES 2>/dev/null | format_and_colorize
+            tail -f $LOG_FILES | format_and_colorize
         ) &
         local tail_pid=$!
 
