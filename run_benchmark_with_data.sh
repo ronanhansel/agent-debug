@@ -13,6 +13,10 @@ if [ -z "${HAL_DOTENV_PATH:-}" ] && [ -f "$HAL_HARNESS/.env" ]; then
     export HAL_DOTENV_PATH="$HAL_HARNESS/.env"
 fi
 
+# Skip MSAL preflight by default to handle high-parallelism (e.g. 400+ processes)
+# without bottlenecking on initial token verification.
+export HAL_SKIP_MSAL_PREFLIGHT="${HAL_SKIP_MSAL_PREFLIGHT:-true}"
+
 # Optional rootless Docker mode (set ROOTLESS=TRUE)
 is_truthy() {
     case "$(echo "${1:-}" | tr '[:upper:]' '[:lower:]')" in

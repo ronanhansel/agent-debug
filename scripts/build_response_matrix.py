@@ -181,19 +181,20 @@ def resolve_dataset_path(
         if path and path.exists():
             return path
 
-    tmp_dir = run_root / "tmp"
-    if benchmark == "scicode":
-        path = find_latest_dataset(tmp_dir, "scicode_modified_*.json")
-    elif benchmark == "scienceagentbench":
-        path = find_latest_dataset(tmp_dir, "scienceagentbench_modified_*.json")
-    elif benchmark == "corebench":
-        path = find_latest_dataset(tmp_dir, "corebench_modified_*.json")
-    elif benchmark == "colbench":
-        path = find_latest_dataset(tmp_dir, "colbench_modified_*.jsonl")
-    else:
-        path = None
-    if path and path.exists():
-        return path
+    tmp_dirs = [run_root / "tmp", run_root / ".hal_data" / "tmp"]
+    path = None
+    for tmp_dir in tmp_dirs:
+        if benchmark == "scicode":
+            path = find_latest_dataset(tmp_dir, "scicode_modified_*.json")
+        elif benchmark == "scienceagentbench":
+            path = find_latest_dataset(tmp_dir, "scienceagentbench_modified_*.json")
+        elif benchmark == "corebench":
+            path = find_latest_dataset(tmp_dir, "corebench_modified_*.json")
+        elif benchmark == "colbench":
+            path = find_latest_dataset(tmp_dir, "colbench_modified_*.jsonl")
+        
+        if path and path.exists():
+            return path
 
     if benchmark == "corebench":
         default_path = REPO_ROOT / "hal-harness" / "hal" / "benchmarks" / "corebench" / "core_test.json"
