@@ -102,12 +102,31 @@ detect_run_root() {
 }
 
 RUN_ROOT="$(detect_run_root)"
-RESULTS_DIR="$RUN_ROOT/results"
-if [ -n "${HAL_RESULTS_DIR:-}" ] && [ -d "$HAL_RESULTS_DIR" ]; then
-    RESULTS_DIR="$HAL_RESULTS_DIR"
-elif [ -d "$SCRIPT_DIR/.hal_data/results" ]; then
-    RESULTS_DIR="$SCRIPT_DIR/.hal_data/results"
-fi
+
+list_results_roots() {
+    local roots=()
+    local seen="|"
+    add_root() {
+        local dir="$1"
+        [ -d "$dir" ] || return
+        case "$seen" in
+            *"|$dir|"*) return ;;
+        esac
+        roots+=("$dir")
+        seen="${seen}${dir}|"
+    }
+    if [ -n "${HAL_RESULTS_DIR:-}" ]; then
+        add_root "$HAL_RESULTS_DIR"
+    fi
+    add_root "$SCRIPT_DIR/.hal_data/results"
+    add_root "$RUN_ROOT/results"
+    add_root "$SCRIPT_DIR/.results"
+    add_root "$SCRIPT_DIR/results"
+    printf "%s\n" "${roots[@]}"
+}
+
+# For backward compatibility and single-path use cases
+RESULTS_DIR="$(list_results_roots | head -n 1)"
 
 local_logs_root() {
     if [ -d "$SCRIPT_DIR/.hal_data/logs" ]; then
@@ -116,6 +135,10 @@ local_logs_root() {
     fi
     local candidate="$SCRIPT_DIR/logs"
     if [ -L "$candidate" ] && [ ! -e "$candidate" ]; then
+        echo "$SCRIPT_DIR/.logs"
+        return
+    fi
+    if [ -d "$SCRIPT_DIR/.logs" ]; then
         echo "$SCRIPT_DIR/.logs"
         return
     fi
@@ -293,11 +316,13 @@ collect_logs() {
             done
         done
 
-        # 2. Verbose logs for this prefix in results dir
-        # Limit depth to 3 levels for speed: results/benchmark/run_dir/verbose.log
-        while IFS= read -r log_file; do
-             all_logs="$all_logs $log_file"
-        done < <(find "$RESULTS_DIR" -maxdepth 3 -type f -name "*${PREFIX}*_verbose.log" 2>/dev/null)
+        # 2. Verbose logs for this prefix in all results dirs
+        mapfile -t r_roots < <(list_results_roots)
+        for r_root in "${r_roots[@]}"; do
+            while IFS= read -r log_file; do
+                 all_logs="$all_logs $log_file"
+            done < <(find "$r_root" -maxdepth 3 -type f -name "*${PREFIX}*_verbose.log" 2>/dev/null)
+        done
 
     else
         # Original logic (fallback to run_id if no prefix)
@@ -308,10 +333,13 @@ collect_logs() {
         fi
 
         if [ -n "$run_id" ]; then
-            # Find all verbose logs in results dir matching the run timestamp
-            while IFS= read -r log_file; do
-                 all_logs="$all_logs $log_file"
-            done < <(find "$RESULTS_DIR" -maxdepth 3 -type f -name "*${run_id}*_verbose.log" 2>/dev/null)
+            # Find all verbose logs in all results dirs matching the run timestamp
+            mapfile -t r_roots < <(list_results_roots)
+            for r_root in "${r_roots[@]}"; do
+                while IFS= read -r log_file; do
+                     all_logs="$all_logs $log_file"
+                done < <(find "$r_root" -maxdepth 3 -type f -name "*${run_id}*_verbose.log" 2>/dev/null)
+            done
         fi
     fi
 
@@ -322,7 +350,7 @@ watch_logs() {
     echo -e "${CYAN}============================================================${NC}"
     echo -e "${CYAN}           LOG VIEWER MODE (LATEST RUN ONLY)${NC}"
     echo -e "${CYAN}============================================================${NC}"
-    echo -e "${BLUE}Results:${NC} $RESULTS_DIR"
+    echo -e "${BLUE}Results roots:${NC} $(list_results_roots | paste -sd ', ' -)"
     echo -e "${BLUE}Logs roots:${NC} $(list_logs_roots | paste -sd ', ' -)"
     echo -e "${CYAN}Press Ctrl+C to stop${NC}"
     echo -e "${CYAN}============================================================${NC}"
