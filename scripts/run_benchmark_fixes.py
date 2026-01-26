@@ -1235,7 +1235,7 @@ def run_hal_eval(
     # Run with retry
     success, error_msg, result = run_with_retry(
         cmd=cmd, env=env, cwd=REPO_ROOT,
-        max_retries=3, base_timeout=7200,  # 2 hours base timeout
+        max_retries=3, base_timeout=18000,  # 5 hours base timeout
     )
 
     # Extract and show dataset loading info from HAL output
