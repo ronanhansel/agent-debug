@@ -1153,6 +1153,11 @@ def run_hal_eval(
 
     if continue_run:
         cmd.append("--continue_run")
+    else:
+        # Even if not resuming an old run, we enable continue_run
+        # so that internal retries (e.g. timeouts) don't restart from scratch
+        # and create duplicate entries in the JSONL file.
+        cmd.append("--continue_run")
 
     if docker:
         cmd.append("--docker")
