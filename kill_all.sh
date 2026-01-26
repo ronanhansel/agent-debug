@@ -4,7 +4,7 @@
 echo "=== Killing HAL Evaluation Processes ==="
 
 DOCKER_CMD_TIMEOUT="${DOCKER_CMD_TIMEOUT:-8}"
-HAL_KILL_ALL_DOCKER="${HAL_KILL_ALL_DOCKER:-0}"
+HAL_KILL_ALL_DOCKER="${HAL_KILL_ALL_DOCKER:-1}" # Default to aggressive cleanup
 
 docker_cmd() {
     if command -v timeout >/dev/null 2>&1; then
@@ -35,57 +35,65 @@ else
     echo "WARN: Docker CLI not found; skipping Docker cleanup."
 fi
 
-# Kill Docker containers related to evaluation
-echo "[1/5] Stopping Docker containers..."
-if $docker_ready; then
-    if [ "$HAL_KILL_ALL_DOCKER" = "1" ]; then
-        echo "HAL_KILL_ALL_DOCKER=1: stopping all running containers..."
-        docker_cmd ps -q | xargs -r docker stop 2>/dev/null
-    else
-        docker_cmd ps -q --filter "name=agentrun" | xargs -r docker stop 2>/dev/null
-        docker_cmd ps -q --filter "name=agentpool" | xargs -r docker stop 2>/dev/null
-        docker_cmd ps -q --filter "name=agent-env" | xargs -r docker stop 2>/dev/null
-        docker_cmd ps -q --filter "name=agentpreflight" | xargs -r docker stop 2>/dev/null
-        docker_cmd ps -q --filter "name=hal" | xargs -r docker stop 2>/dev/null
-        docker_cmd ps -q --filter "name=benchmark" | xargs -r docker stop 2>/dev/null
-        docker_cmd ps -q --filter "ancestor=hal-agent-runner" | xargs -r docker stop 2>/dev/null
-    fi
-fi
+# Kill main runners first (SIGKILL to ensure they stop spawning)
+echo "[1/6] Killing main runners..."
+pkill -9 -f "run_all_benchmarks.sh" 2>/dev/null
+pkill -9 -f "run_benchmark_with_data.sh" 2>/dev/null
+pkill -9 -f "tail -f.*log" 2>/dev/null  # Kill log tailers
 
-# Kill hal-eval processes
-echo "[2/5] Killing hal-eval processes..."
-pkill -f "hal-eval" 2>/dev/null
-pkill -f "hal_eval" 2>/dev/null
-
-# Kill Python processes related to evaluation scripts
-echo "[3/5] Killing evaluation scripts..."
-pkill -f "eval_rubric.py" 2>/dev/null
-pkill -f "fixing_pipeline.py" 2>/dev/null
-pkill -f "claude_fixer" 2>/dev/null
-pkill -f "run_.*_fixes.py" 2>/dev/null
-pkill -f "judge.py" 2>/dev/null
-pkill -f "pipeline.py" 2>/dev/null
+# Kill Python evaluation scripts
+echo "[2/6] Killing python evaluation scripts..."
+pkill -9 -f "eval_rubric.py" 2>/dev/null
+pkill -9 -f "fixing_pipeline.py" 2>/dev/null
+pkill -9 -f "claude_fixer" 2>/dev/null
+pkill -9 -f "scripts/run_.*_fixes.py" 2>/dev/null
+pkill -9 -f "run_.*_fixes.py" 2>/dev/null
+pkill -9 -f "judge.py" 2>/dev/null
+pkill -9 -f "pipeline.py" 2>/dev/null
+pkill -9 -f "hal.cli" 2>/dev/null
+pkill -9 -f "hal/cli.py" 2>/dev/null
+pkill -9 -f "python -m hal.cli" 2>/dev/null
 
 # Kill agent processes
-echo "[4/5] Killing agent processes..."
-pkill -f "scicode_tool_calling_agent" 2>/dev/null
-pkill -f "hal_generalist_agent" 2>/dev/null
-pkill -f "SWE-agent" 2>/dev/null
-pkill -f "assistantbench_browser_agent" 2>/dev/null
-pkill -f "colbench_example_agent" 2>/dev/null
-pkill -f "smolagents" 2>/dev/null
+echo "[3/6] Killing agent processes..."
+pkill -9 -f "run_agent.py" 2>/dev/null
+pkill -9 -f "scicode_tool_calling_agent" 2>/dev/null
+pkill -9 -f "hal_generalist_agent" 2>/dev/null
+pkill -9 -f "SWE-agent" 2>/dev/null
+pkill -9 -f "assistantbench_browser_agent" 2>/dev/null
+pkill -9 -f "colbench_example_agent" 2>/dev/null
+pkill -9 -f "smolagents" 2>/dev/null
 
-# Kill any remaining Docker containers (aggressive)
-echo "[5/5] Force removing stuck containers..."
+# Cleanup generic python args if they look like ours
+pkill -9 -f "python.*-u scripts/" 2>/dev/null
+
+# Kill Docker containers related to evaluation
+echo "[4/6] Stopping Docker containers..."
 if $docker_ready; then
     if [ "$HAL_KILL_ALL_DOCKER" = "1" ]; then
-        docker_cmd ps -q | xargs -r docker kill 2>/dev/null
+        echo "HAL_KILL_ALL_DOCKER=1: Removing all containers..."
+        docker_cmd ps -aq | xargs -r docker rm -f 2>/dev/null
     else
-        docker_cmd ps -q --filter "name=agent" | xargs -r docker kill 2>/dev/null
-        docker_cmd ps -q --filter "name=env-" | xargs -r docker kill 2>/dev/null
-        docker_cmd ps -q --filter "ancestor=hal-agent-runner" | xargs -r docker kill 2>/dev/null
+        # Targeted cleanup
+        TARGETS=(
+            "name=agentrun"
+            "name=agentpool"
+            "name=agent-env"
+            "name=agentpreflight"
+            "name=hal"
+            "name=benchmark"
+            "ancestor=hal-agent-runner"
+        )
+        for t in "${TARGETS[@]}"; do
+            docker_cmd ps -aq --filter "$t" | xargs -r docker rm -f 2>/dev/null
+        done
     fi
 fi
+
+# Final sweep
+echo "[5/6] Final process sweep..."
+pkill -9 -f "hal-eval" 2>/dev/null
+pkill -9 -f "hal_eval" 2>/dev/null
 
 # Show remaining processes (for verification)
 echo ""
