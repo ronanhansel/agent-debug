@@ -1103,6 +1103,7 @@ def run_hal_eval(
     dataset_path: Optional[Path] = None,
     all_tasks_mode: bool = False,
     trace_mode: Optional[str] = None,
+    timeout: Optional[int] = None,
 ) -> Tuple[bool, str, Optional[Path]]:
     """
     Run HAL evaluation for a specific configuration.
@@ -1167,6 +1168,10 @@ def run_hal_eval(
 
     if max_tasks:
         cmd.extend(["--max_tasks", str(max_tasks)])
+
+    # Pass timeout if provided (overrides default 7500s)
+    if timeout:
+        cmd.extend(["-A", f"timeout={timeout}"])
 
     # NOTE: HAL doesn't support --task_ids flag.
     # Task filtering is handled via the modified dataset (dataset_path).
@@ -1385,6 +1390,11 @@ def main():
              "Tasks without fixes run normally."
     )
 
+    parser.add_argument(
+        "--timeout", type=int,
+        help="Per-task timeout in seconds (overrides default 7500)."
+    )
+    
     # Modes
     parser.add_argument(
         "--list-configs", action="store_true",
@@ -1788,6 +1798,7 @@ def main():
                 dataset_path=_dataset_path,  # Modified dataset with fixes applied
                 all_tasks_mode=_all_tasks_mode,
                 trace_mode=args.trace_mode,
+                timeout=args.timeout,
             )
             return key, success, msg, trace
 

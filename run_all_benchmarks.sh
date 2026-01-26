@@ -130,6 +130,11 @@ while [[ $# -gt 0 ]]; do
             SAMPLE_SEED="${1:-}"
             shift
             ;;
+        --timeout)
+            shift
+            TIMEOUT="${1:-}"
+            shift
+            ;;
         --repeat)
             shift
             REPEAT_COUNT="${1:-}"
@@ -409,6 +414,7 @@ EOF
             if [ -n "$TRACE_MODE" ]; then extra_args+=(--trace-mode "$TRACE_MODE"); fi
             if [ -n "$SAMPLE_TASKS" ]; then extra_args+=(--sample-tasks "$SAMPLE_TASKS"); fi
             if [ -n "$SAMPLE_SEED" ]; then extra_args+=(--sample-seed "$SAMPLE_SEED"); fi
+            if [ -n "$TIMEOUT" ]; then extra_args+=(--timeout "$TIMEOUT"); fi
 
             (
                 cd "$SCRIPT_DIR"
