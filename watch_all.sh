@@ -11,7 +11,7 @@
 #   logs      Tail logs for the latest run only
 #
 # Batch mode:
-#   - If finished tasks do not change for >7 minutes, launch next run after 5 minutes.
+#   - If finished tasks do not change for >7 minutes, launch next run immediately.
 #   - If finished tasks == total tasks, launch next run after 5 minutes.
 #   - Next prefix is computed by incrementing the current prefix (e.g., sun12_ -> sun13_).
 #   - Next run command is previewed in the watcher.

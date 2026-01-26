@@ -1615,6 +1615,9 @@ def main():
             modified_dataset_path = TMP_DIR / f"{benchmark}_modified_{timestamp}.json"
             modified_dataset_path.write_text(json.dumps(modified_dataset, indent=2, default=str))
             log(f"Saved modified dataset (JSON format) to: {modified_dataset_path}", "main")
+        
+        # Explicitly log task count in a format the watcher can parse: (N tasks)
+        log(f"Total dataset size: ({len(modified_dataset)} tasks)", "main")
 
         # Load configuration
         try:

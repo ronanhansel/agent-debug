@@ -648,14 +648,43 @@ def main() -> None:
             if log_file.exists():
                 text = log_file.read_text(errors="ignore")
         dataset_path = resolve_dataset_path(benchmark, text, run_root, args)
-        if not dataset_path or not dataset_path.exists():
-            print(f"Missing dataset path for {benchmark}; cannot build columns")
-            sys.exit(1)
-        benchmark_task_ids[benchmark] = load_task_ids(benchmark, dataset_path)
-        if benchmark == "scicode":
-            benchmark_task_meta[benchmark] = build_scicode_task_meta(dataset_path)
+        
+        if dataset_path and dataset_path.exists():
+            benchmark_task_ids[benchmark] = load_task_ids(benchmark, dataset_path)
+            if benchmark == "scicode":
+                benchmark_task_meta[benchmark] = build_scicode_task_meta(dataset_path)
+            else:
+                benchmark_task_meta[benchmark] = None
         else:
-            benchmark_task_meta[benchmark] = None
+            # Fallback: try to collect all task IDs seen in raw submissions
+            print(f"Dataset path not found for {benchmark}. Attempting to infer tasks from raw submissions...")
+            run_ids = [rid for rid in parse_run_ids(text) if args.prefix in rid]
+            if not run_ids:
+                run_ids = find_run_ids_from_results(run_root, repo_root, benchmark, args.prefix)
+            
+            inferred_ids = set()
+            for rid in run_ids:
+                r_dir = resolve_run_dir(run_root, repo_root, benchmark, rid)
+                if r_dir:
+                    raw_path = r_dir / f"{rid}_RAW_SUBMISSIONS.jsonl"
+                    if raw_path.exists():
+                        with raw_path.open("r", encoding="utf-8") as f:
+                            for line in f:
+                                try:
+                                    obj = json.loads(line)
+                                    if obj and isinstance(obj, dict):
+                                        inferred_ids.add(str(next(iter(obj.keys()))))
+                                except:
+                                    pass
+            
+            if inferred_ids:
+                # Sort numerically if possible, else alphabetically
+                benchmark_task_ids[benchmark] = sorted(list(inferred_ids), key=lambda x: int(x) if x.isdigit() else x)
+                benchmark_task_meta[benchmark] = None
+                print(f"Inferred {len(inferred_ids)} tasks from submissions for {benchmark}")
+            else:
+                print(f"Missing dataset path for {benchmark} and no tasks found in submissions; skipping.")
+                continue
 
     columns: List[str] = []
     if not args.progress_only:

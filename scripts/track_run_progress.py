@@ -530,7 +530,7 @@ class AutoRelaunch:
         repo_root: Path,
         logs_dir: Path,
         stall_seconds: int = 7 * 60,
-        delay_seconds: int = 5 * 60,
+        delay_seconds: int = 0,
         complete_delay_seconds: int = 5 * 60,
     ) -> None:
         self.enabled = enabled
@@ -616,7 +616,7 @@ class AutoRelaunch:
             )
         if idle is None:
             return "Auto-relaunch: waiting for progress signal"
-        return f"Auto-relaunch: enabled (idle {format_duration(idle)}; stall=7m+5m, complete=5m)"
+        return f"Auto-relaunch: enabled (idle {format_duration(idle)}; stall=7m, complete=5m)"
 
     def _trigger(self, reason: str) -> None:
         if not self.command:
@@ -801,29 +801,165 @@ def get_per_agent_rows(run_dir: Path, run_root: Path, repo_root: Path) -> List[T
     return rows
 
 
+def load_benchmark_config_count(repo_root: Path, benchmark: str) -> int:
+    """Count number of models in model_to_baseline_<benchmark>.json."""
+    config_path = repo_root / f"model_to_baseline_{benchmark}.json"
+    if not config_path.exists():
+        return 0
+    try:
+        data = json.loads(config_path.read_text())
+        # Count keys that don't start with underscore (metadata)
+        return sum(1 for k in data.keys() if not k.startswith("_"))
+    except Exception:
+        return 0
+
+
+def find_latest_dataset(tmp_dir: Path, pattern: str) -> Optional[Path]:
+    if not tmp_dir.exists():
+        return None
+    candidates = list(tmp_dir.glob(pattern))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p.stat().st_mtime)
+
+
+def resolve_dataset_path_for_tasks(
+    benchmark: str,
+    repo_root: Path,
+    run_root: Path,
+    log_text: Optional[str] = None
+) -> Optional[Path]:
+    """Resolve dataset path to count tasks, handling custom/temp datasets."""
+    
+    # 1. Check env vars (standard HAL variables)
+    env_map = {
+        "scicode": "SCICODE_DATASET_PATH",
+        "scienceagentbench": "SCIENCEAGENTBENCH_DATASET_PATH",
+        "corebench": "HAL_COREBENCH_DATASET_PATH",
+        "colbench": "COLBENCH_BACKEND_DATASET_PATH",
+    }
+    env_val = os.environ.get(env_map.get(benchmark, ""))
+    if env_val:
+        path = Path(env_val)
+        if path.exists():
+            return path
+
+    # 2. Check log text for "Custom dataset: VAR=PATH"
+    if log_text:
+        env_var = env_map.get(benchmark)
+        if env_var:
+            pattern = re.compile(rf"{env_var}=([^\s]+)")
+            matches = pattern.findall(log_text)
+            if matches:
+                path = Path(matches[-1])
+                if path.exists():
+                    return path
+
+    # 3. Check temp directories for modified datasets (most common for fixes)
+    # Search in both repo-local .hal_data/tmp and run-specific tmp
+    tmp_dirs = [
+        repo_root / ".hal_data" / "tmp",
+        repo_root / ".tmp",
+        run_root / "tmp"
+    ]
+    
+    filename_patterns = {
+        "scicode": "scicode_modified_*.json",
+        "scienceagentbench": "scienceagentbench_modified_*.json",
+        "corebench": "corebench_modified_*.json",
+        "colbench": "colbench_modified_*.jsonl",
+    }
+    
+    pattern = filename_patterns.get(benchmark)
+    if pattern:
+        for tmp_dir in tmp_dirs:
+            path = find_latest_dataset(tmp_dir, pattern)
+            if path:
+                return path
+
+    # 4. Fallback to default repo paths
+    if benchmark == "corebench":
+        default_path = repo_root / "hal-harness" / "hal" / "benchmarks" / "corebench" / "core_test.json"
+        if default_path.exists():
+            return default_path
+    elif benchmark == "colbench":
+        default_path = repo_root / "hal-harness" / "hal" / "benchmarks" / "colbench" / "data" / "backend_test.jsonl"
+        if default_path.exists():
+            return default_path
+            
+    return None
+
+
+def count_tasks_in_dataset(path: Path) -> Optional[int]:
+    if not path.exists():
+        return None
+    try:
+        if path.suffix == ".jsonl":
+            with path.open("r", encoding="utf-8") as f:
+                return sum(1 for line in f if line.strip())
+        else:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return len(data)
+    except Exception:
+        return None
+
+
 def collect_aggregate_metrics(run_dir: Path, run_root: Path, repo_root: Path) -> List[AggregateMetrics]:
     metrics: List[AggregateMetrics] = []
 
     for benchmark in BENCHMARKS:
         log_file = run_dir / f"{benchmark}.log"
         text = read_text(log_file)
+        
+        # Get expected runs from config file
+        config_runs = load_benchmark_config_count(repo_root, benchmark)
+        
+        # 1. Try to find tasks per run from dataset file (most accurate for custom runs)
+        tasks_per_run = None
+        dataset_path = resolve_dataset_path_for_tasks(benchmark, repo_root, run_root, text)
+        if dataset_path:
+            tasks_per_run = count_tasks_in_dataset(dataset_path)
+
+        # 2. Fallback: Parse from log text
+        if tasks_per_run is None:
+            tasks_per_run = parse_total_tasks(text)
+        
+        # 3. Fallback: Infer from raw submissions
+        if tasks_per_run is None:
+            run_ids = filter_latest_run_ids(parse_run_ids(text))
+            for run_id in run_ids:
+                run_root_override = parse_run_root(text)
+                run_root_for_bench = Path(run_root_override) if run_root_override else run_root
+                run_path = resolve_run_dir(run_root_for_bench, repo_root, benchmark, run_id)
+                if run_path:
+                    raw_path = run_path / f"{run_id}_RAW_SUBMISSIONS.jsonl"
+                    _, _, completed_total = count_raw_submissions(raw_path)
+                    if completed_total:
+                        tasks_per_run = completed_total
+                        break
+
+        # Calculate total expected tasks based on config count
+        if config_runs > 0 and tasks_per_run is not None:
+            total_expected_tasks = config_runs * tasks_per_run
+        else:
+            total_expected_tasks = None
+
         if not text:
+            # If log doesn't exist but we have config, report that
+            if config_runs > 0:
+                 metrics.append(AggregateMetrics(benchmark, config_runs, 0, total_expected_tasks, 0))
             continue
 
-        total_tasks = parse_total_tasks(text)
-        run_root_override = parse_run_root(text)
-        run_root_for_bench = Path(run_root_override) if run_root_override else run_root
         run_ids = filter_latest_run_ids(parse_run_ids(text))
-        if not run_ids:
-            continue
-
+        
         tasks_done_sum = 0
         tasks_done_found = False
-        tasks_expected_sum = 0
-        tasks_expected_known = True
         tokens_total = 0
 
+        # If we have run IDs in the log, we can count actual progress
         for run_id in run_ids:
+            run_root_override = parse_run_root(text)
+            run_root_for_bench = Path(run_root_override) if run_root_override else run_root
             run_path = resolve_run_dir(run_root_for_bench, repo_root, benchmark, run_id)
             if not run_path:
                 continue
@@ -837,16 +973,10 @@ def collect_aggregate_metrics(run_dir: Path, run_root: Path, repo_root: Path) ->
             else:
                 eval_count = completed_ok
 
-            tasks_done = choose_tasks_done(completed_total, eval_count, completed_ok, total_tasks)
+            tasks_done = choose_tasks_done(completed_total, eval_count, completed_ok, tasks_per_run)
             if tasks_done is not None:
                 tasks_done_sum += tasks_done
                 tasks_done_found = True
-
-            expected = total_tasks if total_tasks is not None else completed_total or eval_count or completed_ok
-            if expected is None:
-                tasks_expected_known = False
-            else:
-                tasks_expected_sum += expected
 
             verbose_log = run_path / f"{run_id}_verbose.log"
             metrics_item = parse_verbose_metrics(verbose_log)
@@ -855,17 +985,39 @@ def collect_aggregate_metrics(run_dir: Path, run_root: Path, repo_root: Path) ->
                 tokens = parse_local_trace_tokens(run_path)
             tokens_total += tokens
 
+        # Use config_runs if available, otherwise fall back to observed runs
+        final_runs = config_runs if config_runs > 0 else len(run_ids)
+        
+        # If we calculated a total based on config, use it. 
+        # Otherwise sum from observed runs (fallback behavior).
+        final_tasks_total = total_expected_tasks
+        if final_tasks_total is None and len(run_ids) > 0:
+             # Fallback: sum of tasks for observed runs
+             final_tasks_total = (tasks_per_run * len(run_ids)) if tasks_per_run else None
+
         metrics.append(
             AggregateMetrics(
                 benchmark=benchmark,
-                runs=len(run_ids),
+                runs=final_runs,
                 tasks_done=tasks_done_sum if tasks_done_found else None,
-                tasks_total=tasks_expected_sum if tasks_expected_known else None,
+                tasks_total=final_tasks_total,
                 tokens_total=tokens_total,
             )
         )
 
     return metrics
+
+
+def format_etc(tasks_done: Optional[int], tasks_total: Optional[int], tasks_per_min: Optional[float]) -> str:
+    if tasks_done is None or tasks_total is None or tasks_per_min is None or tasks_per_min <= 0:
+        return "?"
+    remaining = tasks_total - tasks_done
+    if remaining <= 0:
+        return "0:00"
+    total_seconds = (remaining / tasks_per_min) * 60
+    mins = int(total_seconds // 60)
+    secs = int(total_seconds % 60)
+    return f"{mins}:{secs:02d}"
 
 
 def build_aggregate_rows(
@@ -879,6 +1031,7 @@ def build_aggregate_rows(
         "tasks_done",
         "tasks_total",
         "tasks/min",
+        "ETC",
         token_rate_label(token_rate_unit),
     )
     rows: List[Tuple[str, ...]] = [header]
@@ -890,6 +1043,7 @@ def build_aggregate_rows(
             format_int(item.tasks_done),
             format_int(item.tasks_total),
             format_rate(tasks_rate),
+            format_etc(item.tasks_done, item.tasks_total, tasks_rate),
             format_token_rate(tokens_rate, token_rate_unit),
         ))
     return rows

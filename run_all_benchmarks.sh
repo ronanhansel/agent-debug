@@ -583,7 +583,7 @@ run_benchmark() {
     # Run benchmark and capture output
     (
         cd "$SCRIPT_DIR"
-        ./run_benchmark_with_data.sh python scripts/run_benchmark_fixes.py \
+        ./run_benchmark_with_data.sh python -u scripts/run_benchmark_fixes.py \
             --benchmark "$benchmark" \
             --all-configs \
             --all-tasks \
