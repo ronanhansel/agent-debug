@@ -151,6 +151,7 @@ def resolve_dataset_path(
     log_text: str,
     run_root: Path,
     args: argparse.Namespace,
+    prefix: str = "",
 ) -> Optional[Path]:
     cli_map = {
         "scicode": args.dataset_scicode,
@@ -184,6 +185,20 @@ def resolve_dataset_path(
     tmp_dirs = [run_root / "tmp", run_root / ".hal_data" / "tmp"]
     path = None
     for tmp_dir in tmp_dirs:
+        # If prefix is provided, try to find a dataset that might be associated with it
+        if prefix:
+            clean_prefix = prefix.strip("_")
+            patterns = {
+                "scicode": f"scicode_modified_*{clean_prefix}*.json",
+                "scienceagentbench": f"scienceagentbench_modified_*{clean_prefix}*.json",
+                "corebench": f"corebench_modified_*{clean_prefix}*.json",
+                "colbench": f"colbench_modified_*{clean_prefix}*.jsonl",
+            }
+            if benchmark in patterns:
+                path = find_latest_dataset(tmp_dir, patterns[benchmark])
+                if path and path.exists():
+                    return path
+
         if benchmark == "scicode":
             path = find_latest_dataset(tmp_dir, "scicode_modified_*.json")
         elif benchmark == "scienceagentbench":
@@ -643,12 +658,34 @@ def main() -> None:
     for benchmark in BENCHMARKS:
         if benchmark in skip_set:
             continue
+        
+        # Primary source of run_ids is now the results directory matching the prefix
+        run_ids = find_run_ids_from_results(run_root, repo_root, benchmark, args.prefix)
+
         text = ""
         if log_dir:
             log_file = log_dir / f"{benchmark}.log"
             if log_file.exists():
                 text = log_file.read_text(errors="ignore")
-        dataset_path = resolve_dataset_path(benchmark, text, run_root, args)
+        
+        # Supplement run IDs from log if available
+        if text:
+            log_run_ids = [rid for rid in parse_run_ids(text) if args.prefix in rid]
+            run_ids = sorted(set(run_ids + log_run_ids))
+        
+        # If we found run IDs in results but didn't have log_dir, try to find one run's log for dataset path discovery
+        if not text and run_ids:
+            for rid in run_ids:
+                r_dir = resolve_run_dir(run_root, repo_root, benchmark, rid)
+                if r_dir:
+                    for log_name in [f"{rid}.log", "run.log", f"{benchmark}.log"]:
+                        log_path = r_dir / log_name
+                        if log_path.exists():
+                            text = log_path.read_text(errors="ignore")
+                            break
+                if text: break
+
+        dataset_path = resolve_dataset_path(benchmark, text, run_root, args, prefix=args.prefix)
         
         if dataset_path and dataset_path.exists():
             benchmark_task_ids[benchmark] = load_task_ids(benchmark, dataset_path)
@@ -659,7 +696,6 @@ def main() -> None:
         else:
             # Fallback: try to collect all task IDs seen in raw submissions
             print(f"Dataset path not found for {benchmark}. Attempting to infer tasks from raw submissions...")
-            run_ids = [rid for rid in parse_run_ids(text) if args.prefix in rid]
             if not run_ids:
                 run_ids = find_run_ids_from_results(run_root, repo_root, benchmark, args.prefix)
             
@@ -701,14 +737,32 @@ def main() -> None:
     for benchmark in BENCHMARKS:
         if benchmark in skip_set:
             continue
+        
+        # Use prefix to find run IDs directly from results
+        run_ids = find_run_ids_from_results(run_root, repo_root, benchmark, args.prefix)
+
         text = ""
         if log_dir:
             log_file = log_dir / f"{benchmark}.log"
             if log_file.exists():
                 text = log_file.read_text(errors="ignore")
-        run_ids = [rid for rid in parse_run_ids(text) if args.prefix in rid]
-        if not run_ids:
-            run_ids = find_run_ids_from_results(run_root, repo_root, benchmark, args.prefix)
+        
+        # Supplement run IDs from log if available
+        if text:
+            log_run_ids = [rid for rid in parse_run_ids(text) if args.prefix in rid]
+            run_ids = sorted(set(run_ids + log_run_ids))
+        
+        # If we found run IDs in results but didn't have log_dir, try to find one run's log for re-evaluation dataset path discovery
+        if args.reeval and not text and run_ids:
+            for rid in run_ids:
+                r_dir = resolve_run_dir(run_root, repo_root, benchmark, rid)
+                if r_dir:
+                    for log_name in [f"{rid}.log", "run.log", f"{benchmark}.log"]:
+                        log_path = r_dir / log_name
+                        if log_path.exists():
+                            text = log_path.read_text(errors="ignore")
+                            break
+                if text: break
 
         # Deduplicate runs: keep the one with the most completed tasks (least NaNs)
         best_runs: Dict[str, Tuple[str, int]] = {}
@@ -758,7 +812,7 @@ def main() -> None:
             if not args.progress_only:
                 success_map: Dict[str, int] = {}
                 if args.reeval:
-                    dataset_path = resolve_dataset_path(benchmark, text, run_root, args)
+                    dataset_path = resolve_dataset_path(benchmark, text, run_root, args, prefix=args.prefix)
                     if not dataset_path or not dataset_path.exists():
                         print(f"Missing dataset path for {benchmark}; cannot re-evaluate")
                         sys.exit(1)
