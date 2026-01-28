@@ -1804,17 +1804,35 @@ def main():
 
         jobs = list(selected.items())
 
+        # Per-model timeout (seconds) - ensures no single model blocks the entire run
+        # Default 4 hours for full 1000-task runs; can be overridden with --timeout
+        MODEL_TIMEOUT = args.timeout if args.timeout else 14400
+
         try:
             if args.parallel_models > 1:
+                from concurrent.futures import TimeoutError as FuturesTimeoutError
                 with ThreadPoolExecutor(max_workers=args.parallel_models) as executor:
                     futures = {executor.submit(run_job, job): job for job in jobs}
                     for future in as_completed(futures):
-                        result = future.result()
-                        with lock:
-                            results.append(result)
-                            key, success, msg, _ = result
-                            status = "SUCCESS" if success else "FAILED"
-                            log(f"[{len(results)}/{len(jobs)}] {status}: {key}", "main")
+                        job_key, job_entry = futures[future]
+                        try:
+                            result = future.result(timeout=MODEL_TIMEOUT)
+                            with lock:
+                                results.append(result)
+                                key, success, msg, _ = result
+                                status = "SUCCESS" if success else "FAILED"
+                                log(f"[{len(results)}/{len(jobs)}] {status}: {key}", "main")
+                        except FuturesTimeoutError:
+                            # Model run timed out - log and continue with other models
+                            with lock:
+                                error_msg = f"TIMEOUT after {MODEL_TIMEOUT}s"
+                                results.append((job_key, False, error_msg, None))
+                                log(f"[{len(results)}/{len(jobs)}] TIMEOUT: {job_key} ({error_msg})", "main")
+                        except Exception as e:
+                            with lock:
+                                error_msg = f"Exception: {str(e)}"
+                                results.append((job_key, False, error_msg, None))
+                                log(f"[{len(results)}/{len(jobs)}] ERROR: {job_key} ({error_msg})", "main")
             else:
                 for i, job in enumerate(jobs):
                     result = run_job(job)
