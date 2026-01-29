@@ -102,12 +102,17 @@ echo ""
 echo -e "${CYAN}[Step 2/4] Building agent-env images (via prebuild_agent_envs.py)${NC}"
 
 build_agent_envs() {
-    # Call Python script which reads constants directly from HAL's docker_runner.py
+    # Optional: Call Python script which reads constants directly from HAL's docker_runner.py
     # This ensures hash calculations always match - no hardcoded values here!
-    if python3 "$SCRIPT_DIR/prebuild_agent_envs.py"; then
-        return 0
+    if [ -f "$SCRIPT_DIR/prebuild_agent_envs.py" ]; then
+        if python3 "$SCRIPT_DIR/prebuild_agent_envs.py"; then
+            return 0
+        else
+            return 1
+        fi
     else
-        return 1
+        echo -e "${YELLOW}  [SKIP] prebuild_agent_envs.py not found - agent-env images will be built on demand${NC}"
+        return 0
     fi
 }
 
