@@ -9,9 +9,11 @@ This document provides comprehensive step-by-step instructions for Claude Code t
 When adding a new benchmark, you need to create:
 1. **Rubric template** - For LLM-based IFE detection (`rubric_templates/<benchmark>.txt`)
 2. **Claude fixer script** - For automated fix generation (`scripts/claude_fixer_<benchmark>.py`)
-3. **Fix runner script** - For applying fixes and re-running evaluation (`scripts/run_<benchmark>_fixes.py`)
-4. **Model configuration** - Maps models to baseline traces (`model_to_baseline_<benchmark>.json`)
-5. **Documentation updates** - CLAUDE.md entries
+3. **Model configuration** - Maps models to baseline traces (`model_to_baseline_<benchmark>.json`)
+4. **Fixes directory** - `fixes/<benchmark>/` to store generated fixes
+5. **Documentation updates** - README.md entries
+
+**Note**: The unified `run_benchmark_fixes.py` handles all benchmarks - no separate runner script needed.
 
 ---
 
@@ -463,50 +465,38 @@ Create `model_to_baseline_<benchmark_name>.json`:
 
 ---
 
-## PHASE 6: Create Fix Runner Script
+## PHASE 6: Configure the Unified Fix Runner
 
-Create `scripts/run_<benchmark_name>_fixes.py`.
+The unified `run_benchmark_fixes.py` handles all benchmarks. You need to:
 
-**Key customizations:**
+### 6.1: Create Fixes Directory
 
-### 6.1: Update Paths and Constants
-
-```python
-FIXES_DIR = REPO_ROOT / "fixes" / "<benchmark_name>"
-DEFAULT_MODEL_CONFIG = REPO_ROOT / "model_to_baseline_<benchmark_name>.json"
+```bash
+mkdir -p fixes/<benchmark_name>
 ```
 
-### 6.2: Adapt Model Extraction from Run Names
+### 6.2: Add Benchmark to Unified Runner (if needed)
+
+The unified runner auto-detects benchmarks by scanning `fixes/` and `model_to_baseline_*.json`.
+If your benchmark needs special handling, you may need to update `run_benchmark_fixes.py`:
 
 ```python
-def _extract_model_from_run_name(model_run: str) -> Optional[str]:
-    """Extract model config key from model_run column."""
-    patterns = [
-        (r"gpt[\-_]?4[\-_]?1", "openai/gpt-4.1-2025-04-14"),
-        (r"o3[\-_]?2025", "openai/o3-2025-04-16"),
-        (r"o4[\-_]?mini.*high", "openai/o4-mini-2025-04-16-high"),
-        (r"o4[\-_]?mini.*low", "openai/o4-mini-2025-04-16-low"),
-        # Add patterns matching your benchmark's naming conventions
-    ]
-    for pattern, config_key in patterns:
-        if re.search(pattern, model_run, re.IGNORECASE):
-            return config_key
-    return None
+# In run_benchmark_fixes.py, add to BENCHMARK_CONFIG if needed:
+"<benchmark_name>": {
+    "hal_benchmark": "<hal_benchmark_name>",  # Name used by hal-eval
+    "fixes_dir": "fixes/<benchmark_name>",
+    "task_id_field": "task_id",  # Field name in dataset
+}
 ```
 
-### 6.3: Adapt Instruction Injection
+### 6.3: Verify Configuration
 
-```python
-def inject_instruction_clarifications(task_data: Dict, fix: Dict) -> Dict:
-    """Inject clarifications - customize key names for your benchmark."""
-    # ScienceAgentBench uses "task_inst"
-    # SciCode uses "problem_statement"
-    # SWE-bench uses "problem_statement"
-    if "task_inst" in task_data:
-        task_data["task_inst"] += clarification_text
-    elif "problem_statement" in task_data:
-        task_data["problem_statement"] += clarification_text
-    return task_data
+```bash
+# List available benchmarks with fixes
+python scripts/run_benchmark_fixes.py --list-benchmarks
+
+# List configs for your benchmark
+python scripts/run_benchmark_fixes.py --benchmark <benchmark_name> --list-configs
 ```
 
 ---
@@ -552,14 +542,14 @@ python scripts/eval_rubric.py \
 ### 7.4: Test Fix Runner
 
 ```bash
-# List fixes
-python scripts/run_<benchmark>_fixes.py --list-fixes
+# List fixes for your benchmark
+python scripts/run_benchmark_fixes.py --benchmark <benchmark> --list-fixes
 
 # Dry run
-python scripts/run_<benchmark>_fixes.py --task-id <id> --dry-run
+python scripts/run_benchmark_fixes.py --benchmark <benchmark> --dry-run
 
-# Actual run
-python scripts/run_<benchmark>_fixes.py --task-id <id> --prefix test_
+# Actual run with a single config
+python scripts/run_benchmark_fixes.py --benchmark <benchmark> --config <config_key> --prefix test_ --docker
 ```
 
 ---
@@ -603,8 +593,8 @@ docker builder prune -af
 
 **Solution:** Reduce parallelism:
 ```bash
-# Instead of --parallel 20, use --parallel 5
-python scripts/run_<benchmark>_fixes.py --parallel 5
+# Instead of --parallel-tasks 20, use --parallel-tasks 5
+python scripts/run_benchmark_fixes.py --benchmark <benchmark> --parallel-tasks 5
 ```
 
 ### Issue: Sandbox "Forbidden Function" Errors
@@ -665,10 +655,9 @@ python scripts/run_<benchmark>_fixes.py --parallel 5
 - [ ] Reference correct baseline trace files
 
 ### Phase 6: Fix Runner
-- [ ] Create `scripts/run_<benchmark>_fixes.py`
-- [ ] Adapt model extraction patterns
-- [ ] Adapt instruction injection for task structure
-- [ ] Test with --dry-run
+- [ ] Create `fixes/<benchmark>/` directory
+- [ ] Verify benchmark is detected by unified runner
+- [ ] Test with `--list-fixes` and `--dry-run`
 
 ### Phase 7: Documentation
 - [ ] Update CLAUDE.md: Supported Benchmarks table
@@ -684,14 +673,14 @@ python scripts/run_<benchmark>_fixes.py --parallel 5
 
 ## Reference: Existing Implementations
 
-| Benchmark | Rubric | Fixer | Fix Runner | Model Config | Key Notes |
-|-----------|--------|-------|------------|--------------|-----------|
-| SciCode | `scicode.txt` | `claude_fixer_scicode.py` | `run_scicode_fixes.py` | `model_to_baseline_scicode.json` | Sandbox execution, import restrictions |
-| ScienceAgentBench | `scienceagentbench.txt` | `claude_fixer_scienceagentbench.py` | `run_scienceagentbench_fixes.py` | `model_to_baseline_scienceagentbench.json` | Code extraction via regex, sandbox errors irrelevant |
-| CoreBench | `corebench.txt` | N/A | `run_corebench_fixes.py` | N/A | Docker container issues |
-| SWE-bench | `swebench.txt` | N/A | N/A | N/A | Cross-run validation |
-| USACO | `usaco.txt` | N/A | `run_usaco_fixes.py` | N/A | Algorithm correctness |
-| AssistantBench | `assistantbench.txt` | N/A | N/A | N/A | Web accessibility |
+| Benchmark | Rubric | Fixer | Model Config | Key Notes |
+|-----------|--------|-------|--------------|-----------|
+| SciCode | `scicode.txt` | `claude_fixer_scicode.py` | `model_to_baseline_scicode.json` | Sandbox execution, import restrictions |
+| ScienceAgentBench | `scienceagentbench.txt` | `claude_fixer_scienceagentbench.py` | `model_to_baseline_scienceagentbench.json` | Code extraction via regex |
+| CoreBench | `corebench.txt` | `claude_fixer_corebench.py` | `model_to_baseline_corebench.json` | Docker container issues |
+| ColBench | `colbench.txt` | `claude_fixer_colbench.py` | `model_to_baseline_colbench.json` | Backend programming |
+
+**Note**: All benchmarks use the unified `run_benchmark_fixes.py` runner.
 
 ---
 

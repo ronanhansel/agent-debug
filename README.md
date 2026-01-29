@@ -11,13 +11,14 @@ Automated Item Fixing Pipeline for benchmark evaluation. The core innovation is 
 
 ## Supported Benchmarks
 
-| Benchmark | Fixer Script | Runner Script | Status |
-|-----------|-------------|---------------|--------|
-| **SciCode** | `claude_fixer_scicode.py` | `run_scicode_fixes.py` | Active |
-| **CoreBench** | `claude_fixer_corebench.py` | `run_corebench_fixes.py` | Active |
-| **ScienceAgentBench** | `claude_fixer_scienceagentbench.py` | `run_scienceagentbench_fixes.py` | Active |
-| **ColBench** | `claude_fixer_colbench.py` | `run_colbench_fixes.py` | Active |
-| **USACO** | (manual) | `run_usaco_fixes.py` | Ready |
+| Benchmark | Fixer Script | Status |
+|-----------|-------------|--------|
+| **SciCode** | `claude_fixer_scicode.py` | Active |
+| **CoreBench** | `claude_fixer_corebench.py` | Active |
+| **ScienceAgentBench** | `claude_fixer_scienceagentbench.py` | Active |
+| **ColBench** | `claude_fixer_colbench.py` | Active |
+
+**Runner**: All benchmarks use the unified `run_benchmark_fixes.py` script.
 
 ---
 
@@ -180,11 +181,12 @@ python scripts/claude_fixer_scicode.py \
 #### Step 5: Apply Fixes and Re-run
 
 ```bash
-python scripts/run_scicode_fixes.py \
-    --all-models \
+python scripts/run_benchmark_fixes.py \
+    --benchmark scicode \
+    --all-configs \
     --prefix fixed_ \
     --docker \
-    --parallel 10
+    --parallel-tasks 10
 ```
 
 ---
@@ -204,7 +206,7 @@ python scripts/run_scicode_fixes.py \
 
 # Generate and apply fixes
 python scripts/claude_fixer_scicode.py --rubric-dir rubrics_output/scicode --judge-csv judge_output/scicode_verdict.csv --ife-only
-python scripts/run_scicode_fixes.py --all-models --prefix fixed_ --docker
+python scripts/run_benchmark_fixes.py --benchmark scicode --all-configs --prefix fixed_ --docker
 ```
 
 ### CoreBench
@@ -273,9 +275,10 @@ agent-debug/
 │   ├── merge_traces.py          # Trace merging
 │   ├── extract_weave_traces.py  # Weave extraction
 │   ├── add_colbench_dialogues.py # ColBench dialogue extraction
-│   ├── claude_fixer_*.py        # Fix generation scripts
-│   ├── run_*_fixes.py           # Fix runner scripts
-│   └── run_benchmark_fixes.py   # Unified fix runner
+│   ├── claude_fixer_*.py        # Fix generation scripts (per-benchmark)
+│   ├── run_benchmark_fixes.py   # Unified fix runner (all benchmarks)
+│   ├── build_response_matrix.py # Results analysis
+│   └── find_failed_tasks.py     # Debug utility
 │
 ├── rubric_templates/            # Rubric prompts for LLM graders
 │   ├── scicode.txt
@@ -460,6 +463,94 @@ conda activate hal
 pip install -r requirements.txt
 pip install -e ./hal-harness
 pip install -e ./docent
+```
+
+---
+
+## Testing the Pipeline (Reproducibility)
+
+After installation, verify your setup with these dry-run tests:
+
+### 1. Verify Scripts Load Correctly
+
+```bash
+# Test core scripts import
+python scripts/merge_traces.py --help
+python scripts/eval_rubric.py --help
+python scripts/judge.py --help
+python scripts/run_benchmark_fixes.py --list-benchmarks
+```
+
+### 2. Test Fixer (Dry Run)
+
+```bash
+# Preview what the fixer would do without making API calls
+python scripts/claude_fixer_scicode.py \
+    --rubric-dir rubrics_output/scicode \
+    --dry-run \
+    --max-tasks 2
+```
+
+### 3. Test Runner (Dry Run)
+
+```bash
+# Preview what the runner would execute
+python scripts/run_benchmark_fixes.py \
+    --benchmark scicode \
+    --dry-run
+```
+
+### 4. Verify Existing Data
+
+```bash
+# Check traces exist
+ls traces/*.json | head -5
+
+# Check rubric outputs exist
+ls rubrics_output/scicode/*.csv | head -5
+
+# Check judge verdicts exist
+head -5 judge_output/scicode_verdict.csv
+
+# Check fixes exist
+ls fixes/scicode/
+```
+
+### 5. Full Pipeline Test (Requires API Access)
+
+To run a minimal end-to-end test:
+
+```bash
+# Step 1: Merge existing traces (no API calls)
+python scripts/merge_traces.py \
+    --input 'traces/scicode_honey__scicode_honey_openai_gpt-4_1_2025-04-14_*_UPLOAD.json' \
+    --output /tmp/test_merge.json \
+    --force
+
+# Step 2: Run rubric evaluation (requires API)
+python scripts/eval_rubric.py \
+    --trace-file traces/scicode_honey_openai_gpt-4_1.json \
+    --rubric rubric_templates/scicode.txt \
+    --rubric-model openai:gpt-5.2 \
+    --failed-only \
+    --max-tasks 1 \
+    -y
+
+# Step 3: Run judge aggregation (requires API)
+python scripts/judge.py \
+    --pattern "scicode_honey_*" \
+    --rubric-dir rubrics_output/scicode \
+    --output /tmp/test_verdict.csv \
+    --model openai:gpt-5.2 \
+    --max-tasks 1 \
+    -y
+
+# Step 4: Apply fixes and re-run (requires Docker + API)
+python scripts/run_benchmark_fixes.py \
+    --benchmark scicode \
+    --config gpt-4.1_scicode \
+    --docker \
+    --prefix test_
 ```
 
 ---
