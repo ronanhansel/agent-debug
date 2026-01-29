@@ -35,7 +35,7 @@ Automated Item Fixing Pipeline for benchmark evaluation. The core innovation is 
 
 ```bash
 # Clone with submodules
-git clone --recursive https://github.com/YOUR_ORG/agent-debug.git
+git clone --recursive https://github.com/ronanhansel/agent-debug.git
 cd agent-debug
 
 # Create conda environment
