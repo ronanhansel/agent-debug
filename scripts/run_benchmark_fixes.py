@@ -840,7 +840,7 @@ def get_task_ids_with_fixes(benchmark: str) -> List[str]:
 
 def load_benchmark_config(benchmark: str) -> Dict[str, Any]:
     """Load model_to_baseline_<benchmark>.json configuration."""
-    config_path = REPO_ROOT / f"model_to_baseline_{benchmark}.json"
+    config_path = REPO_ROOT / "model_configs" / f"model_to_baseline_{benchmark}.json"
     if not config_path.exists():
         raise FileNotFoundError(f"Config not found: {config_path}")
     return json.loads(config_path.read_text(encoding="utf-8"))

@@ -361,5 +361,5 @@ PYTHON_SUMMARY
 echo ""
 echo "============================================================"
 echo "Next step: Run RUBRIC EVALUATION"
-echo "  ./RUBRIC_COMMANDS.sh $BENCHMARK"
+echo "  ./bin/RUBRIC_COMMANDS.sh $BENCHMARK"
 echo "============================================================"

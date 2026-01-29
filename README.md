@@ -107,7 +107,7 @@ The complete pipeline has 5 stages:
 
 ```bash
 # Run all benchmarks with all models
-./run_all_benchmarks.sh --prefix sun1_ --benchmarks colbench --parallel-models 10 --parallel-tasks 50 --trace-mode local
+./bin/run_all_benchmarks.sh --prefix sun1_ --benchmarks colbench --parallel-models 10 --parallel-tasks 50 --trace-mode local
 
 # Options:
 #   --prefix PREFIX     Run ID prefix (e.g., sun1_, moon2_)
@@ -129,11 +129,11 @@ The complete pipeline has 5 stages:
 export WANDB_API_KEY=your_key_here
 
 # Process all benchmarks
-./FINAL_COMMANDS.sh
+./bin/FINAL_COMMANDS.sh
 
 # Or specific benchmark
-./FINAL_COMMANDS.sh scicode
-./FINAL_COMMANDS.sh colbench
+./bin/FINAL_COMMANDS.sh scicode
+./bin/FINAL_COMMANDS.sh colbench
 ```
 
 This script:
@@ -144,7 +144,7 @@ This script:
 #### Step 2: Run Rubric Evaluation
 
 ```bash
-./RUBRIC_COMMANDS.sh scicode
+./bin/RUBRIC_COMMANDS.sh scicode
 
 # Or manually:
 python scripts/eval_rubric.py \
@@ -157,7 +157,7 @@ python scripts/eval_rubric.py \
 #### Step 3: Aggregate Verdicts
 
 ```bash
-./JUDGE_COMMANDS.sh scicode
+./bin/JUDGE_COMMANDS.sh scicode
 
 # Or manually:
 python scripts/judge.py \
@@ -197,12 +197,12 @@ python scripts/run_benchmark_fixes.py \
 
 ```bash
 # Run evaluation
-./run_all_benchmarks.sh --prefix scicode_sun1_ --benchmarks scicode --parallel-models 5 --parallel-tasks 10 --docker
+./bin/run_all_benchmarks.sh --prefix scicode_sun1_ --benchmarks scicode --parallel-models 5 --parallel-tasks 10 --docker
 
 # Process traces
-./FINAL_COMMANDS.sh scicode
-./RUBRIC_COMMANDS.sh scicode
-./JUDGE_COMMANDS.sh scicode
+./bin/FINAL_COMMANDS.sh scicode
+./bin/RUBRIC_COMMANDS.sh scicode
+./bin/JUDGE_COMMANDS.sh scicode
 
 # Generate and apply fixes
 python scripts/claude_fixer_scicode.py --rubric-dir rubrics_output/scicode --judge-csv judge_output/scicode_verdict.csv --ife-only
@@ -218,12 +218,12 @@ gpg --output hal-harness/hal/benchmarks/corebench/core_test.json \
 # Password: reproducibility
 
 # Run evaluation
-./run_all_benchmarks.sh --prefix cb_sun1_ --benchmarks corebench --parallel-models 5 --parallel-tasks 10 --docker
+./bin/run_all_benchmarks.sh --prefix cb_sun1_ --benchmarks corebench --parallel-models 5 --parallel-tasks 10 --docker
 
 # Process traces
-./FINAL_COMMANDS.sh corebench
-./RUBRIC_COMMANDS.sh corebench
-./JUDGE_COMMANDS.sh corebench
+./bin/FINAL_COMMANDS.sh corebench
+./bin/RUBRIC_COMMANDS.sh corebench
+./bin/JUDGE_COMMANDS.sh corebench
 ```
 
 ### ScienceAgentBench
@@ -238,12 +238,12 @@ mv benchmark/* . && rmdir benchmark
 cd -
 
 # Run evaluation
-./run_all_benchmarks.sh --prefix sab_sun1_ --benchmarks scienceagentbench --parallel-models 5 --parallel-tasks 10 --docker
+./bin/run_all_benchmarks.sh --prefix sab_sun1_ --benchmarks scienceagentbench --parallel-models 5 --parallel-tasks 10 --docker
 
 # Process traces
-./FINAL_COMMANDS.sh sab
-./RUBRIC_COMMANDS.sh sab
-./JUDGE_COMMANDS.sh sab
+./bin/FINAL_COMMANDS.sh sab
+./bin/RUBRIC_COMMANDS.sh sab
+./bin/JUDGE_COMMANDS.sh sab
 ```
 
 ### ColBench
@@ -252,12 +252,12 @@ ColBench uses a **different workflow** - dialogue history comes from `results/` 
 
 ```bash
 # Run evaluation
-./run_all_benchmarks.sh --prefix col_sun1_ --benchmarks colbench --parallel-models 10 --parallel-tasks 50 --docker
+./bin/run_all_benchmarks.sh --prefix col_sun1_ --benchmarks colbench --parallel-models 10 --parallel-tasks 50 --docker
 
 # Process traces (automatically handles dialogues)
-./FINAL_COMMANDS.sh colbench
-./RUBRIC_COMMANDS.sh colbench
-./JUDGE_COMMANDS.sh colbench
+./bin/FINAL_COMMANDS.sh colbench
+./bin/RUBRIC_COMMANDS.sh colbench
+./bin/JUDGE_COMMANDS.sh colbench
 ```
 
 ---
@@ -268,26 +268,36 @@ ColBench uses a **different workflow** - dialogue history comes from `results/` 
 agent-debug/
 ├── README.md                    # This file
 ├── INSTRUCTIONS_NEW_BENCHMARK.md # Guide for adding new benchmarks
+├── requirements.txt             # Python dependencies
 │
-├── scripts/                     # Pipeline scripts
+├── bin/                         # Shell scripts
+│   ├── run_all_benchmarks.sh    # Main benchmark runner
+│   ├── FINAL_COMMANDS.sh        # Trace merge + extraction
+│   ├── RUBRIC_COMMANDS.sh       # Rubric evaluation
+│   ├── JUDGE_COMMANDS.sh        # Judge aggregation
+│   ├── cleanup_docker.sh        # Docker cleanup
+│   └── kill_all.sh              # Kill hung processes
+│
+├── scripts/                     # Python scripts
 │   ├── eval_rubric.py           # Rubric evaluation
 │   ├── judge.py                 # Verdict aggregation
 │   ├── merge_traces.py          # Trace merging
 │   ├── extract_weave_traces.py  # Weave extraction
 │   ├── add_colbench_dialogues.py # ColBench dialogue extraction
-│   ├── claude_fixer_*.py        # Fix generation scripts (per-benchmark)
-│   ├── run_benchmark_fixes.py   # Unified fix runner (all benchmarks)
+│   ├── claude_fixer_*.py        # Fix generation (per-benchmark)
+│   ├── run_benchmark_fixes.py   # Unified fix runner
 │   ├── build_response_matrix.py # Results analysis
 │   └── find_failed_tasks.py     # Debug utility
+│
+├── model_configs/               # Model configuration files
+│   └── model_to_baseline_*.json
 │
 ├── rubric_templates/            # Rubric prompts for LLM graders
 │   ├── scicode.txt
 │   ├── corebench.txt
 │   ├── scienceagentbench.txt
 │   ├── colbench.txt
-│   └── rubric.schema.json       # Unified JSON schema
-│
-├── model_to_baseline_*.json     # Model configuration files
+│   └── rubric.schema.json
 │
 ├── fixes/                       # Generated fix packages
 │   ├── scicode/
@@ -296,13 +306,10 @@ agent-debug/
 │   └── colbench_backend_programming/
 │
 ├── traces/                      # Agent execution traces
-├── rubrics_output/              # Rubric evaluation results (CSVs)
+├── rubrics_output/              # Rubric evaluation results
 ├── judge_output/                # Aggregated verdicts
 │
 ├── hal-harness/                 # HAL evaluation harness (submodule)
-│   ├── agents/                  # Agent implementations
-│   └── hal/benchmarks/          # Benchmark implementations
-│
 └── docent/                      # Rubric evaluation library (submodule)
 ```
 
@@ -312,7 +319,7 @@ agent-debug/
 
 ### Model Configuration
 
-Each benchmark has a `model_to_baseline_<benchmark>.json`:
+Each benchmark has a config file in `model_configs/model_to_baseline_<benchmark>.json`:
 
 ```json
 {
@@ -430,7 +437,7 @@ az account get-access-token --resource api://trapi/.default
 
 ```bash
 # Clean up Docker resources
-./cleanup_docker.sh
+./bin/cleanup_docker.sh
 
 # Force rebuild Docker images
 docker images | grep agent-env | awk '{print $3}' | xargs -r docker rmi -f
@@ -449,7 +456,7 @@ cat hal-harness/.env | grep USE_DIRECT_AZURE
 az account show
 
 # Kill hung processes
-./kill_all.sh
+./bin/kill_all.sh
 ```
 
 ### Package Conflicts

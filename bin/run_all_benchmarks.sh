@@ -427,7 +427,7 @@ EOF
                 # e.g. colbench_sun16_
                 local sub_prefix="${benchmark}_${PREFIX}"
 
-                ./run_benchmark_with_data.sh python -u scripts/run_benchmark_fixes.py \
+                "$SCRIPT_DIR/run_benchmark_with_data.sh" python -u scripts/run_benchmark_fixes.py \
                     --benchmark "$benchmark" \
                     --all-configs \
                     --all-tasks \

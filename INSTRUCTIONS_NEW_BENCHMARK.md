@@ -9,7 +9,7 @@ This document provides comprehensive step-by-step instructions for Claude Code t
 When adding a new benchmark, you need to create:
 1. **Rubric template** - For LLM-based IFE detection (`rubric_templates/<benchmark>.txt`)
 2. **Claude fixer script** - For automated fix generation (`scripts/claude_fixer_<benchmark>.py`)
-3. **Model configuration** - Maps models to baseline traces (`model_to_baseline_<benchmark>.json`)
+3. **Model configuration** - Maps models to baseline traces (`model_configs/model_to_baseline_<benchmark>.json`)
 4. **Fixes directory** - `fixes/<benchmark>/` to store generated fixes
 5. **Documentation updates** - README.md entries
 
@@ -422,7 +422,7 @@ The prompt should include:
 
 ## PHASE 5: Create Model Configuration
 
-Create `model_to_baseline_<benchmark_name>.json`:
+Create `model_configs/model_to_baseline_<benchmark_name>.json`:
 
 ```json
 {
@@ -477,7 +477,7 @@ mkdir -p fixes/<benchmark_name>
 
 ### 6.2: Add Benchmark to Unified Runner (if needed)
 
-The unified runner auto-detects benchmarks by scanning `fixes/` and `model_to_baseline_*.json`.
+The unified runner auto-detects benchmarks by scanning `fixes/` and `model_configs/model_configs/model_to_baseline_*.json`.
 If your benchmark needs special handling, you may need to update `run_benchmark_fixes.py`:
 
 ```python
@@ -649,7 +649,7 @@ python scripts/run_benchmark_fixes.py --benchmark <benchmark> --parallel-tasks 5
 - [ ] Include thorough error analysis checklist
 
 ### Phase 5: Model Config
-- [ ] Create `model_to_baseline_<benchmark>.json`
+- [ ] Create `model_configs/model_to_baseline_<benchmark>.json`
 - [ ] Include all tested models
 - [ ] Include reasoning_effort for o-series
 - [ ] Reference correct baseline trace files
@@ -675,10 +675,10 @@ python scripts/run_benchmark_fixes.py --benchmark <benchmark> --parallel-tasks 5
 
 | Benchmark | Rubric | Fixer | Model Config | Key Notes |
 |-----------|--------|-------|--------------|-----------|
-| SciCode | `scicode.txt` | `claude_fixer_scicode.py` | `model_to_baseline_scicode.json` | Sandbox execution, import restrictions |
-| ScienceAgentBench | `scienceagentbench.txt` | `claude_fixer_scienceagentbench.py` | `model_to_baseline_scienceagentbench.json` | Code extraction via regex |
-| CoreBench | `corebench.txt` | `claude_fixer_corebench.py` | `model_to_baseline_corebench.json` | Docker container issues |
-| ColBench | `colbench.txt` | `claude_fixer_colbench.py` | `model_to_baseline_colbench.json` | Backend programming |
+| SciCode | `scicode.txt` | `claude_fixer_scicode.py` | `model_configs/model_to_baseline_scicode.json` | Sandbox execution, import restrictions |
+| ScienceAgentBench | `scienceagentbench.txt` | `claude_fixer_scienceagentbench.py` | `model_configs/model_to_baseline_scienceagentbench.json` | Code extraction via regex |
+| CoreBench | `corebench.txt` | `claude_fixer_corebench.py` | `model_configs/model_to_baseline_corebench.json` | Docker container issues |
+| ColBench | `colbench.txt` | `claude_fixer_colbench.py` | `model_configs/model_to_baseline_colbench.json` | Backend programming |
 
 **Note**: All benchmarks use the unified `run_benchmark_fixes.py` runner.
 
